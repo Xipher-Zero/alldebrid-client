@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.9.3] — 2026-08-12
+
+### Fixed Dashboard viewport overflow
+
+- Limited Dashboard Recent Activity to four at-a-glance transfers; complete history remains available on Downloads.
+- Locked the desktop Dashboard to the available viewport and allowed its Recent Activity card to consume only the remaining space.
+- Preserved normal scrolling for Downloads, Settings, other views, and narrow/mobile layouts.
+
 ## [0.9.2] — 2026-08-12
 
 ### Sidebar and Settings refinement

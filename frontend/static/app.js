@@ -42,7 +42,10 @@ function nav(el) {
   if (!activeView) { console.error('nav: view not found:', v); return; }
   activeView.classList.add('active');
   const content = document.getElementById('content');
-  if (content) content.scrollTop = 0;
+  if (content) {
+    content.classList.toggle('dashboard-active', v === 'dashboard');
+    content.scrollTop = 0;
+  }
 
   const titles = {
     dashboard:'Dashboard',
@@ -557,7 +560,7 @@ function fmtSpeed(bps) {
 
 async function loadRecent() {
   try {
-    const {items} = await api('GET', '/torrents?limit=10');
+    const {items} = await api('GET', '/torrents?limit=4');
     const tb = document.getElementById('dash-tbody');
     if (!items.length) {
       tb.innerHTML = '<tr><td colspan="5"><div class="empty"><div class="empty-icon">⬇️</div>No transfers yet. Add a magnet, torrent file, or debrid link to start.</div></td></tr>';

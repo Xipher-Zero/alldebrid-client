@@ -2,7 +2,7 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-ARG APP_VERSION=0.9.2
+ARG APP_VERSION=0.9.3
 LABEL org.opencontainers.image.title="AllDebrid Control & Download Center"
 LABEL org.opencontainers.image.version="${APP_VERSION}"
 LABEL org.opencontainers.image.description="AllDebrid download control center for torrents and direct links"

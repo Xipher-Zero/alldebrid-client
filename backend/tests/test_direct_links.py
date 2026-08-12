@@ -173,7 +173,7 @@ class DashboardContractTests(unittest.TestCase):
         self.assertNotIn('id="t-magnet"', html)
         self.assertIn('<span class="nav-label">Downloads</span>', html)
         self.assertIn('id="torrent-card-title">All Downloads</span>', html)
-        self.assertIn('<script src="/app.js?v=6" defer></script>', html)
+        self.assertIn('<script src="/app.js?v=7" defer></script>', html)
         self.assertIn("'/links/add'", js)
         self.assertIn("button.textContent = 'Adding…'", js)
         self.assertIn("🔗 Direct link", js)
@@ -213,7 +213,22 @@ class DashboardContractTests(unittest.TestCase):
         self.assertIn("btn.setAttribute('aria-label', action);", js)
         self.assertIn(".sidebar-theme-control", css)
         self.assertNotIn("position:fixed; bottom:16px; right:16px", css)
-        self.assertIn('<link rel="stylesheet" href="/style.css?v=6">', html)
+        self.assertIn('<link rel="stylesheet" href="/style.css?v=7">', html)
+
+    def test_dashboard_is_a_fixed_at_a_glance_view(self):
+        repo_root = Path(__file__).resolve().parents[2]
+        html = (repo_root / "frontend/static/index.html").read_text()
+        js = (repo_root / "frontend/static/app.js").read_text()
+        css = (repo_root / "frontend/static/style.css").read_text()
+
+        self.assertIn('<div id="content" class="dashboard-active">', html)
+        self.assertIn('id="dash-activity-card"', html)
+        self.assertIn('class="dash-activity-table-wrap"', html)
+        self.assertIn("content.classList.toggle('dashboard-active', v === 'dashboard');", js)
+        self.assertIn("api('GET', '/torrents?limit=4')", js)
+        self.assertIn("#content.dashboard-active { overflow-y: hidden; }", css)
+        self.assertIn("#view-dashboard.active {", css)
+        self.assertIn("#dash-activity-card {", css)
 
 
 if __name__ == "__main__":

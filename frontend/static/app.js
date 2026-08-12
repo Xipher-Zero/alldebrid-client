@@ -1,4 +1,4 @@
-/* AllDebrid-Client — extracted from index.html */
+/* AllDebrid-Torrent-Client — extracted from index.html */
 
 const API = '/api';
 let currentFilter = '';
@@ -77,8 +77,12 @@ function nav(el) {
 
 // ── API ────────────────────────────────────────────────────────────────────
 async function api(method, path, body, timeoutMs, options) {
-  const opts = {method, headers: {'Content-Type':'application/json'}};
-  if (body) opts.body = JSON.stringify(body);
+  const isFormData = typeof FormData !== 'undefined' && body instanceof FormData;
+  const opts = {
+    method,
+    headers: isFormData ? {} : {'Content-Type':'application/json'}
+  };
+  if (body) opts.body = isFormData ? body : JSON.stringify(body);
   const ms = timeoutMs || 8000; // default 8s; callers can pass longer for slow operations
   const controller = new AbortController();
   let timedOut = false;
@@ -111,6 +115,14 @@ function esc(s) {
   // content (torrent names, filenames, labels) into innerHTML.
   return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;')
     .replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+function sanitizeErrorMsg(message) {
+  const text = String(message || 'Request failed');
+  const limited = text.length > 500
+    ? text.slice(0, 497) + '...'
+    : text;
+  return esc(limited);
 }
 
 function toast(msg, type = 'info') {
@@ -336,7 +348,7 @@ async function loadStats() {
       const s = await api('GET', '/stats');
       // ── populate sidebar version ────────────────────────────────────────
       const versionEl = document.getElementById('sidebar-version');
-      if (versionEl && s.version) versionEl.textContent = `v${String(s.version).replace(/^v/i, '')}`;
+      if (versionEl) versionEl.textContent = 'v0.9';
       if (settingsData) settingsData.paused = !!s.paused;
       renderTopbarActions();
       setDot('api', 'ok', 'AllDebrid: online');
@@ -563,9 +575,62 @@ async function loadRecent() {
   } catch(e) { console.error(e); }
 }
 
+function openTorrentFilePicker() {
+  const input = document.getElementById('torrent-file-input');
+  if (!input) {
+    toast('Torrent file selector is unavailable', 'error');
+    return;
+  }
+  input.value = '';
+  input.click();
+}
+
+async function uploadTorrentFile(input) {
+  const file = input && input.files ? input.files[0] : null;
+  if (!file) return;
+
+  if (!file.name.toLowerCase().endsWith('.torrent')) {
+    toast('Choose a .torrent file', 'error');
+    input.value = '';
+    return;
+  }
+  if (file.size > 16 * 1024 * 1024) {
+    toast('Torrent file exceeds the 16 MB upload limit', 'error');
+    input.value = '';
+    return;
+  }
+
+  const form = new FormData();
+  form.append('file', file, file.name);
+
+  try {
+    const res = await api('POST', '/torrents/add-file', form, 60000);
+    if (res && res._duplicate && res._duplicate.action === 'skip') {
+      toast('Already in queue: ' + (res.name || res._duplicate.reason), 'warn');
+    } else if (res && res._duplicate && res._duplicate.action === 'warn') {
+      toast('Torrent file added (possible duplicate)', 'warn');
+    } else {
+      toast('Torrent file added!', 'success');
+    }
+    loadStats();
+    loadRecent();
+    if (document.getElementById('view-torrents').classList.contains('active')) {
+      loadTorrents();
+    }
+  } catch(e) {
+    toast(sanitizeErrorMsg(e.message), 'error');
+  } finally {
+    input.value = '';
+  }
+}
+
 async function quickAdd() {
-  const v = document.getElementById('q-magnet').value.trim();
-  if (!v) return;
+  const input = document.getElementById('q-magnet');
+  const v = input.value.trim();
+  if (!v) {
+    openTorrentFilePicker();
+    return;
+  }
   const btn = document.querySelector('#view-dashboard button.btn-primary');
   if (btn) btn.disabled = true;
   try {
@@ -574,13 +639,12 @@ async function quickAdd() {
       toast('Already in queue: ' + (res.name || res._duplicate.reason), 'warn');
     } else if (res && res._duplicate && res._duplicate.action === 'warn') {
       toast('Added (possible duplicate)', 'warn');
-      document.getElementById('q-magnet').value = '';
-      loadStats(); loadRecent();
     } else {
       toast('Magnet added!', 'success');
-      document.getElementById('q-magnet').value = '';
-      loadStats(); loadRecent();
     }
+    input.value = '';
+    input.focus();
+    loadStats(); loadRecent();
   } catch(e) { toast(sanitizeErrorMsg(e.message), 'error'); }
   finally { if (btn) btn.disabled = false; }
 }
@@ -646,17 +710,24 @@ async function loadTorrents() {
 }
 
 async function addMagnet() {
-  const v = document.getElementById('t-magnet').value.trim();
-  if (!v) return;
+  const input = document.getElementById('t-magnet');
+  const v = input.value.trim();
+  if (!v) {
+    openTorrentFilePicker();
+    return;
+  }
   try {
     const res = await api('POST','/torrents/add-magnet',{magnet:v}, 30000);
     if (res && res._duplicate && res._duplicate.action === 'skip') {
       toast('Already in queue: ' + (res.name || res._duplicate.reason), 'warn');
+    } else if (res && res._duplicate && res._duplicate.action === 'warn') {
+      toast('Added (possible duplicate)', 'warn');
     } else {
-      toast(res && res._duplicate ? 'Added (possible duplicate)' : 'Added!','success');
-      document.getElementById('t-magnet').value='';
-      loadTorrents();
+      toast('Magnet added!', 'success');
     }
+    input.value = '';
+    input.focus();
+    loadTorrents();
   } catch(e) { toast(sanitizeErrorMsg(e.message),'error'); }
 }
 
@@ -1100,7 +1171,7 @@ function renderSettings() {
           </div>
           <div class="form-group">
             <label class="form-label">Agent Name</label>
-            <input class="input" id="s-alldebrid_agent" value="${s.alldebrid_agent||'AllDebrid-Client'}"/>
+            <input class="input" id="s-alldebrid_agent" value="${s.alldebrid_agent||'AllDebrid-Torrent-Client'}"/>
           </div>
         </div>
       </div>
@@ -1532,7 +1603,7 @@ function renderSettings() {
           <p class="form-hint" style="margin:0 0 10px">Receive Discord notifications when torrents are added, complete, or fail.</p>
           <div class="form-group">
             <label class="form-label">Bot Name <span style="font-weight:400;color:var(--muted)">(shown as sender in Discord)</span></label>
-            <input class="input" id="s-discord_username" value="${s.discord_username||'AllDebrid-Client'}" placeholder="AllDebrid-Client"/>
+            <input class="input" id="s-discord_username" value="${s.discord_username||'AllDebrid-Torrent-Client'}" placeholder="AllDebrid-Torrent-Client"/>
           </div>
           <div class="form-group">
             <label class="form-label">Bot Avatar <span style="font-weight:400;color:var(--muted)">(PNG/JPG/WEBP only — no SVG)</span></label>
@@ -2289,7 +2360,7 @@ function getFormSettings() {
   return {
     ...settingsData,
     alldebrid_api_key: t('alldebrid_api_key'),
-    alldebrid_agent:   t('alldebrid_agent')||'AllDebrid-Client',
+    alldebrid_agent:   t('alldebrid_agent')||'AllDebrid-Torrent-Client',
     watch_folder: t('watch_folder'), processed_folder: t('processed_folder'),
     download_folder: t('download_folder'), max_concurrent_downloads: n('max_concurrent_downloads', 3),
     max_speed_mbps: (settingsData && settingsData.max_speed_mbps != null)
@@ -2326,7 +2397,7 @@ function getFormSettings() {
     postgres_password: t('postgres_password'), postgres_schema: t('postgres_schema'),
     postgres_ssl: c('postgres_ssl'),
     postgres_application_name: t('postgres_application_name'),
-    discord_username: t('discord_username') || 'AllDebrid-Client',
+    discord_username: t('discord_username') || 'AllDebrid-Torrent-Client',
     discord_avatar_url: t('discord_avatar_url'),
     discord_webhook_url: t('discord_webhook_url'),
     discord_webhook_added: t('discord_webhook_added'),

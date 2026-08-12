@@ -246,10 +246,9 @@ async def update_settings(new: AppSettings):
         new = new.model_copy(update={"db_type": "postgres"})
     clean = validate_and_sanitise(new)
     # ── Sync derived fields before saving ───────────────────────────────────
-    # max_concurrent_downloads is the single source of truth for "how many
-    # parallel downloads".  Keep aria2_max_active_downloads in sync so that
-    # aria2_global_options() (which reads aria2_max_active_downloads) always
-    # sends the correct value to aria2 via apply_aria2_memory_tuning().
+    # max_concurrent_downloads is the application-level source of truth for
+    # ADC-owned parallel downloads. Keep the dispatcher field in sync without
+    # treating it as authority over a shared external aria2 daemon.
     if getattr(clean, "max_concurrent_downloads", None) is not None:
         try:
             clean = clean.model_copy(update={
@@ -270,7 +269,7 @@ async def update_settings(new: AppSettings):
             await aria2_runtime.ensure_started()
     elif getattr(previous, "aria2_mode", "external") == "builtin":
         await aria2_runtime.stop()
-    if getattr(clean, "aria2_mode", "external") == "builtin" or getattr(clean, "aria2_url", "").strip():
+    if getattr(clean, "aria2_mode", "external") == "builtin":
         try:
             await manager.apply_aria2_memory_tuning()
         except Exception as exc:
@@ -496,14 +495,10 @@ async def aria2_download_action(gid: str, action: str):
     if action not in {"pause", "resume", "remove"}:
         raise HTTPException(400, "Unsupported aria2 action")
     try:
-        svc = manager.aria2()
-        if action == "pause":
-            await svc.pause(gid)
-        elif action == "resume":
-            await svc.resume(gid)
-        else:
-            await svc.remove(gid)
-        return {"ok": True, "gid": gid, "action": action}
+        result = await manager.control_aria2_gid(gid, action)
+        return {"ok": True, "gid": gid, "action": action, **result}
+    except PermissionError as e:
+        raise HTTPException(403, _sanitize_error(e))
     except Exception as e:
         raise HTTPException(502, _sanitize_error(e))
 
@@ -580,6 +575,12 @@ async def list_torrents(
         if status:
             clauses.append("t.status = ?")
             params.append(status)
+        else:
+            # Deletion is intentionally a soft delete so the torrent hash and
+            # prior ownership state remain available for duplicate detection
+            # and controlled revival.  Soft-deleted rows must not remain in
+            # the normal "All Torrents" view, however.
+            clauses.append("t.status != 'deleted'")
 
         if search:
             clauses.append(
@@ -622,8 +623,46 @@ async def add_magnet(body: dict):
     try:
         row = await manager.add_magnet_direct(magnet, source="manual")
         return row
-    except Exception as e:
-        raise HTTPException(400, _sanitize_error(e))
+    except ValueError as exc:
+        raise HTTPException(400, _sanitize_error(exc))
+    except Exception as exc:
+        logger.exception("add_magnet failed: %s", _sanitize_error(exc))
+        raise HTTPException(502, _sanitize_error(exc))
+
+
+@router.post("/torrents/add-file")
+async def add_torrent_file(file: UploadFile = File(...)):
+    """Upload a .torrent metafile directly to AllDebrid.
+
+    The local aria2 daemon never receives the torrent metafile.  AllDebrid
+    processes it and ADC later dispatches only the unlocked HTTPS file URLs.
+    """
+    max_bytes = 16 * 1024 * 1024
+    filename = Path(file.filename or "upload.torrent").name
+
+    if not filename.lower().endswith(".torrent"):
+        raise HTTPException(400, "A .torrent file is required")
+
+    try:
+        data = await file.read(max_bytes + 1)
+    finally:
+        await file.close()
+
+    if not data:
+        raise HTTPException(400, "Torrent file is empty")
+    if len(data) > max_bytes:
+        raise HTTPException(413, "Torrent file exceeds the 16 MB upload limit")
+
+    try:
+        return await manager.add_torrent_file_direct(
+            data,
+            filename,
+            source="manual_file",
+        )
+    except ValueError as exc:
+        raise HTTPException(400, _sanitize_error(exc))
+    except Exception as exc:
+        raise HTTPException(502, _sanitize_error(exc))
 
 
 @router.post("/torrents/check-duplicate")
@@ -1505,12 +1544,20 @@ async def flexget_history(limit: int = Query(50, le=200)):
 async def aria2_get_global_options():
     """Return current aria2 global options (includes speed limits)."""
     try:
+        cfg = get_settings()
+        external = getattr(cfg, "aria2_mode", "external") != "builtin"
         opts = await manager.aria2().get_global_options()
         return {
             "ok": True,
+            "mode": "external" if external else "builtin",
+            "global_options_read_only": external,
             "max_download_speed": int(opts.get("max-overall-download-limit") or 0),
             "max_upload_speed":   int(opts.get("max-overall-upload-limit")   or 0),
-            "max_concurrent_downloads": int(opts.get("max-concurrent-downloads") or 0),
+            "max_concurrent_downloads": (
+                int(getattr(cfg, "max_concurrent_downloads", 1) or 1)
+                if external
+                else int(opts.get("max-concurrent-downloads") or 0)
+            ),
             "raw": {k: v for k, v in opts.items() if "limit" in k or "speed" in k or "concurrent" in k},
         }
     except Exception as e:
@@ -1523,6 +1570,8 @@ async def aria2_set_global_options(body: dict):
     Apply global aria2 options at runtime.
     Accepts: max_download_speed (bytes/s, 0=unlimited), max_upload_speed.
     """
+    cfg = get_settings()
+    external = getattr(cfg, "aria2_mode", "external") != "builtin"
     options: dict = {}
     cfg_updates: dict = {}
     if "max_download_speed" in body:
@@ -1535,17 +1584,24 @@ async def aria2_set_global_options(body: dict):
         cfg_updates["aria2_max_upload_limit"] = val
     if "max_concurrent_downloads" in body:
         val = max(1, int(body["max_concurrent_downloads"]))
-        options["max-concurrent-downloads"] = str(val)
-        # Persist in BOTH fields so aria2 startup and the Manager Semaphore
-        # use the same value.  Previously only aria2_max_active_downloads was
-        # written, causing the Manager Semaphore (which reads max_concurrent_downloads)
-        # to diverge from aria2 after a quick-setter change.
+        if not external:
+            options["max-concurrent-downloads"] = str(val)
+        # Persist in both application fields so the Manager semaphore and
+        # ADC-owned GID dispatcher remain aligned.
         cfg_updates["aria2_max_active_downloads"] = val
         cfg_updates["max_concurrent_downloads"] = val
-    if not options:
+    if external and any(
+        key in body for key in ("max_download_speed", "max_upload_speed")
+    ):
+        raise HTTPException(
+            409,
+            "Global bandwidth limits are read-only for an external shared aria2 daemon",
+        )
+    if not options and not cfg_updates:
         raise HTTPException(400, "No valid options provided")
     try:
-        await manager.aria2().change_global_options(options)
+        if not external:
+            await manager.aria2().change_global_options(options)
         # Persist so the limits survive an aria2 restart
         if cfg_updates:
             current = load_settings()
@@ -1561,7 +1617,15 @@ async def aria2_set_global_options(body: dict):
                 await manager._dispatch_pending_aria2_queue()
             except Exception as exc:
                 logger.debug("aria2 quick slot dispatch skipped: %s", sanitize_exception(exc))
-        return {"ok": True, "applied": options}
+        return {
+            "ok": True,
+            "mode": "external" if external else "builtin",
+            "applied": (
+                {"adc-max-concurrent-downloads": cfg_updates["max_concurrent_downloads"]}
+                if external
+                else options
+            ),
+        }
     except Exception as e:
         raise HTTPException(502, _sanitize_error(e))
 

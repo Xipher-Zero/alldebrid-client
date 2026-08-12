@@ -17,6 +17,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional
 
 import aiohttp
+from core.config import get_settings
 from core.logging_utils import sanitize_log_value
 
 logger = logging.getLogger("alldebrid.aria2")
@@ -29,6 +30,11 @@ _CLOSING_TRANSPORT_MSGS = frozenset({
     "ServerDisconnectedError",
     "Cannot connect to host",
 })
+
+
+def _is_builtin_mode() -> bool:
+    """Return whether AllDebrid-Client exclusively owns the aria2 daemon."""
+    return getattr(get_settings(), "aria2_mode", "external") == "builtin"
 
 
 def _is_transient_connection_error(exc: Exception) -> bool:
@@ -147,9 +153,25 @@ class Aria2Service:
         return await self._call("aria2.getGlobalOption")
 
     async def change_global_options(self, options: Dict[str, Any]) -> Any:
+        if not _is_builtin_mode():
+            logger.warning(
+                "Blocked aria2.changeGlobalOption for shared external daemon"
+            )
+            return {
+                "skipped": True,
+                "reason": "external aria2 policy is read-only",
+            }
         return await self._call("aria2.changeGlobalOption", [options])
 
     async def purge_download_results(self) -> Any:
+        if not _is_builtin_mode():
+            logger.warning(
+                "Blocked aria2.purgeDownloadResult for shared external daemon"
+            )
+            return {
+                "skipped": True,
+                "reason": "external aria2 result history is daemon-owned",
+            }
         return await self._call("aria2.purgeDownloadResult")
 
     async def get_memory_diagnostics(
@@ -229,22 +251,40 @@ class Aria2Service:
         Deduplication is performed by URI and target path.
         Pass cached_downloads to skip an extra get_all() call when dispatching
         multiple files in the same cycle (avoids aria2 request storms).
+
+        In external mode callers must supply an ownership-filtered snapshot.
+        When they do not, deduplication is deliberately disabled so this client
+        cannot adopt or remove a foreign job merely because its URI or target
+        path matches.
         """
         normalized_uri = uri.strip()
         target_path = self._target_path_from_options(options)
         async with self._lock_for_uri(normalized_uri):
-            all_downloads = cached_downloads if cached_downloads is not None else await self.get_all()
+            if cached_downloads is not None:
+                all_downloads = cached_downloads
+            elif _is_builtin_mode():
+                all_downloads = await self.get_all()
+            else:
+                all_downloads = []
             matches = self._find_all_matches(normalized_uri, target_path, all_downloads)
 
-            for dl in matches:
-                if dl.status in {"complete", "removed"}:
-                    for dup in matches:
-                        if dup.gid != dl.gid and dup.status not in {"complete", "removed"}:
-                            logger.warning(
-                                "Removing stale duplicate aria2 entry %s for %s", dup.gid, normalized_uri
-                            )
-                            await self.remove(dup.gid)
-                    return dl.gid
+            if _is_builtin_mode():
+                for dl in matches:
+                    if dl.status in {"complete", "removed"}:
+                        for dup in matches:
+                            if dup.gid != dl.gid and dup.status not in {"complete", "removed"}:
+                                logger.warning(
+                                    "Removing stale duplicate aria2 entry %s for %s", dup.gid, normalized_uri
+                                )
+                                await self.remove(dup.gid)
+                        return dl.gid
+            else:
+                # Stopped entries are history, not reusable jobs. Preserve them
+                # and add a new transfer if no ADC-owned live match exists.
+                matches = [
+                    dl for dl in matches
+                    if dl.status in {"active", "waiting", "paused"}
+                ]
 
             if len(matches) > 1:
                 for dup in matches[1:]:
@@ -379,7 +419,8 @@ class Aria2Service:
 
     async def remove(self, gid: str):
         await self._best_effort("aria2.forceRemove", [gid])
-        await self._best_effort("aria2.removeDownloadResult", [gid])
+        if _is_builtin_mode():
+            await self._best_effort("aria2.removeDownloadResult", [gid])
 
     # ─────────────────────────────────────────────────────────────────────────
     # Interne RPC-Implementierung

@@ -12,10 +12,11 @@ import aiofiles
 import aiohttp
 
 from core.config import AppSettings, get_settings
+from core.logging_utils import sanitize_log_value
 import aiosqlite  # noqa: F401 — used by tests via unittest.mock.patch
 from db.database import _is_postgres, get_db
 from services.alldebrid import AllDebridService, flatten_files
-from services.aria2 import Aria2Service
+from services.aria2 import Aria2ConnectionError, Aria2RPCError, Aria2Service
 from services.aria2_runtime import aria2_global_options, effective_rpc_config, is_builtin_mode
 from services.extractor import archive_paths_from_downloads, get_extractor
 from services.notifications import NotificationService
@@ -292,6 +293,8 @@ class TorrentManager:
         self._processing_files: Set[str] = set()
         self._failed_files: Set[str] = set()
         self._aria2_dispatch_lock = asyncio.Lock()
+        self._aria2_ownership_lock = asyncio.Lock()
+        self._aria2_ownership_ready = False
         # Disk-space guard state
         self._disk_guard_active: bool = False          # True = guard triggered, downloads paused
         self._disk_guard_paused: set[str] = set()     # aria2 GIDs paused by the guard
@@ -316,6 +319,175 @@ class TorrentManager:
             url, secret = effective_rpc_config(cfg)
             self._aria2 = Aria2Service(url, secret, cfg.aria2_operation_timeout_seconds)
         return self._aria2
+
+    async def _ensure_aria2_ownership_table(self) -> None:
+        """Create the persistent ledger used to prove ADC ownership of GIDs."""
+        if self._aria2_ownership_ready:
+            return
+        async with self._aria2_ownership_lock:
+            if self._aria2_ownership_ready:
+                return
+            async with get_db() as db:
+                await db.execute(
+                    """CREATE TABLE IF NOT EXISTS adc_aria2_owned_gids (
+                           gid TEXT PRIMARY KEY,
+                           download_file_id INTEGER,
+                           torrent_id INTEGER,
+                           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                       )"""
+                )
+                # Bootstrap ownership for jobs created before this ledger
+                # existed, while the original DB association still proves it.
+                await db.execute(
+                    """INSERT INTO adc_aria2_owned_gids
+                           (gid, download_file_id, torrent_id)
+                       SELECT download_id, id, torrent_id
+                         FROM download_files
+                        WHERE download_client='aria2'
+                          AND download_id IS NOT NULL
+                       ON CONFLICT(gid) DO NOTHING"""
+                )
+                await db.commit()
+            self._aria2_ownership_ready = True
+
+    async def _record_aria2_owned_gid(
+        self,
+        gid: str,
+        *,
+        download_file_id: Optional[int] = None,
+        torrent_id: Optional[int] = None,
+    ) -> None:
+        """Persist a GID immediately after ADC creates or reuses its own job."""
+        gid = str(gid or "").strip()
+        if not gid:
+            raise ValueError("Cannot record an empty aria2 GID")
+        await self._ensure_aria2_ownership_table()
+        async with get_db() as db:
+            await db.execute(
+                """INSERT INTO adc_aria2_owned_gids
+                       (gid, download_file_id, torrent_id)
+                   VALUES (?, ?, ?)
+                   ON CONFLICT(gid) DO UPDATE SET
+                       download_file_id=excluded.download_file_id,
+                       torrent_id=excluded.torrent_id""",
+                (gid, download_file_id, torrent_id),
+            )
+            await db.commit()
+
+    async def _aria2_owned_gids(self) -> Set[str]:
+        """Return every GID ADC has recorded, including current legacy rows."""
+        await self._ensure_aria2_ownership_table()
+        async with get_db() as db:
+            rows = await (
+                await db.execute(
+                    """SELECT gid
+                         FROM adc_aria2_owned_gids
+                        WHERE gid IS NOT NULL
+                       UNION
+                       SELECT download_id AS gid
+                         FROM download_files
+                        WHERE download_client='aria2'
+                          AND download_id IS NOT NULL"""
+                )
+            ).fetchall()
+        return {
+            str(row["gid"]).strip()
+            for row in rows
+            if str(row["gid"] or "").strip()
+        }
+
+    async def _aria2_owned_downloads(self, downloads) -> List:
+        if is_builtin_mode():
+            return list(downloads)
+        owned_gids = await self._aria2_owned_gids()
+        return [dl for dl in downloads if str(dl.gid) in owned_gids]
+
+    def _aria2_job_options(self, base: Optional[Dict] = None) -> Dict[str, str]:
+        """Build ADC transfer policy for one addUri request."""
+        cfg = get_settings()
+        options = {str(k): str(v) for k, v in dict(base or {}).items()}
+        options.update({
+            "split": str(max(1, int(getattr(cfg, "aria2_split", 1) or 1))),
+            "min-split-size": str(
+                getattr(cfg, "aria2_min_split_size", "10M") or "10M"
+            ),
+            "max-connection-per-server": str(
+                max(
+                    1,
+                    int(
+                        getattr(
+                            cfg,
+                            "aria2_max_connection_per_server",
+                            1,
+                        )
+                        or 1
+                    ),
+                )
+            ),
+            "continue": (
+                "true"
+                if bool(getattr(cfg, "aria2_continue_downloads", True))
+                else "false"
+            ),
+        })
+        return options
+
+    async def _remove_owned_aria2_gid(self, gid: str) -> bool:
+        """Cancel an ADC-owned live job without erasing external result history."""
+        gid = str(gid or "").strip()
+        if not gid:
+            return False
+        if not is_builtin_mode():
+            if gid not in await self._aria2_owned_gids():
+                logger.warning(
+                    "Blocked attempt to remove foreign aria2 GID %s", gid
+                )
+                return False
+            try:
+                status = await self.aria2().tell_status(gid)
+            except Exception as exc:
+                logger.debug(
+                    "aria2 ownership check could not resolve GID %s: %s",
+                    gid,
+                    exc,
+                )
+                return False
+            if status.status not in {"active", "waiting", "paused"}:
+                logger.debug(
+                    "Preserved stopped aria2 result %s (%s)",
+                    gid,
+                    status.status,
+                )
+                return False
+        await self.aria2().remove(gid)
+        return True
+
+    async def control_aria2_gid(self, gid: str, action: str) -> dict:
+        """Apply a user action only to a GID owned by AllDebrid-Client."""
+        gid = str(gid or "").strip()
+        if action not in {"pause", "resume", "remove"}:
+            raise ValueError("Unsupported aria2 action")
+        if not is_builtin_mode() and gid not in await self._aria2_owned_gids():
+            raise PermissionError(
+                f"aria2 GID {gid} is not owned by AllDebrid-Client"
+            )
+        if action == "remove":
+            mutated = await self._remove_owned_aria2_gid(gid)
+            return {
+                "mutated": mutated,
+                "result_preserved": not is_builtin_mode(),
+            }
+        status = await self.aria2().tell_status(gid)
+        if status.status not in {"active", "waiting", "paused"}:
+            return {
+                "mutated": False,
+                "reason": f"aria2 GID is already {status.status}",
+            }
+        if action == "pause":
+            await self.aria2().pause(gid)
+        else:
+            await self.aria2().resume(gid)
+        return {"mutated": True}
 
     def sem(self) -> asyncio.Semaphore:
         if self._sem is None:
@@ -877,14 +1049,13 @@ class TorrentManager:
 
         For every download_file record in pending/queued/downloading/paused:
 
-        1. Look up the GID via aria2.tellStatus. If the GID is gone or stale,
-           fall back to matching by URI (download_url) across all active/waiting/
-           stopped entries using _build_aria2_indexes().
+        1. Look up the recorded GID. Built-in mode may recover a stale GID by
+           URI; external mode never adopts an unknown shared-daemon job.
 
         2. Based on the aria2 status:
-           - complete   → mark download_file as 'completed', remove GID from aria2
-           - error      → restart the download inside aria2 (removeDownloadResult +
-                          addUri with same URL), update GID in DB, send Discord webhook
+           - complete   → mark download_file as 'completed' and preserve history
+           - error      → add a fresh job with the same URL, update the current
+                          GID in DB, preserve the failed result, send webhook
            - active     → update progress (completedLength/totalLength)
            - waiting/paused → keep current DB status, update size if available
 
@@ -935,7 +1106,17 @@ class TorrentManager:
             # ── Step 1: find the aria2 entry ────────────────────────────────
             dl = by_gid.get(gid) if gid else None
 
-            if dl is None and url:
+            if dl is None and gid:
+                try:
+                    dl = await self._aria2_confirm_gid(gid)
+                except Aria2ConnectionError as exc:
+                    logger.warning(
+                        "deep_sync: aria2 connection lost while confirming GID %s; skipping cycle: %s",
+                        gid, exc,
+                    )
+                    return
+
+            if dl is None and url and is_builtin_mode(cfg):
                 # GID stale or missing — try to find via URI
                 dl = uri_to_dl.get(url)
                 if dl:
@@ -968,7 +1149,6 @@ class TorrentManager:
                         (file_id,),
                     )
                     await db.commit()
-                await self.aria2().remove(dl.gid)
                 touched.add(torrent_id)
                 completed_count += 1
                 logger.info(
@@ -987,8 +1167,6 @@ class TorrentManager:
                 reason = f"{dl.error_code}: {dl.error_message}".strip(": ")
                 max_retries = int(getattr(cfg, "aria2_error_retry_count", 3))
                 current_retry = int(row.get("retry_count") or 0)
-
-                await self.aria2().remove(dl.gid)
 
                 if current_retry < max_retries:
                     # Still have retries left — restart
@@ -1010,7 +1188,23 @@ class TorrentManager:
                                 lp = Path(local_path_str)
                                 options["dir"] = str(_PPP(str(lp.parent).replace(chr(92), "/")))
                                 options["out"] = lp.name
-                            new_gid = await self.aria2().ensure_download(url, options, start_paused=False)
+                            options = self._aria2_job_options(options)
+                            retry_snapshot = (
+                                None
+                                if is_builtin_mode(cfg)
+                                else []
+                            )
+                            new_gid = await self.aria2().ensure_download(
+                                url,
+                                options,
+                                start_paused=False,
+                                cached_downloads=retry_snapshot,
+                            )
+                            await self._record_aria2_owned_gid(
+                                new_gid,
+                                download_file_id=file_id,
+                                torrent_id=torrent_id,
+                            )
                             async with get_db() as db:
                                 await db.execute(
                                     """UPDATE download_files
@@ -1062,9 +1256,9 @@ class TorrentManager:
                         )
 
             elif dl.status == "active":
-                # Update progress in DB
+                # Persist the live file state. Parent progress is calculated
+                # collectively by _update_aria2_parent_progress().
                 if dl.total_length > 0:
-                    progress = round(dl.completed_length / dl.total_length * 100, 1)
                     async with get_db() as db:
                         await db.execute(
                             """UPDATE download_files
@@ -1072,11 +1266,6 @@ class TorrentManager:
                                    updated_at=CURRENT_TIMESTAMP
                                WHERE id=?""",
                             (dl.total_length, file_id),
-                        )
-                        # Update torrent-level progress
-                        await db.execute(
-                            "UPDATE torrents SET progress=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
-                            (progress, torrent_id),
                         )
                         await db.commit()
 
@@ -1113,7 +1302,11 @@ class TorrentManager:
                        HAVING SUM(CASE WHEN blocked=0 AND status != 'completed' THEN 1 ELSE 0 END) = 0
                           AND SUM(CASE WHEN blocked=0 THEN 1 ELSE 0 END) > 0""",
                 )).fetchall()
-            straggler_ids = {r["torrent_id"] for r in straggler_rows} - touched
+            straggler_ids = (
+                {r["torrent_id"] for r in straggler_rows}
+                - touched
+                - set(self._active)
+            )
             if straggler_ids:
                 logger.info(
                     "deep_sync: found %d straggler torrent(s) with all files completed "
@@ -1121,6 +1314,12 @@ class TorrentManager:
                     len(straggler_ids), sorted(straggler_ids),
                 )
                 for torrent_id in straggler_ids:
+                    if torrent_id in self._active:
+                        logger.debug(
+                            "deep_sync: torrent %s is rebuilding its manifest; deferring finalization",
+                            torrent_id,
+                        )
+                        continue
                     await self._finalize_aria2_torrent(torrent_id)
         except Exception as exc:
             logger.warning("deep_sync: straggler check failed: %s", exc)
@@ -1400,6 +1599,27 @@ class TorrentManager:
                 (persisted_status, provider_status, status_code, progress, size_bytes, row["id"]),
             )
             await db.commit()
+
+        # SSE: provider progress update
+        # The dashboard already listens for torrent_updated and reloads the
+        # Recent Activity row. Emit after every provider poll that was applied.
+        try:
+            from api.routes import _sse_broadcast
+            await _sse_broadcast(
+                "torrent_updated",
+                {
+                    "id": row["id"],
+                    "status": persisted_status,
+                    "name": str(row["name"] or ""),
+                    "progress": progress,
+                },
+            )
+        except Exception as exc:
+            logger.debug(
+                "Provider progress SSE broadcast failed for torrent %s: %s",
+                row["id"],
+                exc,
+            )
 
         if provider_status == "ready" and current_status in {"pending", "uploading", "processing", "ready", "error"}:
             # Also restart if local status is 'error' but AllDebrid reports ready —
@@ -1722,7 +1942,7 @@ class TorrentManager:
                 _gid = str(_r["download_id"] or "")
                 if _gid:
                     try:
-                        await self.aria2().remove(_gid)
+                        await self._remove_owned_aria2_gid(_gid)
                         logger.debug("_download: cancelled stale aria2 GID %s for torrent %s", _gid, torrent_id)
                     except Exception:
                         pass  # GID already gone — fine
@@ -1760,7 +1980,22 @@ class TorrentManager:
             file_size = int(file_info.get("size", 0) or 0)
             blocked, reason = is_blocked(display_name, cfg, file_size)
             source_link = file_info["link"]
-            local_path = destination_root / safe_rel_path(display_name)
+
+            # AllDebrid commonly returns paths already rooted beneath the
+            # torrent name. destination_root already supplies that directory,
+            # so strip exactly one matching sanitized root component.
+            relative_target = safe_rel_path(display_name)
+            torrent_root = safe_name(name)
+
+            if relative_target.parts and relative_target.parts[0] == torrent_root:
+                remaining_parts = relative_target.parts[1:]
+                relative_target = (
+                    Path(*remaining_parts)
+                    if remaining_parts
+                    else Path("download.bin")
+                )
+
+            local_path = destination_root / relative_target
             dedupe_key = (display_name.lower(), source_link.strip())
 
             if dedupe_key in seen_queue_keys:
@@ -1784,7 +2019,7 @@ class TorrentManager:
         # Parallel calls are much faster than sequential, but firing hundreds
         # of concurrent requests triggers AllDebrid HTTP 503 rate-limiting.
         # A semaphore caps concurrent unlock calls to avoid overloading the API.
-        _unlock_sem = asyncio.Semaphore(5)
+        _unlock_sem = asyncio.Semaphore(3)
 
         async def _unlock_one(item: Dict) -> Dict:
             async with _unlock_sem:
@@ -1807,9 +2042,46 @@ class TorrentManager:
             local_path   = result["local_path"]
 
             if result["error"]:
-                logger.error("File failed [%s]: %s", display_name, result["error"])
-                failed_items.append({"filename": display_name, "size_bytes": file_size, "reason": result["error"]})
-                await self._log_file(torrent_id, display_name, source_link, str(local_path), "error", result["error"], file_size, download_client=client_name)
+                error_text = result["error"]
+
+                # AllDebrid can expose individual manifest entries whose backing
+                # host cannot be unlocked. Treat only this provider limitation
+                # as blocked so valid files can complete normally. All other
+                # unlock failures remain errors.
+                if "LINK_HOST_NOT_SUPPORTED" in error_text:
+                    logger.warning("File blocked [%s]: %s", display_name, error_text)
+                    blocked_items.append({
+                        "filename": display_name,
+                        "size_bytes": file_size,
+                        "reason": error_text,
+                    })
+                    await self._log_file(
+                        torrent_id,
+                        display_name,
+                        source_link,
+                        str(local_path),
+                        "blocked",
+                        error_text,
+                        file_size,
+                        download_client=client_name,
+                    )
+                else:
+                    logger.error("File failed [%s]: %s", display_name, error_text)
+                    failed_items.append({
+                        "filename": display_name,
+                        "size_bytes": file_size,
+                        "reason": error_text,
+                    })
+                    await self._log_file(
+                        torrent_id,
+                        display_name,
+                        source_link,
+                        str(local_path),
+                        "error",
+                        error_text,
+                        file_size,
+                        download_client=client_name,
+                    )
                 continue
 
             download_url = result["download_url"]
@@ -1845,11 +2117,13 @@ class TorrentManager:
             # ALL files filtered — nothing to download; treat as completed so
             # the torrent is removed from AllDebrid and counted in statistics.
             final_status = "completed"
-        elif failed_count == 0 and (completed_count + queued_count) == downloadable_count and downloadable_count > 0:
-            # completed_count > 0 means files already existed on disk (skipped)
-            final_status = "queued" if queued_count > 0 else "completed"
-        elif blocked_count > 0 and failed_count == 0 and (completed_count + queued_count) > 0:
-            final_status = "queued" if queued_count > 0 else "completed"
+        elif queued_count > 0:
+            # Permit successfully prepared files to proceed even when individual
+            # AllDebrid links fail. Failed files remain recorded as errors for
+            # inspection, but do not block valid HTTP(S) downloads.
+            final_status = "queued"
+        elif failed_count == 0 and completed_count > 0:
+            final_status = "completed"
         else:
             final_status = "error"
 
@@ -1977,6 +2251,25 @@ class TorrentManager:
         waiting, stopped = self._aria2_state_windows()
         return await self.aria2().get_all(waiting_limit=waiting, stopped_limit=stopped)
 
+    async def _aria2_confirm_gid(self, gid: str):
+        """Resolve one GID atomically after a bulk snapshot misses it.
+
+        aria2's active, waiting, and stopped lists are separate RPC snapshots.
+        A job that changes state while get_all() is gathering them can be absent
+        from that combined result even though the GID still exists.  Only an
+        explicit tellStatus failure confirms that the GID is gone.
+        """
+        gid = str(gid or "").strip()
+        if not gid:
+            return None
+        try:
+            return await self.aria2().tell_status(gid)
+        except Aria2ConnectionError:
+            raise
+        except Aria2RPCError as exc:
+            logger.debug("aria2 tellStatus could not resolve GID %s: %s", gid, exc)
+            return None
+
     async def _aria2_get_memory_diagnostics(self):
         waiting, stopped = self._aria2_state_windows()
         return await self.aria2().get_memory_diagnostics(waiting_limit=waiting, stopped_limit=stopped)
@@ -1985,8 +2278,9 @@ class TorrentManager:
         """
         The single authoritative gate between our DB and aria2.
 
-        Invariant: at any point, at most aria2_max_active_downloads files
-        may have status active/waiting/paused in aria2 at the same time.
+        Invariant: at any point, at most aria2_max_active_downloads ADC-owned
+        files may have status active/waiting/paused in aria2 at the same time.
+        Foreign jobs in an external daemon are neither counted nor changed.
 
         Steps:
         1. Fetch current aria2 state once.
@@ -2010,9 +2304,18 @@ class TorrentManager:
                 all_downloads if all_downloads is not None
                 else await self._aria2_get_all()
             )
+            owned_gids = (
+                {str(dl.gid) for dl in current_downloads}
+                if is_builtin_mode()
+                else await self._aria2_owned_gids()
+            )
+            owned_downloads = [
+                dl for dl in current_downloads
+                if str(dl.gid) in owned_gids
+            ]
             limit = self._aria2_slot_limit()
             in_flight = [
-                dl for dl in current_downloads
+                dl for dl in owned_downloads
                 if dl.status in {"active", "waiting", "paused"}
             ]
 
@@ -2043,7 +2346,7 @@ class TorrentManager:
                         )
                         await db.commit()
                 for dl in excess:
-                    await self.aria2().remove(dl.gid)
+                    await self._remove_owned_aria2_gid(dl.gid)
                 in_flight = in_flight[:limit]
 
             # ── Step 4: fill available slots ─────────────────────────────────
@@ -2097,11 +2400,17 @@ class TorrentManager:
             # file, which would cause a burst of rapid RPC requests that aria2
             # may drop or answer inconsistently.
             dispatch_snapshot = await self._aria2_get_all()
+            if not is_builtin_mode():
+                owned_gids = await self._aria2_owned_gids()
+                dispatch_snapshot = [
+                    dl for dl in dispatch_snapshot
+                    if str(dl.gid) in owned_gids
+                ]
 
             # ── Unlock all pending links in parallel (rate-limited) ──────────
             # Semaphore caps concurrent AllDebrid API calls to avoid 503 errors
             # when dispatching large batches (100+ files).
-            _dispatch_sem = asyncio.Semaphore(5)
+            _dispatch_sem = asyncio.Semaphore(3)
 
             async def _unlock_for_dispatch(row_: dict) -> dict:
                 async with _dispatch_sem:
@@ -2131,11 +2440,20 @@ class TorrentManager:
                     remote_path = self._remote_aria2_path(local_path)
                     remote_dir  = str(PurePosixPath(remote_path).parent)
                     remote_name = PurePosixPath(remote_path).name
+                    job_options = self._aria2_job_options({
+                        "dir": remote_dir,
+                        "out": remote_name,
+                    })
                     gid = await self.aria2().ensure_download(
                         download_url,
-                        {"dir": remote_dir, "out": remote_name},
+                        job_options,
                         get_settings().aria2_start_paused,
                         cached_downloads=dispatch_snapshot,
+                    )
+                    await self._record_aria2_owned_gid(
+                        gid,
+                        download_file_id=row["file_id"],
+                        torrent_id=row["torrent_id"],
                     )
                     queued_status = "paused" if get_settings().aria2_start_paused else "queued"
                     async with get_db() as db:
@@ -2176,6 +2494,10 @@ class TorrentManager:
         This prevents aria2's stopped list from accumulating stale entries.
         """
         if self.download_client_name() != "aria2" or self.is_paused():
+            return
+        if not is_builtin_mode():
+            # A shared daemon's stopped list is user-visible history. ADC does
+            # not own its retention policy, including for ADC-created GIDs.
             return
         try:
             all_downloads = await self._aria2_get_all()
@@ -2238,7 +2560,18 @@ class TorrentManager:
             if row["torrent_id"] in self._active:
                 continue  # _start_download/_download is running — leave it alone
 
-            dl = by_gid.get(str(row["download_id"] or ""))
+            gid = str(row["download_id"] or "").strip()
+            dl = by_gid.get(gid)
+
+            if dl is None and gid:
+                try:
+                    dl = await self._aria2_confirm_gid(gid)
+                except Aria2ConnectionError as exc:
+                    logger.warning(
+                        "sync_aria2: connection lost while confirming GID %s; skipping cycle: %s",
+                        gid, exc,
+                    )
+                    return
 
             if row["status"] == "pending":
                 continue
@@ -2251,9 +2584,10 @@ class TorrentManager:
                     except Exception:
                         remote_path = _normalize_aria2_path(str(row["local_path"]))
                 url = str(row["download_url"] or "").strip()
-                dl = path_to_dl.get(remote_path) if remote_path else None
-                if dl is None and url:
-                    dl = uri_to_dl.get(url)
+                if is_builtin_mode():
+                    dl = path_to_dl.get(remote_path) if remote_path else None
+                    if dl is None and url:
+                        dl = uri_to_dl.get(url)
 
                 if dl is not None:
                     # Found under different GID — update DB and fall through to status sync
@@ -2294,10 +2628,12 @@ class TorrentManager:
                 if row["status"] != "completed":
                     await self._update_file_state(row["file_id"], "completed", row["local_path"], size_bytes=sz)
                     touched.add(row["torrent_id"])
-                # Always remove from aria2 — catches leftover 'finished' entries
-                await self.aria2().remove(dl.gid)
-                logger.debug("aria2 cleanup: removed GID %s for file %s (torrent %s)",
-                             dl.gid, row["file_id"], row["torrent_id"])
+                logger.debug(
+                    "aria2 completion retained for GID %s, file %s (torrent %s)",
+                    dl.gid,
+                    row["file_id"],
+                    row["torrent_id"],
+                )
             elif dl.status == "removed":
                 logger.info(
                     "sync_aria2: aria2 job was removed for torrent %s file %s -> scheduling reset",
@@ -2308,7 +2644,6 @@ class TorrentManager:
             elif dl.status == "error":
                 reason = f"{dl.error_code}: {dl.error_message}".strip(": ")
                 await self._update_file_state(row["file_id"], "error", row["local_path"], reason=reason, size_bytes=sz)
-                await self.aria2().remove(dl.gid)
                 touched.add(row["torrent_id"])
 
         # Reset torrents whose entries are gone from aria2 (can't confirm completion)
@@ -2367,7 +2702,11 @@ class TorrentManager:
                        HAVING SUM(CASE WHEN blocked=0 AND status != 'completed' THEN 1 ELSE 0 END) = 0
                           AND SUM(CASE WHEN blocked=0 THEN 1 ELSE 0 END) > 0""",
                 )).fetchall()
-            straggler_ids = {r["torrent_id"] for r in straggler_rows} - touched
+            straggler_ids = (
+                {r["torrent_id"] for r in straggler_rows}
+                - touched
+                - set(self._active)
+            )
             if straggler_ids:
                 logger.info(
                     "sync_aria2: found %d straggler torrent(s) with all files completed "
@@ -2375,9 +2714,18 @@ class TorrentManager:
                     len(straggler_ids), sorted(straggler_ids),
                 )
                 for torrent_id in straggler_ids:
+                    if torrent_id in self._active:
+                        logger.debug(
+                            "sync_aria2: torrent %s is rebuilding its manifest; deferring finalization",
+                            torrent_id,
+                        )
+                        continue
                     await self._finalize_aria2_torrent(torrent_id)
         except Exception as exc:
             logger.warning("sync_aria2: straggler check failed: %s", exc)
+
+        # Publish aggregate collection progress before the next dispatch.
+        await self._update_aria2_parent_progress(all_downloads)
 
         await self._dispatch_pending_aria2_queue()
 
@@ -2402,7 +2750,8 @@ class TorrentManager:
         """Called once at startup to reconcile DB state with what aria2 actually has.
 
         1. GID still in aria2 → sync status directly.
-        2. GID gone, same URI active under new GID → update GID, sync status.
+        2. In built-in mode only, a matching URI/path under a new GID may be
+           adopted. External mode never adopts an unknown shared-daemon job.
         3. GID gone, URI not in aria2 → reset download_files and re-queue via
            _start_download. We cannot know if the download completed cleanly or
            was dropped, so a safe re-download is the only correct action.
@@ -2444,8 +2793,18 @@ class TorrentManager:
             if row["status"] == "pending":
                 continue
 
-            gid = str(row["download_id"] or "")
+            gid = str(row["download_id"] or "").strip()
             dl = by_gid.get(gid)
+
+            if dl is None and gid:
+                try:
+                    dl = await self._aria2_confirm_gid(gid)
+                except Aria2ConnectionError as exc:
+                    logger.warning(
+                        "Startup aria2 reconciliation deferred while confirming GID %s: %s",
+                        gid, exc,
+                    )
+                    return
 
             if dl is None:
                 remote_path = ""
@@ -2455,9 +2814,10 @@ class TorrentManager:
                     except Exception:
                         remote_path = _normalize_aria2_path(str(row["local_path"]))
                 url = str(row["download_url"] or "").strip()
-                dl = path_to_dl.get(remote_path) if remote_path else None
-                if dl is None and url:
-                    dl = uri_to_dl.get(url)
+                if is_builtin_mode():
+                    dl = path_to_dl.get(remote_path) if remote_path else None
+                    if dl is None and url:
+                        dl = uri_to_dl.get(url)
                 if dl:
                     # Case 2: same path or URI under new GID — update and fall through to sync
                     async with get_db() as db:
@@ -2499,7 +2859,6 @@ class TorrentManager:
             sz = dl.total_length if dl.total_length > 0 else None
             if dl.status == "complete":
                 await self._update_file_state(row["file_id"], "completed", row["local_path"], size_bytes=sz)
-                await self.aria2().remove(dl.gid)
                 touched.add(row["torrent_id"])
             elif dl.status == "removed":
                 logger.info(
@@ -2514,7 +2873,6 @@ class TorrentManager:
             elif dl.status == "error":
                 reason = f"{dl.error_code}: {dl.error_message}".strip(": ")
                 await self._update_file_state(row["file_id"], "error", row["local_path"], reason=reason, size_bytes=sz)
-                await self.aria2().remove(dl.gid)
                 touched.add(row["torrent_id"])
             elif dl.status == "active":
                 await self._update_file_state(row["file_id"], "downloading", row["local_path"], size_bytes=sz)
@@ -2539,6 +2897,10 @@ class TorrentManager:
         await self._dispatch_pending_aria2_queue()
 
     async def _dedupe_aria2_downloads_on_startup(self, all_downloads):
+        if not is_builtin_mode():
+            # Deduplication by URI alone cannot prove ownership in a shared
+            # daemon and may remove an AriaNg-created job.
+            return all_downloads
         by_uri: Dict[str, List] = {}
         removed_gids: Set[str] = set()
         for dl in all_downloads:
@@ -2591,6 +2953,154 @@ class TorrentManager:
             len(rows), len(touched), len(reset_torrents),
         )
 
+    async def _update_aria2_parent_progress(self, all_downloads=None):
+        """Aggregate per-file aria2 progress into each active parent torrent.
+
+        Completed files remain represented by their persisted size after aria2
+        purges their GIDs. Live jobs contribute completed_length. Blocked files
+        are excluded from both numerator and denominator.
+        """
+        if all_downloads is None:
+            all_downloads = await self._aria2_get_all()
+
+        by_gid, _, _ = self._build_aria2_indexes(all_downloads)
+
+        async with get_db() as db:
+            rows = await (
+                await db.execute(
+                    """SELECT
+                           t.id AS torrent_id,
+                           t.status AS torrent_status,
+                           t.progress AS torrent_progress,
+                           f.id AS file_id,
+                           f.status AS file_status,
+                           f.size_bytes,
+                           f.download_id
+                       FROM torrents t
+                       JOIN download_files f ON f.torrent_id = t.id
+                       WHERE t.download_client = 'aria2'
+                         AND t.status IN ('queued', 'downloading', 'paused')
+                         AND f.download_client = 'aria2'
+                         AND f.blocked = 0
+                       ORDER BY t.id, f.id"""
+                )
+            ).fetchall()
+
+        grouped = {}
+        for row in rows:
+            grouped.setdefault(row["torrent_id"], []).append(row)
+
+        updates = []
+        broadcast_needed = False
+
+        for torrent_id, files in grouped.items():
+            total_bytes = 0
+            completed_bytes = 0
+            completed_files = 0
+            unfinished_files = 0
+            paused_files = 0
+            live_active = False
+
+            for row in files:
+                status = str(row["file_status"] or "")
+                gid = str(row["download_id"] or "")
+                dl = by_gid.get(gid) if gid else None
+
+                persisted_size = int(row["size_bytes"] or 0)
+                live_size = int(dl.total_length or 0) if dl is not None else 0
+                effective_size = max(persisted_size, live_size)
+
+                total_bytes += effective_size
+
+                if status == "completed":
+                    completed_files += 1
+                    completed_bytes += effective_size
+                    continue
+
+                unfinished_files += 1
+
+                if status == "paused":
+                    paused_files += 1
+
+                if dl is not None:
+                    if dl.status == "active":
+                        live_active = True
+
+                    live_completed = max(int(dl.completed_length or 0), 0)
+
+                    if effective_size > 0:
+                        live_completed = min(live_completed, effective_size)
+
+                    completed_bytes += live_completed
+
+            if total_bytes > 0:
+                progress = round(completed_bytes / total_bytes * 100, 1)
+            elif files:
+                progress = round(completed_files / len(files) * 100, 1)
+            else:
+                progress = 0.0
+
+            # The finalizer owns the transition to a true completed state.
+            if unfinished_files > 0:
+                progress = min(progress, 99.9)
+            else:
+                progress = 100.0
+
+            if live_active:
+                parent_status = "downloading"
+            elif unfinished_files > 0 and paused_files == unfinished_files:
+                parent_status = "paused"
+            elif unfinished_files > 0:
+                parent_status = "queued"
+            else:
+                parent_status = str(files[0]["torrent_status"])
+
+            # Dashboard-visible aggregate change
+            current_progress = float(
+                files[0]["torrent_progress"] or 0.0
+            )
+            current_status = str(
+                files[0]["torrent_status"] or ""
+            )
+
+            if (
+                int(progress) != int(current_progress)
+                or parent_status != current_status
+            ):
+                broadcast_needed = True
+
+            updates.append((progress, parent_status, torrent_id))
+
+        if not updates:
+            return
+
+        async with get_db() as db:
+            for progress, parent_status, torrent_id in updates:
+                await db.execute(
+                    """UPDATE torrents
+                       SET progress=?, status=?, updated_at=CURRENT_TIMESTAMP
+                       WHERE id=?
+                         AND status IN ('queued', 'downloading', 'paused')""",
+                    (progress, parent_status, torrent_id),
+                )
+            await db.commit()
+
+        logger.debug(
+            "Updated aggregate aria2 progress for %d torrent(s)",
+            len(updates),
+        )
+
+        # SSE: aggregate aria2 progress update
+        if broadcast_needed:
+            try:
+                from api.routes import _sse_broadcast
+                await _sse_broadcast("torrent_updated", {})
+            except Exception as exc:
+                logger.debug(
+                    "Aggregate aria2 progress SSE broadcast failed: %s",
+                    exc,
+                )
+
     async def _update_file_state(
         self,
         file_id: int,
@@ -2641,6 +3151,15 @@ class TorrentManager:
         }
 
     async def _finalize_aria2_torrent(self, torrent_id: int):
+        # _download() rebuilds download_files progressively.  Finalizing while
+        # that manifest is incomplete can make a partial prefix look complete.
+        if torrent_id in self._active:
+            logger.debug(
+                "torrent %s is rebuilding its manifest; deferring aria2 finalization",
+                torrent_id,
+            )
+            return
+
         async with get_db() as db:
             torrent = await (await db.execute("SELECT * FROM torrents WHERE id=?", (torrent_id,))).fetchone()
             if not torrent or _terminal_torrent_status(torrent["status"]):
@@ -2656,6 +3175,7 @@ class TorrentManager:
                            SUM(CASE WHEN blocked=0 AND status='error' THEN 1 ELSE 0 END) AS error_count,
                            SUM(CASE WHEN blocked=0 AND status IN ('pending', 'queued', 'downloading', 'paused') THEN 1 ELSE 0 END) AS active_count,
                            SUM(CASE WHEN blocked=0 AND status='paused' THEN 1 ELSE 0 END) AS paused_count,
+                           SUM(CASE WHEN blocked=0 AND status='downloading' THEN 1 ELSE 0 END) AS downloading_count,
                            COUNT(*) AS total_files
                        FROM download_files WHERE torrent_id=?""",
                     (torrent_id,),
@@ -2667,6 +3187,7 @@ class TorrentManager:
             error_count = int(counts["error_count"] or 0)
             active_count = int(counts["active_count"] or 0)
             paused_count = int(counts["paused_count"] or 0)
+            downloading_count = int(counts["downloading_count"] or 0)
             total_files = int(counts["total_files"] or 0)
 
             should_complete = False
@@ -2696,9 +3217,40 @@ class TorrentManager:
                     )
                 return
             elif active_count > 0:
-                new_status = "paused" if paused_count == active_count else "queued"  # active_count > 0 guaranteed by elif
-                await db.execute("UPDATE torrents SET status=?, updated_at=CURRENT_TIMESTAMP WHERE id=?", (new_status, torrent_id))
+                # Parent state reflects the most active non-blocked child state:
+                # downloading wins over paused; fully paused wins over queued.
+                if downloading_count > 0:
+                    new_status = "downloading"
+                elif paused_count == active_count:
+                    new_status = "paused"
+                else:
+                    new_status = "queued"
+
+                status_changed = str(torrent_dict.get("status") or "") != new_status
+
+                await db.execute(
+                    "UPDATE torrents SET status=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                    (new_status, torrent_id),
+                )
                 await db.commit()
+
+                if status_changed:
+                    try:
+                        from api.routes import _sse_broadcast
+                        await _sse_broadcast(
+                            "torrent_updated",
+                            {
+                                "id": torrent_id,
+                                "status": new_status,
+                                "name": str(torrent_dict.get("name") or ""),
+                            },
+                        )
+                    except Exception as exc:
+                        logger.debug(
+                            "aria2 parent-status SSE broadcast failed for torrent %s: %s",
+                            torrent_id,
+                            exc,
+                        )
                 return
             else:
                 return
@@ -2717,7 +3269,8 @@ class TorrentManager:
                     await db.execute(
                         """UPDATE torrents
                            SET status='completed', completed_at=CURRENT_TIMESTAMP,
-                               size_bytes=?, updated_at=CURRENT_TIMESTAMP
+                               size_bytes=?, progress=100.0,
+                               updated_at=CURRENT_TIMESTAMP
                            WHERE id=?""",
                         (total_size, torrent_id),
                     )
@@ -2725,7 +3278,7 @@ class TorrentManager:
                     await db.execute(
                         """UPDATE torrents
                            SET status='completed', completed_at=CURRENT_TIMESTAMP,
-                               updated_at=CURRENT_TIMESTAMP
+                               progress=100.0, updated_at=CURRENT_TIMESTAMP
                            WHERE id=?""",
                         (torrent_id,),
                     )
@@ -2760,13 +3313,12 @@ class TorrentManager:
         except Exception as exc:
             logger.debug("Media server trigger task creation failed: %s", exc)
 
-        # Purge completed download metadata from aria2's in-memory result list
-        # immediately after finalisation instead of waiting for the housekeeping
-        # interval — keeps aria2's RAM footprint low over long sessions.
-        try:
-            await self.aria2().purge_download_results()
-        except Exception:
-            pass  # non-critical — housekeeping loop will catch up
+        # Only the dedicated built-in daemon may have its result history purged.
+        if is_builtin_mode():
+            try:
+                await self.aria2().purge_download_results()
+            except Exception:
+                pass  # non-critical — housekeeping loop will catch up
 
         # Release kernel page-cache for all downloaded files.
         # When aria2 writes to disk, Linux caches every byte in RAM (page cache).
@@ -3197,10 +3749,15 @@ class TorrentManager:
         except Exception as exc:
             logger.debug("disk_guard: could not list active downloads: %s", exc)
             return
+        owned_gids = (
+            {str(item.get("gid") or "") for item in active or []}
+            if is_builtin_mode()
+            else await self._aria2_owned_gids()
+        )
         paused_count = 0
         for item in active or []:
             gid = str(item.get("gid") or "")
-            if not gid:
+            if not gid or gid not in owned_gids:
                 continue
             try:
                 await self.aria2().pause(gid)
@@ -3562,11 +4119,13 @@ class TorrentManager:
             return []
 
         # Fetch aria2 state once — used to check per-file progress during import
+        aria2_by_gid: Dict[str, "Aria2DownloadStatus"] = {}
         aria2_by_uri: Dict[str, "Aria2DownloadStatus"] = {}
         aria2_by_path: Dict[str, "Aria2DownloadStatus"] = {}
         if self.download_client_name() == "aria2":
             try:
                 for dl in await self._aria2_get_all():
+                    aria2_by_gid[str(dl.gid)] = dl
                     for fi in dl.files or []:
                         current_path = _normalize_aria2_path(str(fi.get("path", "")))
                         if current_path:
@@ -3595,9 +4154,52 @@ class TorrentManager:
                 if existing:
                     torrent_id = existing["id"]
                     local_status = existing["status"]
-                    if local_status in ("completed", "deleted"):
-                        # Truly terminal — never restart
+                    if local_status == "completed":
+                        # Successfully completed local content remains terminal.
                         should_queue = False
+                    elif local_status == "deleted":
+                        # A new AllDebrid magnet with the same hash supersedes the
+                        # stale deleted provider record. Reuse the local torrent row
+                        # while clearing state belonging to the vanished magnet.
+                        await db.execute(
+                            "DELETE FROM download_files WHERE torrent_id=?",
+                            (torrent_id,),
+                        )
+                        await db.execute(
+                            """UPDATE torrents
+                               SET name=?,
+                                   alldebrid_id=?,
+                                   status=?,
+                                   provider_status=?,
+                                   provider_status_code=?,
+                                   progress=?,
+                                   size_bytes=?,
+                                   download_client=?,
+                                   error_message=NULL,
+                                   polling_failures=0,
+                                   completed_at=NULL,
+                                   download_url=NULL,
+                                   local_path=NULL,
+                                   updated_at=CURRENT_TIMESTAMP
+                               WHERE id=?""",
+                            (
+                                name,
+                                ad_id,
+                                normalized["local_status"],
+                                normalized["provider_status"],
+                                normalized["status_code"],
+                                float(normalized.get("progress", 0.0) or 0.0),
+                                int(normalized.get("size_bytes", 0) or 0),
+                                self.download_client_name(),
+                                torrent_id,
+                            ),
+                        )
+                        logger.info(
+                            "import_existing_magnets: revived deleted torrent %s "
+                            "with replacement AllDebrid id %s",
+                            torrent_id,
+                            ad_id,
+                        )
                     elif local_status == "error" and normalized["provider_status"] == "ready":
                         # Previously failed (e.g. due to polling bugs) but AllDebrid says
                         # ready — clear the error and allow re-dispatch
@@ -3664,12 +4266,9 @@ class TorrentManager:
             # When using aria2, check existing download_files against aria2 state
             # before blindly re-queuing everything.
             #
-            # Why URI-based and not GID-based:
-            # aria2 GIDs are ephemeral — they are assigned at queue time and are not
-            # persisted across aria2 restarts. After an aria2 restart all stopped/complete
-            # entries are gone and active ones get new GIDs. The only stable identifier
-            # we share with aria2 is the download URL (the unlocked AllDebrid link stored
-            # in download_files.download_url).
+            # External mode uses only the recorded GID. URI/path fallback is
+            # reserved for the dedicated built-in daemon because a shared
+            # daemon may contain a foreign job with the same target or URL.
             #
             # Note: unlocked AllDebrid links expire after some time, so for a torrent
             # that has never been through _download() (no download_files rows yet) we
@@ -3696,22 +4295,23 @@ class TorrentManager:
                             except Exception:
                                 remote_path = _normalize_aria2_path(str(fr["local_path"]))
                         url = str(fr["download_url"] or "").strip()
-                        dl = aria2_by_path.get(remote_path) if remote_path else None
-                        if dl is None:
-                            dl = aria2_by_uri.get(url)
+                        gid = str(fr["download_id"] or "").strip()
+                        dl = aria2_by_gid.get(gid) if gid else None
+                        if dl is None and is_builtin_mode():
+                            dl = aria2_by_path.get(remote_path) if remote_path else None
+                            if dl is None:
+                                dl = aria2_by_uri.get(url)
                         if dl is None:
                             # Not tracked in aria2 — needs re-queue
                             needs_reset = True
                         elif dl.status == "complete":
                             await self._update_file_state(fr["file_id"], "completed", fr["local_path"])
-                            await self.aria2().remove(dl.gid)
                             completed += 1
                         elif dl.status == "removed":
                             needs_reset = True
                         elif dl.status == "error":
                             reason = f"{dl.error_code}: {dl.error_message}".strip(": ")
                             await self._update_file_state(fr["file_id"], "error", fr["local_path"], reason=reason)
-                            await self.aria2().remove(dl.gid)
                             needs_reset = True
                         # active/waiting/paused → already tracked, no action needed
 
@@ -3743,7 +4343,7 @@ class TorrentManager:
             await db.commit()
 
         for file_row in file_rows:
-            await self.aria2().remove(file_row["download_id"])
+            await self._remove_owned_aria2_gid(file_row["download_id"])
 
         if delete_from_ad and row["alldebrid_id"] and row["status"] != "completed":
             await self.ad().delete_magnet(row["alldebrid_id"])
@@ -3760,12 +4360,26 @@ class TorrentManager:
         url, _secret = effective_rpc_config(cfg)
         if not url:
             return {"ok": False, "skipped": True, "reason": "aria2 URL not configured"}
-        options = aria2_global_options(cfg, include_safety=is_builtin_mode(cfg))
+        if not is_builtin_mode(cfg):
+            return {
+                "ok": True,
+                "skipped": True,
+                "reason": "external aria2 global policy is read-only",
+            }
+        options = aria2_global_options(cfg, include_safety=True)
         await self.aria2().change_global_options(options)
         return {"ok": True, "applied": options}
 
     async def run_aria2_housekeeping(self) -> dict:
         cfg = get_settings()
+        if not is_builtin_mode(cfg):
+            diagnostics = await self._aria2_get_memory_diagnostics()
+            return {
+                "ok": True,
+                "skipped": True,
+                "reason": "external aria2 history is daemon-owned",
+                "diagnostics": diagnostics,
+            }
         await self.apply_aria2_memory_tuning()
         # Remove all completed/error/removed results from aria2's stopped list.
         # purgeDownloadResult removes everything in the stopped list regardless
@@ -3791,6 +4405,8 @@ class TorrentManager:
 
     async def _aria2_svc_remove(self, gid: str) -> None:
         """Best-effort removal of a single GID from aria2's memory."""
+        if not is_builtin_mode():
+            return
         try:
             await self.aria2().remove(gid)
         except Exception as _e:

@@ -346,23 +346,26 @@ def load_settings() -> AppSettings:
                 "Config file could not be read (%s) — using defaults", exc
             )
 
-    # ── Performance migration: upgrade old low-performance aria2 defaults ──
-    # Versions < 1.8.30 shipped split=4 and max-connection-per-server=4 as a
-    # memory-saving measure which unintentionally capped download speed to ~10%
-    # of what AllDebrid links support.  If the config still has those values
-    # (or 8, the intermediate UI default), bump them to 16 on first load.
-    _PERF_UPGRADES = {
-        "aria2_split":                    (4, 8, 16),   # old→mid→new
-        "aria2_max_connection_per_server": (4, 8, 16),
-    }
-    for field, (old_low, old_mid, new_val) in _PERF_UPGRADES.items():
-        stored = loaded.get(field)
-        if stored in (old_low, old_mid):
-            import logging
-            logging.getLogger("alldebrid.config").info(
-                "Config migration: %s %s → %s (performance upgrade)", field, stored, new_val
-            )
-            loaded[field] = new_val
+    # ── Performance migration: built-in aria2 only ──────────────────────────
+    # External mode targets a shared daemon. Its explicitly stored transfer
+    # values must be preserved exactly; they are ADC job policy, not defaults
+    # that a migration may silently reinterpret.
+    if loaded.get("aria2_mode", "builtin") == "builtin":
+        _PERF_UPGRADES = {
+            "aria2_split":                     (4, 8, 16),
+            "aria2_max_connection_per_server": (4, 8, 16),
+        }
+        for field, (old_low, old_mid, new_val) in _PERF_UPGRADES.items():
+            stored = loaded.get(field)
+            if stored in (old_low, old_mid):
+                import logging
+                logging.getLogger("alldebrid.config").info(
+                    "Config migration: %s %s → %s (performance upgrade)",
+                    field,
+                    stored,
+                    new_val,
+                )
+                loaded[field] = new_val
 
     return _build_effective_settings(loaded)
 

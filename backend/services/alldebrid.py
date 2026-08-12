@@ -226,7 +226,39 @@ class AllDebridService:
             return False
 
     async def unlock_link(self, link: str) -> Dict:
-        return await self._post(API_V4, "link/unlock", {"link": link}, retries=3)
+        result = await self._post(
+            API_V4, "link/unlock", {"link": link}, retries=3
+        )
+        if str(result.get("link") or "").strip():
+            return result
+
+        delayed_id = result.get("delayed")
+        if delayed_id in (None, "", 0, "0"):
+            if result.get("streams"):
+                raise Exception(
+                    "AllDebrid returned a streaming selection instead of a direct download link"
+                )
+            raise Exception("AllDebrid returned no download link or delayed generation ID")
+
+        # AllDebrid requires delayed generations to be polled no faster than
+        # every five seconds. Keep the filename/size returned by link/unlock
+        # and merge the final URL when generation completes.
+        for _attempt in range(120):
+            await asyncio.sleep(5)
+            delayed = await self._post(
+                API_V4,
+                "link/delayed",
+                {"id": str(delayed_id)},
+                retries=3,
+            )
+            status = int(delayed.get("status") or 0)
+            generated_link = str(delayed.get("link") or "").strip()
+            if status == 2 and generated_link:
+                return {**result, **delayed, "link": generated_link}
+            if status == 3:
+                raise Exception("AllDebrid delayed link generation failed")
+
+        raise Exception("AllDebrid delayed link generation timed out after 10 minutes")
 
     async def close(self):
         pass  # no persistent session to close

@@ -296,6 +296,7 @@ _SCHEMA_COLUMNS_TORRENTS = [
 ]
 
 _SCHEMA_COLUMNS_FILES = [
+    ("source_url",      "TEXT"),
     ("download_id",     "TEXT"),
     ("download_client", "TEXT DEFAULT 'aria2'"),
     ("retry_count",     "INTEGER DEFAULT 0"),
@@ -363,6 +364,7 @@ async def _init_db_sqlite():
                 torrent_id INTEGER,
                 filename TEXT,
                 size_bytes INTEGER,
+                source_url TEXT,
                 download_url TEXT,
                 local_path TEXT,
                 status TEXT DEFAULT 'pending',
@@ -546,6 +548,7 @@ async def _init_db_postgres():
                     torrent_id INTEGER REFERENCES torrents(id),
                     filename TEXT,
                     size_bytes BIGINT,
+                    source_url TEXT,
                     download_url TEXT,
                     local_path TEXT,
                     status TEXT DEFAULT 'pending',
@@ -652,4 +655,3 @@ async def _init_db_postgres():
     finally:
         await conn.close()
     logger.info("PostgreSQL database initialised")
-

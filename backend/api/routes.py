@@ -665,6 +665,25 @@ async def add_torrent_file(file: UploadFile = File(...)):
         raise HTTPException(502, _sanitize_error(exc))
 
 
+@router.post("/links/add")
+async def add_debrid_links(body: dict):
+    """Submit one or more ordinary hoster URLs as a tracked transfer batch."""
+    raw_links = body.get("links", [])
+    if isinstance(raw_links, str):
+        links = [line.strip() for line in raw_links.splitlines() if line.strip()]
+    elif isinstance(raw_links, list):
+        links = [str(value).strip() for value in raw_links if str(value).strip()]
+    else:
+        raise HTTPException(400, "links must be a list or newline-separated string")
+    try:
+        return await manager.add_direct_links(links)
+    except ValueError as exc:
+        raise HTTPException(400, _sanitize_error(exc))
+    except Exception as exc:
+        logger.exception("add_debrid_links failed: %s", _sanitize_error(exc))
+        raise HTTPException(502, _sanitize_error(exc))
+
+
 @router.post("/torrents/check-duplicate")
 async def check_torrent_duplicate(body: dict):
     """Read-only duplicate preview. Never uploads/imports anything to AllDebrid."""
@@ -883,6 +902,14 @@ async def retry_torrent(torrent_id: int):
     magnet = (row.get("magnet") or "").strip()
     ad_id  = (row.get("alldebrid_id") or "").strip()
 
+    if str(row.get("source") or "") == "direct_link":
+        try:
+            return await manager.retry_direct_link_collection(torrent_id)
+        except ValueError as exc:
+            raise HTTPException(400, _sanitize_error(exc))
+        except Exception as exc:
+            raise HTTPException(502, _sanitize_error(exc))
+
     if not magnet and not ad_id:
         raise HTTPException(400, "No magnet or AllDebrid ID — cannot retry")
 
@@ -1002,14 +1029,21 @@ async def bulk_action(body: BulkAction):
                 await manager.delete_torrent(tid, delete_from_ad=True)
             elif body.action == "retry":
                 async with get_db() as db:
-                    await db.execute(
-                        """UPDATE torrents
-                           SET status='uploading', error_message=NULL,
-                               polling_failures=0, updated_at=CURRENT_TIMESTAMP
-                           WHERE id=?""",
-                        (tid,),
+                    transfer = await db.fetchone(
+                        "SELECT source FROM torrents WHERE id=?", (tid,)
                     )
-                    await db.commit()
+                if transfer and str(transfer.get("source") or "") == "direct_link":
+                    await manager.retry_direct_link_collection(tid)
+                else:
+                    async with get_db() as db:
+                        await db.execute(
+                            """UPDATE torrents
+                               SET status='uploading', error_message=NULL,
+                                   polling_failures=0, updated_at=CURRENT_TIMESTAMP
+                               WHERE id=?""",
+                            (tid,),
+                        )
+                        await db.commit()
             elif body.action == "reset":
                 # Reset any stuck/error torrent back to 'ready' so the
                 # next sync cycle picks it up again

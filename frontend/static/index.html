@@ -224,6 +224,19 @@
         </div>
       </div>
 
+      <!-- ── Add Direct Debrid Links ──────────────────────────────────────── -->
+      <div class="card" style="margin-bottom:14px">
+        <div class="card-header">
+          <span class="card-title">⬇️ Add Links to Generate and Download DeBrid links</span>
+        </div>
+        <div style="padding:12px 16px">
+          <div style="display:flex;gap:8px;align-items:stretch">
+            <textarea class="input" id="q-debrid-links" rows="2" placeholder="https://example-hoster.com/file/… or paste multiple links, one per line" style="flex:1;resize:vertical;min-height:62px;font-family:'JetBrains Mono',monospace" onkeydown="if((event.ctrlKey||event.metaKey)&&event.key==='Enter')addDebridLinks()"></textarea>
+            <button class="btn btn-primary" id="btn-add-debrid-links" onclick="addDebridLinks()" style="padding:9px 20px" title="Generate each link through AllDebrid and queue the resulting downloads in aria2">Add</button>
+          </div>
+        </div>
+      </div>
+
       <!-- ── Add Magnet or Torrent File ─────────────────────────────────────── -->
       <div class="card" style="margin-bottom:14px">
         <div class="card-header">
@@ -1216,7 +1229,7 @@
 
 <input id="torrent-file-input" type="file" accept=".torrent,application/x-bittorrent" hidden onchange="uploadTorrentFile(this)">
 
-<script src="/app.js?v=3" defer></script>
+<script src="/app.js?v=4" defer></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <div id="mobile-overlay" onclick="closeSidebar()"></div>
 <button class="theme-toggle" id="theme-toggle" onclick="toggleTheme()" title="Toggle light/dark mode">🌙</button>

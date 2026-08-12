@@ -1,18 +1,22 @@
 import asyncio
 import base64
+import hashlib
+import json
 import logging
 import re
 import shutil
 import time as _time
+import uuid
 from collections import deque
 from pathlib import Path, PurePosixPath
 from typing import Dict, List, Optional, Set, Tuple
+from urllib.parse import unquote, urlparse
 
 import aiofiles
 import aiohttp
 
 from core.config import AppSettings, get_settings
-from core.logging_utils import sanitize_log_value
+from core.logging_utils import sanitize_exception, sanitize_log_value
 import aiosqlite  # noqa: F401 — used by tests via unittest.mock.patch
 from db.database import _is_postgres, get_db
 from services.alldebrid import AllDebridService, flatten_files
@@ -36,6 +40,8 @@ READY_CODE = 4
 ERROR_CODES = set(range(5, 16))
 UPLOAD_FAILED_CODE = 5  # AllDebrid statusCode 5 = "Upload failed"
 EXPIRED_CODE = 3        # AllDebrid statusCode 3 = "Expired — files removed from cache"
+DIRECT_LINK_SOURCE = "direct_link"
+MAX_DIRECT_LINKS_PER_BATCH = 100
 
 
 class _TokenBucketRateLimiter:
@@ -136,6 +142,39 @@ def safe_rel_path(value: str) -> Path:
     if not cleaned:
         return Path("download.bin")
     return Path(*cleaned)
+
+
+def normalize_direct_links(values: List[str]) -> List[str]:
+    """Validate and de-duplicate ordinary HTTP(S) links without fetching them."""
+    normalized: List[str] = []
+    seen: Set[str] = set()
+    for raw in values or []:
+        value = str(raw or "").strip()
+        if not value:
+            continue
+        parsed = urlparse(value)
+        if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
+            raise ValueError(f"Invalid debrid link: {value[:120]}")
+        if value not in seen:
+            normalized.append(value)
+            seen.add(value)
+    if not normalized:
+        raise ValueError("At least one HTTP or HTTPS link is required")
+    if len(normalized) > MAX_DIRECT_LINKS_PER_BATCH:
+        raise ValueError(
+            f"A maximum of {MAX_DIRECT_LINKS_PER_BATCH} links may be submitted at once"
+        )
+    return normalized
+
+
+def direct_link_filename(url: str, fallback_index: int = 1) -> str:
+    """Return a safe initial filename for a direct-link transaction."""
+    parsed = urlparse(str(url or ""))
+    candidate = unquote(PurePosixPath(parsed.path or "").name).strip()
+    if not candidate:
+        candidate = parsed.hostname or f"debrid-link-{fallback_index}"
+    candidate = safe_name(candidate)
+    return candidate or f"debrid-link-{fallback_index}"
 
 
 def is_blocked(filename: str, cfg: AppSettings, size_bytes: int = 0) -> Tuple[bool, str]:
@@ -292,6 +331,8 @@ class TorrentManager:
         self._active: Set[int] = set()
         self._processing_files: Set[str] = set()
         self._failed_files: Set[str] = set()
+        self._direct_link_tasks: Set[asyncio.Task] = set()
+        self._direct_link_task_ids: Set[int] = set()
         self._aria2_dispatch_lock = asyncio.Lock()
         self._aria2_ownership_lock = asyncio.Lock()
         self._aria2_ownership_ready = False
@@ -756,6 +797,434 @@ class TorrentManager:
                 asyncio.create_task(self._start_download(int(torrent_id), ad_id, name))
 
         return row
+
+    async def add_direct_links(self, links: List[str]) -> dict:
+        """Create one tracked transfer collection from ordinary hoster URLs."""
+        if self.is_paused():
+            raise Exception("Processing is paused")
+        if not get_settings().alldebrid_api_key:
+            raise Exception("AllDebrid API key not configured")
+
+        normalized = normalize_direct_links(links)
+        initial_name = (
+            direct_link_filename(normalized[0])
+            if len(normalized) == 1
+            else f"Debrid link batch ({len(normalized)} links)"
+        )
+        payload = json.dumps(normalized, separators=(",", ":"))
+        nonce = uuid.uuid4().hex
+        collection_hash = "direct:" + hashlib.sha256(
+            f"{nonce}:{payload}".encode("utf-8")
+        ).hexdigest()
+
+        async with get_db() as db:
+            torrent_id = await db.execute_returning_id(
+                """INSERT INTO torrents
+                       (hash, name, magnet, status, source, provider_status,
+                        progress, download_client, error_message)
+                   VALUES (?, ?, ?, 'processing', ?, 'submitted', 0, 'aria2', NULL)""",
+                (
+                    collection_hash,
+                    initial_name,
+                    payload,
+                    DIRECT_LINK_SOURCE,
+                ),
+            )
+            if not torrent_id:
+                raise RuntimeError("Could not create the debrid-link transaction")
+            await db.execute(
+                "INSERT INTO events (torrent_id, level, message) VALUES (?, 'info', ?)",
+                (
+                    torrent_id,
+                    f"Submitted {len(normalized)} direct link(s) for AllDebrid generation",
+                ),
+            )
+            await db.commit()
+            row = await db.fetchone("SELECT * FROM torrents WHERE id=?", (torrent_id,))
+
+        await self._broadcast_direct_link_update(
+            int(torrent_id), "processing", initial_name, 0.0
+        )
+        self._schedule_direct_link_collection(int(torrent_id), normalized)
+        return {**dict(row or {}), "accepted_links": len(normalized)}
+
+    def _schedule_direct_link_collection(
+        self, torrent_id: int, links: List[str]
+    ) -> None:
+        """Keep a strong reference to the background preparation task."""
+        if torrent_id in self._active or torrent_id in self._direct_link_task_ids:
+            return
+        task = asyncio.create_task(
+            self._prepare_direct_link_collection(torrent_id, links)
+        )
+        self._direct_link_tasks.add(task)
+        self._direct_link_task_ids.add(torrent_id)
+
+        def _finished(done: asyncio.Task) -> None:
+            self._direct_link_tasks.discard(done)
+            self._direct_link_task_ids.discard(torrent_id)
+            try:
+                done.result()
+            except asyncio.CancelledError:
+                pass
+            except Exception as exc:
+                logger.error(
+                    "Direct-link preparation task failed for transfer %s: %s",
+                    torrent_id,
+                    sanitize_exception(exc, max_length=300),
+                )
+
+        task.add_done_callback(_finished)
+
+    async def _broadcast_direct_link_update(
+        self,
+        torrent_id: int,
+        status: str,
+        name: str,
+        progress: float,
+    ) -> None:
+        try:
+            from api.routes import _sse_broadcast
+            await _sse_broadcast(
+                "torrent_updated",
+                {
+                    "id": torrent_id,
+                    "status": status,
+                    "name": name,
+                    "progress": progress,
+                    "source": DIRECT_LINK_SOURCE,
+                },
+            )
+        except Exception as exc:
+            logger.debug(
+                "Direct-link SSE broadcast failed for transfer %s: %s",
+                torrent_id,
+                exc,
+            )
+
+    @staticmethod
+    def _unique_direct_link_path(
+        root: Path, filename: str, reserved: Set[str]
+    ) -> Path:
+        """Choose a non-conflicting output filename without changing its extension."""
+        candidate = root / safe_name(filename)
+        stem = candidate.stem or "download"
+        suffix = candidate.suffix
+        counter = 2
+        while str(candidate).lower() in reserved or candidate.exists():
+            candidate = root / f"{stem} ({counter}){suffix}"
+            counter += 1
+        reserved.add(str(candidate).lower())
+        return candidate
+
+    async def _prepare_direct_link_collection(
+        self, torrent_id: int, links: List[str]
+    ) -> None:
+        """Generate AllDebrid URLs and stage their files for the aria2 dispatcher."""
+        if torrent_id in self._active:
+            return
+        self._active.add(torrent_id)
+        try:
+            normalized = normalize_direct_links(links)
+            cfg = get_settings()
+            output_root = Path(cfg.download_folder)
+
+            async with get_db() as db:
+                current = await db.fetchone(
+                    "SELECT status, name FROM torrents WHERE id=?", (torrent_id,)
+                )
+                if not current or current["status"] in {"completed", "deleted"}:
+                    return
+                await db.execute(
+                    "DELETE FROM download_files WHERE torrent_id=?", (torrent_id,)
+                )
+                await db.execute(
+                    """UPDATE torrents
+                       SET status='processing', provider_status='unlocking',
+                           progress=0, size_bytes=0, error_message=NULL,
+                           completed_at=NULL, updated_at=CURRENT_TIMESTAMP
+                       WHERE id=?""",
+                    (torrent_id,),
+                )
+                file_rows: List[dict] = []
+                for index, source_url in enumerate(normalized, start=1):
+                    provisional = direct_link_filename(source_url, index)
+                    file_id = await db.execute_returning_id(
+                        """INSERT INTO download_files
+                               (torrent_id, filename, size_bytes, source_url,
+                                download_url, local_path, status, download_client,
+                                blocked, updated_at)
+                           VALUES (?, ?, 0, ?, NULL, NULL, 'unlocking', 'aria2', 0,
+                                   CURRENT_TIMESTAMP)""",
+                        (torrent_id, provisional, source_url),
+                    )
+                    file_rows.append(
+                        {
+                            "file_id": int(file_id),
+                            "source_url": source_url,
+                            "index": index,
+                        }
+                    )
+                await db.execute(
+                    "INSERT INTO events (torrent_id, level, message) VALUES (?, 'info', ?)",
+                    (torrent_id, "AllDebrid is generating direct download links"),
+                )
+                await db.commit()
+
+            await self._broadcast_direct_link_update(
+                torrent_id,
+                "processing",
+                str(current.get("name") or "Debrid links"),
+                0.0,
+            )
+
+            unlock_sem = asyncio.Semaphore(3)
+
+            async def _unlock(row: dict) -> dict:
+                async with unlock_sem:
+                    try:
+                        generated = await _retry_async(
+                            self.ad().unlock_link,
+                            row["source_url"],
+                        )
+                        generated_url = str(generated.get("link") or "").strip()
+                        parsed = urlparse(generated_url)
+                        if (
+                            parsed.scheme.lower() not in {"http", "https"}
+                            or not parsed.netloc
+                        ):
+                            raise Exception("AllDebrid returned no usable download URL")
+                        filename = (
+                            generated.get("filename")
+                            or generated.get("name")
+                            or direct_link_filename(
+                                row["source_url"], row["index"]
+                            )
+                        )
+                        size_bytes = int(
+                            generated.get("filesize")
+                            or generated.get("size")
+                            or 0
+                        )
+                        return {
+                            **row,
+                            "generated_url": generated_url,
+                            "filename": safe_name(str(filename)),
+                            "size_bytes": max(0, size_bytes),
+                            "error": None,
+                        }
+                    except Exception as exc:
+                        return {
+                            **row,
+                            "generated_url": "",
+                            "filename": direct_link_filename(
+                                row["source_url"], row["index"]
+                            ),
+                            "size_bytes": 0,
+                            "error": sanitize_exception(exc, max_length=500),
+                        }
+
+            results = await asyncio.gather(*[_unlock(row) for row in file_rows])
+            reserved_paths: Set[str] = set()
+            succeeded = 0
+            failed = 0
+            total_size = 0
+            resolved_names: List[str] = []
+
+            for position, result in enumerate(results, start=1):
+                if result["error"]:
+                    failed += 1
+                    async with get_db() as db:
+                        await db.execute(
+                            """UPDATE download_files
+                               SET status='error', block_reason=?,
+                                   updated_at=CURRENT_TIMESTAMP
+                               WHERE id=?""",
+                            (result["error"], result["file_id"]),
+                        )
+                        await db.execute(
+                            "INSERT INTO events (torrent_id, level, message) VALUES (?, 'error', ?)",
+                            (
+                                torrent_id,
+                                f"AllDebrid could not generate link {position}: {result['error']}",
+                            ),
+                        )
+                        await db.commit()
+                else:
+                    succeeded += 1
+                    total_size += int(result["size_bytes"] or 0)
+                    resolved_names.append(result["filename"])
+                    local_path = self._unique_direct_link_path(
+                        output_root, result["filename"], reserved_paths
+                    )
+                    async with get_db() as db:
+                        await db.execute(
+                            """UPDATE download_files
+                               SET filename=?, size_bytes=?, download_url=?,
+                                   local_path=?, status='pending', block_reason=NULL,
+                                   updated_at=CURRENT_TIMESTAMP
+                               WHERE id=?""",
+                            (
+                                result["filename"],
+                                result["size_bytes"],
+                                result["generated_url"],
+                                str(local_path),
+                                result["file_id"],
+                            ),
+                        )
+                        await db.commit()
+
+            if len(normalized) == 1 and resolved_names:
+                final_name = resolved_names[0]
+            else:
+                final_name = f"Debrid link batch ({len(normalized)} links)"
+
+            if succeeded:
+                error_message = (
+                    f"{failed} of {len(normalized)} links could not be generated"
+                    if failed
+                    else None
+                )
+                event_level = "warn" if failed else "info"
+                event_message = (
+                    f"Generated {succeeded} of {len(normalized)} AllDebrid links; "
+                    "queued for aria2"
+                )
+                async with get_db() as db:
+                    await db.execute(
+                        """UPDATE torrents
+                           SET name=?, status='queued', provider_status='ready',
+                               size_bytes=?, progress=0, error_message=?,
+                               updated_at=CURRENT_TIMESTAMP
+                           WHERE id=?""",
+                        (
+                            final_name,
+                            total_size,
+                            error_message,
+                            torrent_id,
+                        ),
+                    )
+                    await db.execute(
+                        "INSERT INTO events (torrent_id, level, message) VALUES (?, ?, ?)",
+                        (torrent_id, event_level, event_message),
+                    )
+                    await db.commit()
+                await self._broadcast_direct_link_update(
+                    torrent_id, "queued", final_name, 0.0
+                )
+                await self._dispatch_pending_aria2_queue()
+            else:
+                message = "All submitted links failed during AllDebrid generation"
+                async with get_db() as db:
+                    await db.execute(
+                        """UPDATE torrents
+                           SET name=?, status='error', provider_status='error',
+                               error_message=?, progress=0,
+                               updated_at=CURRENT_TIMESTAMP
+                           WHERE id=?""",
+                        (final_name, message, torrent_id),
+                    )
+                    await db.execute(
+                        "INSERT INTO events (torrent_id, level, message) VALUES (?, 'error', ?)",
+                        (torrent_id, message),
+                    )
+                    await db.commit()
+                await self._broadcast_direct_link_update(
+                    torrent_id, "error", final_name, 0.0
+                )
+        except Exception as exc:
+            message = sanitize_exception(exc, max_length=500)
+            logger.error(
+                "Direct-link preparation failed for transfer %s: %s",
+                torrent_id,
+                message,
+            )
+            async with get_db() as db:
+                await db.execute(
+                    """UPDATE torrents
+                       SET status='error', provider_status='error',
+                           error_message=?, updated_at=CURRENT_TIMESTAMP
+                       WHERE id=? AND status != 'deleted'""",
+                    (message, torrent_id),
+                )
+                await db.execute(
+                    "INSERT INTO events (torrent_id, level, message) VALUES (?, 'error', ?)",
+                    (torrent_id, f"Direct-link generation failed: {message}"),
+                )
+                await db.commit()
+            await self._broadcast_direct_link_update(
+                torrent_id, "error", "Debrid links", 0.0
+            )
+        finally:
+            self._active.discard(torrent_id)
+
+    async def retry_direct_link_collection(self, torrent_id: int) -> dict:
+        """Regenerate every URL in an existing direct-link collection."""
+        async with get_db() as db:
+            row = await db.fetchone(
+                "SELECT * FROM torrents WHERE id=?", (torrent_id,)
+            )
+            if not row:
+                raise ValueError("Transfer not found")
+            if str(row.get("source") or "") != DIRECT_LINK_SOURCE:
+                raise ValueError("Transfer is not a direct-link collection")
+            try:
+                links = normalize_direct_links(json.loads(row.get("magnet") or "[]"))
+            except Exception as exc:
+                raise ValueError("Stored direct-link payload is invalid") from exc
+            gids = await db.fetchall(
+                """SELECT download_id FROM download_files
+                   WHERE torrent_id=? AND download_id IS NOT NULL""",
+                (torrent_id,),
+            )
+            await db.execute(
+                """UPDATE torrents
+                   SET status='processing', provider_status='submitted',
+                       error_message=NULL, progress=0, completed_at=NULL,
+                       updated_at=CURRENT_TIMESTAMP
+                   WHERE id=?""",
+                (torrent_id,),
+            )
+            await db.execute(
+                "INSERT INTO events (torrent_id, level, message) VALUES (?, 'info', ?)",
+                (torrent_id, "Manual retry — regenerating direct links through AllDebrid"),
+            )
+            await db.commit()
+
+        for gid_row in gids:
+            await self._remove_owned_aria2_gid(str(gid_row["download_id"] or ""))
+        self._schedule_direct_link_collection(torrent_id, links)
+        await self._broadcast_direct_link_update(
+            torrent_id,
+            "processing",
+            str(row.get("name") or "Debrid links"),
+            0.0,
+        )
+        return {"ok": True, "new_status": "processing", "link_count": len(links)}
+
+    async def recover_direct_link_collections(self) -> int:
+        """Resume direct-link generation interrupted before aria2 queueing."""
+        async with get_db() as db:
+            rows = await db.fetchall(
+                """SELECT id, magnet FROM torrents
+                   WHERE source=?
+                     AND status IN ('processing', 'uploading', 'ready')""",
+                (DIRECT_LINK_SOURCE,),
+            )
+        recovered = 0
+        for row in rows:
+            try:
+                links = normalize_direct_links(json.loads(row.get("magnet") or "[]"))
+            except Exception as exc:
+                logger.warning(
+                    "Could not recover direct-link transfer %s: %s",
+                    row["id"],
+                    exc,
+                )
+                continue
+            self._schedule_direct_link_collection(int(row["id"]), links)
+            recovered += 1
+        return recovered
 
     async def _add_magnet(self, magnet: str, hash_value: str, source: str) -> dict:
         from services.duplicates import DuplicateCandidate, check_before_add
@@ -2358,7 +2827,8 @@ class TorrentManager:
                 pending_rows = await (
                     await db.execute(
                         """SELECT f.id AS file_id, f.torrent_id, f.filename,
-                                  f.download_url, f.local_path, t.name AS torrent_name
+                                  f.source_url, f.download_url, f.local_path,
+                                  t.name AS torrent_name, t.source AS transfer_source
                            FROM download_files f
                            JOIN torrents t ON t.id = f.torrent_id
                            WHERE f.download_client='aria2'
@@ -2414,7 +2884,12 @@ class TorrentManager:
 
             async def _unlock_for_dispatch(row_: dict) -> dict:
                 async with _dispatch_sem:
-                    sl = str(row_["download_url"] or "").strip()
+                    sl = str(
+                        row_.get("source_url")
+                        if row_.get("transfer_source") == DIRECT_LINK_SOURCE
+                        else row_.get("download_url")
+                        or ""
+                    ).strip()
                     try:
                         result = await _retry_async(self.ad().unlock_link, sl)
                         dl_url = result.get("link", "")
@@ -2474,6 +2949,18 @@ class TorrentManager:
                         "aria2 dispatch: %s → GID %s (torrent %s)",
                         row["filename"], gid, row["torrent_id"],
                     )
+                    if row.get("transfer_source") == DIRECT_LINK_SOURCE:
+                        await self._log_event(
+                            row["torrent_id"],
+                            "info",
+                            f"Generated URL queued in aria2: {row['filename']}",
+                        )
+                        await self._broadcast_direct_link_update(
+                            row["torrent_id"],
+                            queued_status,
+                            str(row.get("torrent_name") or "Debrid links"),
+                            0.0,
+                        )
                 except Exception as exc:
                     logger.error("aria2 dispatch failed [%s]: %s", row["filename"], exc)
                     await self._update_file_state(row["file_id"], "error", row["local_path"], reason=str(exc))
@@ -2734,17 +3221,45 @@ class TorrentManager:
         ignores it while _start_download/_download re-runs and re-registers
         the new URIs with aria2. Status is updated to 'queued' or 'paused' once
         _download() completes and the new download_files rows are written."""
+        direct_links: List[str] = []
         async with get_db() as db:
+            transfer = await db.fetchone(
+                "SELECT source, magnet FROM torrents WHERE id=?", (torrent_id,)
+            )
+            is_direct = bool(
+                transfer
+                and str(transfer.get("source") or "") == DIRECT_LINK_SOURCE
+            )
+            if is_direct:
+                try:
+                    direct_links = normalize_direct_links(
+                        json.loads(transfer.get("magnet") or "[]")
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Could not restore direct-link payload for transfer %s: %s",
+                        torrent_id,
+                        exc,
+                    )
             await db.execute("DELETE FROM download_files WHERE torrent_id=?", (torrent_id,))
             await db.execute(
-                "UPDATE torrents SET status='downloading', error_message=NULL, updated_at=CURRENT_TIMESTAMP WHERE id=?",
-                (torrent_id,),
+                """UPDATE torrents
+                   SET status=?, provider_status=?, error_message=NULL,
+                       progress=0, updated_at=CURRENT_TIMESTAMP
+                   WHERE id=?""",
+                (
+                    "processing" if is_direct else "downloading",
+                    "submitted" if is_direct else None,
+                    torrent_id,
+                ),
             )
             await db.execute(
                 "INSERT INTO events (torrent_id, level, message) VALUES (?, ?, ?)",
                 (torrent_id, "warn", reason),
             )
             await db.commit()
+        if is_direct and direct_links:
+            self._schedule_direct_link_collection(torrent_id, direct_links)
 
     async def reconcile_aria2_on_startup(self):
         """Called once at startup to reconcile DB state with what aria2 actually has.
@@ -2895,6 +3410,11 @@ class TorrentManager:
                 )
 
         await self._dispatch_pending_aria2_queue()
+        recovered = await self.recover_direct_link_collections()
+        if recovered:
+            logger.info(
+                "Startup: resumed %d interrupted direct-link transfer(s)", recovered
+            )
 
     async def _dedupe_aria2_downloads_on_startup(self, all_downloads):
         if not is_builtin_mode():
@@ -3285,7 +3805,16 @@ class TorrentManager:
                 await db.execute("INSERT INTO events (torrent_id, level, message) VALUES (?, ?, ?)", (torrent_id, "info", event_msg))
                 await db.commit()
 
-        await self._delete_magnet_after_completion(torrent_id, torrent_dict["alldebrid_id"])
+        if str(torrent_dict.get("source") or "") == DIRECT_LINK_SOURCE:
+            await self._log_event(
+                torrent_id,
+                "info",
+                "Direct-link transaction completed; no AllDebrid magnet cleanup required",
+            )
+        else:
+            await self._delete_magnet_after_completion(
+                torrent_id, torrent_dict["alldebrid_id"]
+            )
         await self._mark_finished(torrent_id, name=torrent_dict.get("name",""))
         # Trigger auto-extraction if enabled
         asyncio.create_task(

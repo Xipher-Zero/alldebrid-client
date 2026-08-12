@@ -551,7 +551,7 @@ async function loadRecent() {
     const {items} = await api('GET', '/torrents?limit=10');
     const tb = document.getElementById('dash-tbody');
     if (!items.length) {
-      tb.innerHTML = '<tr><td colspan="5"><div class="empty"><div class="empty-icon">🧲</div>No torrents yet. Add a magnet link to start.</div></td></tr>';
+      tb.innerHTML = '<tr><td colspan="5"><div class="empty"><div class="empty-icon">⬇️</div>No transfers yet. Add a magnet, torrent file, or debrid link to start.</div></td></tr>';
       return;
     }
     // Update activity count
@@ -565,6 +565,7 @@ async function loadRecent() {
           <div class="t-name" title="${esc(t.name)||''}">${esc(t.name)||'(unnamed)'}</div>
           ${is_active ? `<div class="dash-row-bar"><div class="dash-row-bar-fill" style="width:${pct_val}%;background:var(--blue)"></div></div>` : ''}
           ${t.alldebrid_id ? `<div class="t-hash" style="font-size:10px;color:var(--text3)" title="AllDebrid ID">AD: ${esc(t.alldebrid_id)}</div>` : ''}
+          ${t.source === 'direct_link' ? `<div class="t-hash" style="font-size:10px;color:var(--text3)" title="Direct debrid link transfer">🔗 Direct link</div>` : ''}
         </td>
         <td>${badge(t.status)}</td>
         <td>${progress(t.progress,t.status)}</td>
@@ -647,6 +648,43 @@ async function quickAdd() {
     loadStats(); loadRecent();
   } catch(e) { toast(sanitizeErrorMsg(e.message), 'error'); }
   finally { if (btn) btn.disabled = false; }
+}
+
+async function addDebridLinks() {
+  const input = document.getElementById('q-debrid-links');
+  const button = document.getElementById('btn-add-debrid-links');
+  const links = (input?.value || '')
+    .split(/\r?\n/)
+    .map(v => v.trim())
+    .filter(Boolean);
+  if (!links.length) {
+    toast('Enter at least one HTTP or HTTPS link', 'warn');
+    input?.focus();
+    return;
+  }
+  if (button) {
+    button.disabled = true;
+    button.textContent = 'Adding…';
+  }
+  try {
+    const result = await api('POST', '/links/add', {links}, 30000);
+    const count = result.accepted_links || links.length;
+    toast(`${count} debrid link${count === 1 ? '' : 's'} submitted`, 'success');
+    input.value = '';
+    input.focus();
+    loadStats();
+    loadRecent();
+    if (document.getElementById('view-torrents')?.classList.contains('active')) {
+      loadTorrents();
+    }
+  } catch(e) {
+    toast(sanitizeErrorMsg(e.message), 'error');
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = 'Add';
+    }
+  }
 }
 
 // ── Torrents ───────────────────────────────────────────────────────────────

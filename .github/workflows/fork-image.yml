@@ -42,6 +42,21 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd
 
+      - name: Generate test image metadata
+        id: meta
+        uses: docker/metadata-action@030e881283bb7a6894de51c315a6bfe6a94e05cf
+        with:
+          images: local/alldebrid-client
+          flavor: |
+            latest=false
+          tags: |
+            type=sha,prefix=sha-,format=short
+          labels: |
+            org.opencontainers.image.title=AllDebrid Control & Download Center
+            org.opencontainers.image.description=Self-hosted AllDebrid download control for torrents and direct links
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+
       - name: Build test image
         uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f
         with:
@@ -50,6 +65,7 @@ jobs:
           load: true
           push: false
           tags: local/alldebrid-client:${{ github.sha }}
+          labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             APP_VERSION=${{ steps.version.outputs.version }}
           cache-from: type=gha
@@ -88,6 +104,30 @@ jobs:
 
           if [ "$healthy" -ne 1 ]; then
             docker logs "$container_name"
+            exit 1
+          fi
+
+          expected_version="${{ steps.version.outputs.version }}"
+          expected_title="AllDebrid Control & Download Center"
+          image_ref="local/alldebrid-client:${GITHUB_SHA}"
+
+          image_version="$(docker image inspect "$image_ref" --format '{{ index .Config.Labels "org.opencontainers.image.version" }}')"
+          image_title="$(docker image inspect "$image_ref" --format '{{ index .Config.Labels "org.opencontainers.image.title" }}')"
+          health_payload="$(docker exec "$container_name" curl --fail --silent --show-error http://127.0.0.1:8080/api/health)"
+          health_version="$(jq -r '.version // empty' <<< "$health_payload")"
+
+          if [ "$image_version" != "$expected_version" ]; then
+            echo "OCI version mismatch: expected $expected_version, got $image_version"
+            exit 1
+          fi
+
+          if [ "$image_title" != "$expected_title" ]; then
+            echo "OCI title mismatch: expected $expected_title, got $image_title"
+            exit 1
+          fi
+
+          if [ "$health_version" != "$expected_version" ]; then
+            echo "Health version mismatch: expected $expected_version, got $health_version"
             exit 1
           fi
 
@@ -143,6 +183,33 @@ jobs:
           tags: |
             type=sha,prefix=sha-,format=short,enable=${{ !startsWith(github.ref, 'refs/tags/') }}
             type=ref,event=tag,enable=${{ startsWith(github.ref, 'refs/tags/internal-v') }}
+          labels: |
+            org.opencontainers.image.title=AllDebrid Control & Download Center
+            org.opencontainers.image.description=Self-hosted AllDebrid download control for torrents and direct links
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+
+      - name: Verify generated image metadata
+        shell: bash
+        env:
+          METADATA_JSON: ${{ steps.meta.outputs.json }}
+        run: |
+          set -euo pipefail
+
+          expected_version="${{ steps.version.outputs.version }}"
+          expected_title="AllDebrid Control & Download Center"
+          generated_version="$(jq -r '.labels["org.opencontainers.image.version"] // empty' <<< "$METADATA_JSON")"
+          generated_title="$(jq -r '.labels["org.opencontainers.image.title"] // empty' <<< "$METADATA_JSON")"
+
+          if [ "$generated_version" != "$expected_version" ]; then
+            echo "Generated OCI version mismatch: expected $expected_version, got $generated_version"
+            exit 1
+          fi
+
+          if [ "$generated_title" != "$expected_title" ]; then
+            echo "Generated OCI title mismatch: expected $expected_title, got $generated_title"
+            exit 1
+          fi
 
       - name: Build and publish
         uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f

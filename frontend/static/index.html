@@ -6,7 +6,7 @@
 <title>AllDebrid Control &amp; Download Center (ACDC)</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/style.css?v=5">
+<link rel="stylesheet" href="/style.css?v=6">
 <link rel="icon" type="image/png" sizes="512x512" href="/favicon.png?v=2">
 </head>
 <body>
@@ -41,25 +41,13 @@
     <div class="nav-item" data-view="analytics" onclick="nav(this)">
       <span class="icon">&#128200;</span><span class="nav-label">Analytics</span>
     </div>
-    <div class="nav-item" data-view="learning" onclick="nav(this)">
-      <span class="icon">&#129504;</span><span class="nav-label">Learning</span>
-    </div>
-    <div class="nav-item" data-view="saved-searches" onclick="nav(this)">
-      <span class="icon">&#128270;</span><span class="nav-label">Saved Searches</span>
-    </div>
-    <div class="nav-group">Project</div>
-    <div class="nav-item" data-view="changelog" onclick="nav(this)">
-      <span class="icon">&#128214;</span><span class="nav-label">Changelog</span>
-    </div>
-    <div class="nav-item" data-view="support" onclick="nav(this)">
-      <span class="icon">&#10084;&#65039;</span><span class="nav-label">Support</span>
-    </div>
-    <div class="nav-item" data-view="help" onclick="nav(this)">
-      <span class="icon">&#10067;</span><span class="nav-label">Help</span>
-    </div>
     <div class="nav-group">System</div>
     <div class="nav-item" data-view="settings" onclick="nav(this)">
       <span class="icon">&#9881;</span><span class="nav-label">Settings</span>
+    </div>
+    <div class="sidebar-theme-control">
+      <button type="button" class="theme-toggle" id="theme-toggle" onclick="toggleTheme()"
+              title="Switch to light mode" aria-label="Switch to light mode">🌙</button>
     </div>
   </nav>
   <div class="sidebar-footer">
@@ -77,10 +65,6 @@
     <div class="conn-row">
       <div class="dot" id="dot-db"></div>
       <span id="lbl-db">DB: —</span>
-    </div>
-    <div class="conn-row">
-      <div class="dot" id="dot-jackett"></div>
-      <span id="lbl-jackett">Jackett: —</span>
     </div>
     <div class="conn-row" id="flexget-running-row" style="display:none">
       <div class="dot" id="dot-flexget" style="background:var(--accent);animation:pulse 1s infinite"></div>
@@ -107,7 +91,10 @@
   <div id="topbar">
     <button class="mobile-menu-btn" id="mobile-menu-btn" onclick="toggleSidebar()" aria-label="Menu">☰</button>
     <h1 id="page-title">Dashboard</h1>
-    <div id="update-badge" style="display:none;align-items:center;gap:6px;background:var(--surface2);border:1px solid var(--accent);border-radius:20px;padding:3px 12px;font-size:11px;color:var(--accent);cursor:pointer" onclick="nav(document.querySelector('[data-view=changelog]'))" title="New version available">&#128230; <span id="update-badge-version"></span> available</div>
+    <a id="update-badge" href="https://github.com/Xipher-Zero/alldebrid-client/blob/main/CHANGELOG.md"
+       target="_blank" rel="noopener" aria-label="Open the ACDC changelog"
+       style="display:none;align-items:center;gap:6px;background:var(--surface2);border:1px solid var(--accent);border-radius:20px;padding:3px 12px;font-size:11px;color:var(--accent);cursor:pointer;text-decoration:none"
+       title="Open the ACDC changelog">&#128230; <span id="update-badge-version"></span> available</a>
     <div id="aria2-speed-badge" style="display:none;align-items:center;gap:6px;background:var(--surface2);border:1px solid var(--border);border-radius:20px;padding:3px 10px;font-size:11px;color:var(--text2);cursor:default" title="Active / max — live speed — limit"><span style="color:var(--green)">&#9660;</span><span id="aria2-badge-active">0</span><span style="color:var(--text3)">/</span><span id="aria2-badge-max">—</span><span style="color:var(--border);margin:0 2px">|</span><span id="aria2-badge-speed" style="color:var(--green)">0 B/s</span><span style="color:var(--border);margin:0 2px">|</span><span style="color:var(--text3)">&#9660;</span><span id="aria2-badge-limit">&#8734;</span></div>
     <div id="topbar-actions"></div>
   </div>
@@ -1185,9 +1172,8 @@
 
 <input id="torrent-file-input" type="file" accept=".torrent,application/x-bittorrent" hidden onchange="uploadTorrentFile(this)">
 
-<script src="/app.js?v=5" defer></script>
+<script src="/app.js?v=6" defer></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <div id="mobile-overlay" onclick="closeSidebar()"></div>
-<button class="theme-toggle" id="theme-toggle" onclick="toggleTheme()" title="Toggle light/dark mode">🌙</button>
 </body>
 </html>

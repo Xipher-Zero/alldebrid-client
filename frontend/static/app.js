@@ -51,12 +51,7 @@ function nav(el) {
     events:'Event Log',
     stats:'Statistics',
     analytics:'Analytics',
-    'saved-searches':'Saved Searches',
-    learning:'Learning',
-    changelog:'Changelog',
-    support:'Support',
     settings:'Settings',
-    help:'Help'
   };
   document.getElementById('page-title').textContent = titles[v] || v;
   if (v === 'dashboard') { loadStats(); loadRecent(); }
@@ -64,13 +59,9 @@ function nav(el) {
   if (v === 'events')    loadEvents();
   if (v === 'stats')     loadDetailedStats();
   if (v === 'analytics') loadAnalytics(_analyticsWindow || 24);
-  if (v === 'learning')  loadLearningStats();
-  if (v === 'saved-searches') loadSavedSearchesView();
-  if (v === 'changelog') loadChangelog();
   if (v === 'settings')  { loadSettings(); setTimeout(loadSavedSearches, 200); }
   if (v === 'search')    initSearchView();
   if (v === 'aria2queue') loadAria2QueueView();
-  if (v === 'help') switchHelpTab(document.querySelector('#help-tabs .stab'));
   closeSidebar();
 }
 
@@ -1001,7 +992,16 @@ function closeSidebar() {
 function toggleTheme() {
   const isLight = document.body.classList.toggle('light');
   localStorage.setItem('theme', isLight ? 'light' : 'dark');
-  document.getElementById('theme-toggle').textContent = isLight ? '🌙' : '☀️';
+  updateThemeToggle(isLight);
+}
+
+function updateThemeToggle(isLight) {
+  const btn = document.getElementById('theme-toggle');
+  if (!btn) return;
+  const action = isLight ? 'Switch to dark mode' : 'Switch to light mode';
+  btn.textContent = isLight ? '☀️' : '🌙';
+  btn.title = action;
+  btn.setAttribute('aria-label', action);
 }
 document.addEventListener('DOMContentLoaded', () => {
   document.addEventListener('click', function(e) {
@@ -1013,11 +1013,9 @@ document.addEventListener('DOMContentLoaded', () => {
       loadAria2Runtime().catch(()=>{});
     }
   }, 5000);
-  if (localStorage.getItem('theme') === 'light') {
-    document.body.classList.add('light');
-    const btn = document.getElementById('theme-toggle');
-    if (btn) btn.textContent = '☀️';
-  }
+  const isLight = localStorage.getItem('theme') === 'light';
+  document.body.classList.toggle('light', isLight);
+  updateThemeToggle(isLight);
 });
 
 // ── Bulk selection ────────────────────────────────────────────────────────────
@@ -1201,10 +1199,6 @@ function renderSettings() {
     { id:'tab-download',      label:'⬇️ Download' },
     { id:'tab-extract',       label:'📦 Extract' },
     { id:'tab-notifications', label:'🔔 Notifications' },
-    { id:'tab-services',      label:'🔌 Services' },
-    { id:'tab-indexers',      label:'🔎 Search / Indexers' },
-    { id:'tab-flexget',       label:'🤖 FlexGet' },
-    { id:'tab-automation',    label:'🤖 Automation' },
     { id:'tab-database',      label:'🗄 Database' },
     { id:'tab-advanced',      label:'🛠️ Advanced' },
   ];
@@ -2593,8 +2587,10 @@ function _updatePremiumLabel(r) {
 function switchSettingsTab(id) {
   const content = document.getElementById('content');
   const currentTop = content ? content.scrollTop : 0;
-  document.querySelectorAll('.stab').forEach(t => t.classList.toggle('active', t.dataset.tab === id));
-  document.querySelectorAll('.stab-panel').forEach(p => p.classList.toggle('active', p.id === id));
+  const requestedTab = document.querySelector(`#settings-tabs .stab[data-tab="${id}"]`);
+  if (!requestedTab) id = 'tab-general';
+  document.querySelectorAll('#settings-tabs .stab').forEach(t => t.classList.toggle('active', t.dataset.tab === id));
+  document.querySelectorAll('#settings-form .stab-panel').forEach(p => p.classList.toggle('active', p.id === id));
   if (aria2DownloadsTimer) {
     clearInterval(aria2DownloadsTimer);
     aria2DownloadsTimer = null;

@@ -3,29 +3,31 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<title>AllDebrid Control &amp; Download Center (ACDC)</title>
+<title>ACDC</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/style.css?v=7">
-<link rel="icon" type="image/png" sizes="512x512" href="/favicon.png?v=2">
+<link rel="stylesheet" href="/style.css?v=8">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg?v=4">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png?v=4">
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=4">
 </head>
 <body>
 
 <aside id="sidebar">
   <div class="logo">
-    <img class="logo-icon" src="/logo.svg" alt="ACDC logo">
+    <img class="logo-icon" src="/logo.svg?v=4" alt="AllDebrid Control &amp; Download Center logo">
     <div class="logo-text">
-      <div class="logo-name logo-name-full" title="AllDebrid Control &amp; Download Center">AllDebrid Control &amp;<br>Download Center <span class="logo-acronym">(ACDC)</span></div>
+      <div class="logo-name logo-name-full" title="AllDebrid Control &amp; Download Center">AllDebrid Control &amp;<br>Download Center</div>
       <div class="logo-ver" id="sidebar-version">v…</div>
     </div>
   </div>
   <nav>
     <div class="nav-group">Queue</div>
     <div class="nav-item active" data-view="dashboard" onclick="nav(this)">
-      <span class="icon">&#9889;</span><span class="nav-label">Dashboard</span>
+      <span class="icon">&#x25EB;&#xFE0E;</span><span class="nav-label">Dashboard</span>
     </div>
     <div class="nav-item" data-view="torrents" onclick="nav(this)">
-      <span class="icon">&#11015;&#65039;</span><span class="nav-label">Downloads</span>
+      <span class="icon">&#x25BD;&#xFE0E;</span><span class="nav-label">Downloads</span>
       <span class="nav-badge" id="nb-active" style="display:none">0</span>
     </div>
     <div class="nav-item" data-view="search" onclick="nav(this)">
@@ -33,21 +35,21 @@
     </div>
     <div class="nav-group">Monitor</div>
     <div class="nav-item" data-view="events" onclick="nav(this)">
-      <span class="icon">&#128203;</span><span class="nav-label">Event Log</span>
+      <span class="icon">&#x2263;&#xFE0E;</span><span class="nav-label">Event Log</span>
     </div>
     <div class="nav-item" data-view="stats" onclick="nav(this)">
-      <span class="icon">&#128202;</span><span class="nav-label">Statistics</span>
+      <span class="icon">&#x2206;&#xFE0E;</span><span class="nav-label">Statistics</span>
     </div>
     <div class="nav-item" data-view="analytics" onclick="nav(this)">
-      <span class="icon">&#128200;</span><span class="nav-label">Analytics</span>
+      <span class="icon">&#x223F;&#xFE0E;</span><span class="nav-label">Analytics</span>
     </div>
     <div class="nav-group">System</div>
     <div class="nav-item" data-view="settings" onclick="nav(this)">
-      <span class="icon">&#9881;</span><span class="nav-label">Settings</span>
+      <span class="icon">&#x2699;&#xFE0E;</span><span class="nav-label">Settings</span>
     </div>
     <div class="sidebar-theme-control">
       <button type="button" class="theme-toggle" id="theme-toggle" onclick="toggleTheme()"
-              title="Switch to light mode" aria-label="Switch to light mode">🌙</button>
+              title="Switch to light mode" aria-label="Switch to light mode">&#x263E;&#xFE0E;</button>
     </div>
   </nav>
   <div class="sidebar-footer">
@@ -1172,7 +1174,7 @@
 
 <input id="torrent-file-input" type="file" accept=".torrent,application/x-bittorrent" hidden onchange="uploadTorrentFile(this)">
 
-<script src="/app.js?v=7" defer></script>
+<script src="/app.js?v=8" defer></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <div id="mobile-overlay" onclick="closeSidebar()"></div>
 </body>

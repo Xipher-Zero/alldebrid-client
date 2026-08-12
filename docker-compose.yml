@@ -24,7 +24,7 @@
 services:
 
   alldebrid-client:
-    image: ghcr.io/xipher-zero/alldebrid-client:internal-v0.9.3
+    image: ghcr.io/xipher-zero/alldebrid-client:internal-v0.9.4
     build: .
     container_name: alldebrid-client
     restart: unless-stopped

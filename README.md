@@ -3,7 +3,7 @@
   <h1>AllDebrid Control &amp; Download Center (ACDC)</h1>
   <p><strong>Self-hosted torrent automation via AllDebrid</strong><br/>Web UI · built-in aria2 · Sonarr/Radarr (qBit API) · Jackett search · SSE live updates · Discord · Prometheus · PostgreSQL</p>
 
-  [![Release](https://img.shields.io/github/v/release/Xipher-Zero/alldebrid-client?style=flat-square&color=f97316)](https://github.com/Xipher-Zero/alldebrid-client/releases)
+  [![Release](https://img.shields.io/github/v/release/Xipher-Zero/alldebrid-client?style=flat-square&color=a67cff)](https://github.com/Xipher-Zero/alldebrid-client/releases)
   [![License](https://img.shields.io/github/license/Xipher-Zero/alldebrid-client?style=flat-square)](LICENSE)
   [![Tests](https://img.shields.io/github/actions/workflow/status/Xipher-Zero/alldebrid-client/tests.yml?style=flat-square&label=tests)](https://github.com/Xipher-Zero/alldebrid-client/actions/workflows/tests.yml)
   [![Fork Image](https://img.shields.io/github/actions/workflow/status/Xipher-Zero/alldebrid-client/fork-image.yml?style=flat-square&label=image)](https://github.com/Xipher-Zero/alldebrid-client/actions/workflows/fork-image.yml)
@@ -95,7 +95,7 @@ docker run -d \
   -e TZ=Europe/Berlin \
   -v /path/to/config:/app/config \
   -v /path/to/downloads:/downloads \
-  ghcr.io/xipher-zero/alldebrid-client:internal-v0.9.3
+  ghcr.io/xipher-zero/alldebrid-client:internal-v0.9.4
 ```
 
 > **File permissions:** set `PUID`/`PGID` to the UID/GID of the user that runs your other media containers (Sonarr, Radarr, Plex, etc.). Run `id` on the host to find the right values.

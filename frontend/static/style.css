@@ -52,12 +52,12 @@
 }
 body.light {
   /* Light theme: Catppuccin-inspired cool surfaces with blue interaction. */
-  --bg:       #e8f0fc;
-  --bg2:      #f5f8ff;
-  --surface:  #fbfcff;
-  --surface2: #edf3fc;
-  --border:   #c7d3e6;
-  --border2:  #9eafd0;
+  --bg:       #dbe7f6;
+  --bg2:      #eef4fb;
+  --surface:  #ffffff;
+  --surface2: #e5eef9;
+  --border:   #b5c6de;
+  --border2:  #8298bb;
   --accent:   #315fae;
   --accent2:  #234a8f;
   --accent-rgb: 49,95,174;
@@ -67,13 +67,13 @@ body.light {
   --focus-ring: rgba(49,95,174,.20);
   --text:     #202a44;
   --text2:    #4f5f7a;
-  --text3:    #64738d;
-  --nav-hover:#dde9f9;
-  --nav-active: rgba(49,95,174,.14);
-  --panel-a:  rgba(251,252,255,.98);
-  --panel-b:  rgba(232,240,252,.96);
+  --text3:    #5b6c87;
+  --nav-hover:#cfddf0;
+  --nav-active: rgba(49,95,174,.20);
+  --panel-a:  rgba(255,255,255,.99);
+  --panel-b:  rgba(225,236,249,.97);
   --panel-glow: rgba(76,131,212,.14);
-  --shadow-soft: 0 14px 28px rgba(46,67,105,.10);
+  --shadow-soft: 0 14px 28px rgba(46,67,105,.12);
 }
 /* Sidebar theme control */
 .sidebar-theme-control {
@@ -416,9 +416,11 @@ body.light :disabled { opacity: .55; }
   margin: 8px 0;
 }
 
-/* Light mode overrides */
-body.light .dash-hero-stat { background: var(--surface2); }
-body.light .dash-kpi-strip { background: var(--surface2); }
+/* Light mode: keep primary cards white over the blue canvas; nested controls
+   continue using surface2 so hierarchy does not depend on borders alone. */
+body.light .card,
+body.light .dash-hero-stat,
+body.light .dash-kpi-strip { background: var(--surface); }
 
 /* Stat Cards ── */
 /* Drag & Drop reordering */

@@ -253,6 +253,16 @@ class DashboardContractTests(unittest.TestCase):
         self.assertIn(".btn-primary { background: var(--primary-gradient);", css)
         self.assertIn("font-variant-emoji:text", css)
         self.assertNotIn("--accent:   #ff8c42;", css)
+        for light_theme_token in (
+            "--bg:       #dbe7f6;",
+            "--surface:  #ffffff;",
+            "--surface2: #e5eef9;",
+            "--border:   #b5c6de;",
+            "--nav-active: rgba(49,95,174,.20);",
+        ):
+            self.assertIn(light_theme_token, css)
+        self.assertIn("body.light .dash-hero-stat,", css)
+        self.assertIn("body.light .dash-kpi-strip { background: var(--surface); }", css)
 
         self.assertIn('viewBox="0 0 512 512"', logo)
         self.assertIn("violet and blue download arrow entering a bucket", logo)

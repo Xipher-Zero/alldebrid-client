@@ -9,7 +9,7 @@ Fires HTTP POST webhooks on torrent lifecycle events:
 Each webhook receives a JSON payload with full torrent context. An optional
 Bearer secret can be set to authenticate requests.
 
-This is separate from Discord notifications (which use the AllDebrid-Client
+This is separate from Discord notifications (which use the ACDC
 notification service) and the on_torrent_complete shell script.
 
 Design principles:
@@ -61,7 +61,7 @@ async def fire(
             "error_message": torrent.get("error_message"),
             "local_path":  torrent.get("local_path"),
         }
-        headers = {"Content-Type": "application/json", "User-Agent": "AllDebrid-Client"}
+        headers = {"Content-Type": "application/json", "User-Agent": "ACDC"}
         if secret:
             headers["Authorization"] = f"Bearer {secret}"
 

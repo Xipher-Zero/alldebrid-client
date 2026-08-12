@@ -4,13 +4,15 @@ from pathlib import Path
 from typing import List, Optional
 from pydantic import BaseModel
 
+from core.branding import APP_SHORT_NAME
+
 CONFIG_PATH = Path(os.getenv("CONFIG_PATH", "/app/config/config.json"))
 
 
 class AppSettings(BaseModel):
     # AllDebrid
     alldebrid_api_key: str = ""
-    alldebrid_agent: str = "AllDebrid-Client"
+    alldebrid_agent: str = APP_SHORT_NAME
 
     # Logging
     log_level: str = "INFO"
@@ -84,7 +86,7 @@ class AppSettings(BaseModel):
     # Discord
     discord_webhook_url: str = ""
     discord_webhook_added: str = ""
-    discord_username: str = "AllDebrid-Client"
+    discord_username: str = APP_SHORT_NAME
     discord_avatar_url: str = ""  # Discord only accepts PNG/JPG/WEBP — SVG rejected
     discord_notify_added: bool = True
     discord_notify_finished: bool = True

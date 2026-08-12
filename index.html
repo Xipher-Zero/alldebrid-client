@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>AllDebrid-Client — Self-hosted Torrent Automation</title>
+<title>AllDebrid Control &amp; Download Center (ACDC)</title>
 <meta name="description" content="Self-hosted torrent automation via AllDebrid. Add magnets via Web UI, watch folder, Sonarr/Radarr or API.">
 <link rel="icon" type="image/png" href="./logo.png">
 <link rel="apple-touch-icon" href="./logo.png">
@@ -150,14 +150,13 @@ footer{padding:48px 5vw;border-top:1px solid var(--brd);display:flex;align-items
 <nav>
   <a href="#" class="nav-logo">
     <img src="./logo.png" alt="Logo">
-    <span class="nav-logo-text">AllDebrid<span>-Client</span></span>
+    <span class="nav-logo-text">AC<span>DC</span></span>
   </a>
   <ul class="nav-links">
     <li><a href="#features">Features</a></li>
     <li><a href="#pipeline">How it works</a></li>
     <li><a href="#install">Install</a></li>
-    <li><a href="#discord">Discord</a></li>
-    <li><a href="https://github.com/kroeberd/alldebrid-client" target="_blank" class="nav-cta">GitHub ↗</a></li>
+    <li><a href="https://github.com/Xipher-Zero/alldebrid-client" target="_blank" class="nav-cta">GitHub ↗</a></li>
   </ul>
   <div class="hamburger" id="hamburger" onclick="toggleNav()">
     <span></span><span></span><span></span>
@@ -167,8 +166,7 @@ footer{padding:48px 5vw;border-top:1px solid var(--brd);display:flex;align-items
   <a href="#features" onclick="toggleNav()">Features</a>
   <a href="#pipeline" onclick="toggleNav()">How it works</a>
   <a href="#install" onclick="toggleNav()">Install</a>
-  <a href="#discord" onclick="toggleNav()">Discord</a>
-  <a href="https://github.com/kroeberd/alldebrid-client" target="_blank">GitHub ↗</a>
+  <a href="https://github.com/Xipher-Zero/alldebrid-client" target="_blank">GitHub ↗</a>
 </div>
 
 <!-- HERO -->
@@ -178,14 +176,14 @@ footer{padding:48px 5vw;border-top:1px solid var(--brd);display:flex;align-items
     v<span id="version-num">latest</span>&nbsp;·&nbsp;open source
   </div>
   <h1 class="hero-title">Torrent automation<br>via <span>AllDebrid</span>.</h1>
-  <p class="hero-sub">Add magnets through the Web UI, watch folder, Sonarr/Radarr or REST API. AllDebrid-Client handles the full lifecycle — upload, poll, unlock, download, notify.</p>
+  <p class="hero-sub">Add magnets or direct links through the Web UI, watch folder, Sonarr/Radarr or REST API. ACDC handles the full lifecycle — upload, poll, unlock, download and notify.</p>
   <div class="hero-ctas">
     <a href="#install" class="btn btn-primary">⚡ Get started</a>
-    <a href="https://github.com/kroeberd/alldebrid-client" target="_blank" class="btn btn-ghost">
+    <a href="https://github.com/Xipher-Zero/alldebrid-client" target="_blank" class="btn btn-ghost">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.374 0 0 5.373 0 12c0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23A11.509 11.509 0 0112 5.803c1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576C20.566 21.797 24 17.3 24 12c0-6.627-5.373-12-12-12z"/></svg>
       GitHub
     </a>
-    <a href="https://hub.docker.com/r/kroeberd/alldebrid-client" target="_blank" class="btn btn-ghost">🐳 Docker Hub</a>
+    <a href="https://github.com/Xipher-Zero/alldebrid-client/pkgs/container/alldebrid-client" target="_blank" class="btn btn-ghost">🐳 GHCR</a>
   </div>
   <div class="hero-stats">
     <div class="hero-stat"><div class="hero-stat-num">4</div><div class="hero-stat-label">Input sources</div></div>
@@ -276,7 +274,7 @@ footer{padding:48px 5vw;border-top:1px solid var(--brd);display:flex;align-items
           <div class="step-num">4</div>
           <div class="step-body">
             <strong>Unraid App Store</strong>
-            <p>Search for <em>AllDebrid-Client</em> in Community Apps — all paths are pre-filled.</p>
+            <p>Use the fork's versioned GHCR image and preserve the existing config, data and download mounts.</p>
           </div>
         </div>
       </div>
@@ -289,7 +287,7 @@ footer{padding:48px 5vw;border-top:1px solid var(--brd);display:flex;align-items
         </div>
         <pre id="cc1"><span class="kw">services</span>:
   <span class="kw">alldebrid-client</span>:
-    <span class="cm">image</span>: <span class="str">kroeberd/alldebrid-client:latest</span>
+    <span class="cm">image</span>: <span class="str">ghcr.io/xipher-zero/alldebrid-client:internal-v0.9.1</span>
     <span class="cm">container_name</span>: <span class="str">alldebrid-client</span>
     <span class="cm">restart</span>: <span class="str">unless-stopped</span>
     <span class="cm">network_mode</span>: <span class="str">host</span>
@@ -316,30 +314,19 @@ footer{padding:48px 5vw;border-top:1px solid var(--brd);display:flex;align-items
   -v /mnt/appdata/alldebrid/config:/app/config \
   -v /mnt/appdata/alldebrid/data:/app/data \
   -v /mnt/downloads/alldebrid:/download \
-  kroeberd/alldebrid-client:latest</span></pre>
+  ghcr.io/xipher-zero/alldebrid-client:internal-v0.9.1</span></pre>
       </div>
     </div>
   </div>
 </div>
 </div>
 
-<!-- DISCORD -->
+<!-- NOTIFICATIONS -->
 <div class="section-wrap">
 <div id="discord">
-  <div class="section-label reveal">Community &amp; Notifications</div>
-  <h2 class="section-title reveal">Join the community.</h2>
-  <p class="section-sub reveal">Get help, share feedback, stay up to date — plus full Discord webhook notifications built right in.</p>
-  <div class="discord-card reveal" style="margin-top:40px">
-    <div class="discord-icon-wrap">💬</div>
-    <div class="discord-text">
-      <h3>Discord server</h3>
-      <p>Ask questions, report bugs, share your setup. Same server as Mediastarr — one community for all projects.</p>
-      <a href="https://discord.gg/8Vb9cj4ksv" target="_blank" class="discord-btn">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057.1 18.08.11 18.1.12 18.12a19.9 19.9 0 0 0 5.993 3.03.077.077 0 0 0 .084-.028 14.09 14.09 0 0 0 1.226-1.994.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03z"/></svg>
-        Join Discord
-      </a>
-    </div>
-  </div>
+  <div class="section-label reveal">Notifications</div>
+  <h2 class="section-title reveal">Know what the queue is doing.</h2>
+  <p class="section-sub reveal">Optional Discord webhooks report important download and automation events.</p>
   <div style="margin-top:48px">
     <div class="section-label reveal">Webhook events</div>
     <p class="section-sub reveal" style="margin-bottom:20px">Rich Discord embeds for every important event — configure once in Settings:</p>
@@ -362,7 +349,7 @@ footer{padding:48px 5vw;border-top:1px solid var(--brd);display:flex;align-items
 <!-- WHY -->
 <div style="background:var(--bg2);border-top:1px solid var(--brd);padding:100px 5vw">
 <div id="why" style="max-width:1100px;margin:0 auto">
-  <div class="section-label reveal">Why AllDebrid-Client</div>
+  <div class="section-label reveal">Why ACDC</div>
   <h2 class="section-title reveal">Built for reliability.</h2>
   <p class="section-sub reveal">Designed to run unattended for weeks. Every edge case is handled.</p>
   <div class="why-grid">
@@ -397,29 +384,23 @@ footer{padding:48px 5vw;border-top:1px solid var(--brd);display:flex;align-items
 
 <!-- FOOTER -->
 <footer>
-  <a href="#" class="footer-logo">AllDebrid<span>-Client</span></a>
-  <div class="footer-copy">© 2026 kroeberd · MIT License</div>
+  <a href="#" class="footer-logo">AC<span>DC</span></a>
+  <div class="footer-copy">ACDC fork · MIT License</div>
   <div class="footer-links">
-    <a href="https://github.com/kroeberd/alldebrid-client" target="_blank">GitHub</a>
-    <a href="https://hub.docker.com/r/kroeberd/alldebrid-client" target="_blank">Docker Hub</a>
-    <a href="https://discord.gg/8Vb9cj4ksv" target="_blank">Discord</a>
-    <a href="https://github.com/kroeberd/alldebrid-client/blob/main/CHANGELOG.md" target="_blank">Changelog</a>
-    <a href="https://github.com/kroeberd/alldebrid-client/blob/main/LICENSE" target="_blank">License</a>
+    <a href="https://github.com/Xipher-Zero/alldebrid-client" target="_blank">GitHub</a>
+    <a href="https://github.com/Xipher-Zero/alldebrid-client/pkgs/container/alldebrid-client" target="_blank">GHCR</a>
+    <a href="https://github.com/Xipher-Zero/alldebrid-client/blob/main/CHANGELOG.md" target="_blank">Changelog</a>
+    <a href="https://github.com/Xipher-Zero/alldebrid-client/blob/main/LICENSE" target="_blank">License</a>
   </div>
 </footer>
 
 <script>
-// Version via GitHub API
+// Version from the fork's canonical VERSION file
 (async()=>{
   try{
-    const r=await fetch('https://api.github.com/repos/kroeberd/alldebrid-client/releases/latest');
-    if(r.ok){const d=await r.json();const v=(d.tag_name||'').replace(/^v/,'');if(v)document.getElementById('version-num').textContent=v;}
-  }catch(e){
-    try{
-      const r2=await fetch('https://raw.githubusercontent.com/kroeberd/alldebrid-client/main/VERSION');
-      if(r2.ok){const v=(await r2.text()).trim();if(v)document.getElementById('version-num').textContent=v;}
-    }catch(e2){}
-  }
+    const r=await fetch('https://raw.githubusercontent.com/Xipher-Zero/alldebrid-client/main/VERSION');
+    if(r.ok){const v=(await r.text()).trim();if(v)document.getElementById('version-num').textContent=v;}
+  }catch(e){}
 })();
 
 // Scroll reveal

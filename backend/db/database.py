@@ -1,5 +1,5 @@
 """
-Database layer for AllDebrid-Client.
+Database layer for ACDC.
 
 Supports two modes (controlled by db_type in AppSettings):
   sqlite   -> Default, fully backward compatible, no setup needed

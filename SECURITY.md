@@ -18,7 +18,7 @@ Only the latest release receives security fixes. Please update before reporting.
 
 If you discover a security issue, please report it responsibly:
 
-1. Open a [GitHub Security Advisory](https://github.com/your-username/alldebrid-client/security/advisories/new) (preferred), or
+1. Open a [GitHub Security Advisory](https://github.com/Xipher-Zero/alldebrid-client/security/advisories/new) (preferred), or
 2. Send an email to the maintainer (see repository profile).
 
 Please include:
@@ -54,7 +54,7 @@ Example Nginx snippet with Basic Auth:
 
 ```nginx
 location / {
-    auth_basic "AllDebrid-Client";
+    auth_basic "ACDC";
     auth_basic_user_file /etc/nginx/.htpasswd;
     proxy_pass http://localhost:8080;
 }

@@ -51,6 +51,14 @@ def _validate(cfg) -> List[Tuple[str, str, Any, Any]]:
     if cfg.alldebrid_api_key and len(cfg.alldebrid_api_key.strip()) < 10:
         warn("alldebrid_api_key", "looks too short to be valid", cfg.alldebrid_api_key)
 
+    legacy_names = {"AllDebrid-Client", "AllDebrid-Torrent-Client"}
+    if getattr(cfg, "alldebrid_agent", "") in legacy_names:
+        warn("alldebrid_agent", "legacy application identity migrated to ACDC",
+             cfg.alldebrid_agent, "ACDC")
+    if getattr(cfg, "discord_username", "") in legacy_names:
+        warn("discord_username", "legacy notification identity migrated to ACDC",
+             cfg.discord_username, "ACDC")
+
     # ── URLs ──────────────────────────────────────────────────────────────────
     for field in ("aria2_url", "sonarr_url", "radarr_url", "flexget_url", "jackett_url"):
         val = getattr(cfg, field, "")

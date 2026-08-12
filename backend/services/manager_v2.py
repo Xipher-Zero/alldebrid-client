@@ -504,13 +504,13 @@ class TorrentManager:
         return True
 
     async def control_aria2_gid(self, gid: str, action: str) -> dict:
-        """Apply a user action only to a GID owned by AllDebrid-Client."""
+        """Apply a user action only to a GID owned by ACDC."""
         gid = str(gid or "").strip()
         if action not in {"pause", "resume", "remove"}:
             raise ValueError("Unsupported aria2 action")
         if not is_builtin_mode() and gid not in await self._aria2_owned_gids():
             raise PermissionError(
-                f"aria2 GID {gid} is not owned by AllDebrid-Client"
+                f"aria2 GID {gid} is not owned by ACDC"
             )
         if action == "remove":
             mutated = await self._remove_owned_aria2_gid(gid)

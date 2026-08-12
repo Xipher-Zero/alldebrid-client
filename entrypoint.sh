@@ -1,5 +1,5 @@
 #!/bin/sh
-# AllDebrid-Client container entrypoint.
+# ACDC container entrypoint.
 #
 # Supports PUID / PGID environment variables so that downloaded files are owned
 # by the same user as the host process (e.g. Sonarr, Radarr, Plex).

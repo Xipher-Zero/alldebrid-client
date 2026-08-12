@@ -1,4 +1,4 @@
-/* AllDebrid-Client — extracted from index.html */
+/* ACDC — AllDebrid Control & Download Center */
 
 
 
@@ -184,6 +184,8 @@ body {
 }
 .logo-text { line-height: 1.2; }
 .logo-name { font-size: 14px; font-weight: 700; color: var(--text); }
+.logo-name-full { font-size: 10.5px; line-height: 1.05; white-space:nowrap; }
+.logo-acronym { color: var(--accent); }
 .logo-ver  { font-size: 10px; color: var(--text2); font-family: var(--mono); }
 
 nav { flex: 1; padding: 10px 0; overflow-y: auto; }
@@ -846,8 +848,6 @@ textarea.input { resize: vertical; }
   /* Stat label text-size adjustment */
   .stat-label { font-size: 9px !important; letter-spacing: .06em !important; }
 }
-
-
 
 
 

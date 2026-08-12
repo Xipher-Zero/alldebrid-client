@@ -518,16 +518,16 @@ async function loadDetailedStats(period) {
     var ctx = document.getElementById('daily-chart');
     if (ctx && typeof Chart !== 'undefined') {
       if (ctx._ci) ctx._ci.destroy();
-      var isDark = !document.body.classList.contains('light');
-      var gridColor = isDark ? 'rgba(255,255,255,.04)' : 'rgba(0,0,0,.07)';
-      var tickColor = isDark ? '#64748b' : '#6b7280';
+      var themeStyles = getComputedStyle(document.body);
+      var gridColor = themeStyles.getPropertyValue('--border').trim();
+      var tickColor = themeStyles.getPropertyValue('--text3').trim();
       ctx._ci = new Chart(ctx, {
         type: 'bar',
         data: {
           labels: daily.map(function(d){ return d.date||''; }),
           datasets: [{
             label: 'Completions', data: daily.map(function(d){ return d.count||0; }),
-            backgroundColor: 'rgba(249,115,22,.55)', borderColor: '#f97316',
+            backgroundColor: 'rgba(56,210,125,.48)', borderColor: '#38d27d',
             borderWidth: 1, borderRadius: 4
           }]
         },
@@ -1002,9 +1002,20 @@ function updateThemeToggle(isLight) {
   const btn = document.getElementById('theme-toggle');
   if (!btn) return;
   const action = isLight ? 'Switch to dark mode' : 'Switch to light mode';
-  btn.textContent = isLight ? '☀️' : '🌙';
+  btn.textContent = isLight ? '☀︎' : '☾';
   btn.title = action;
   btn.setAttribute('aria-label', action);
+  const chart = document.getElementById('daily-chart')?._ci;
+  if (chart) {
+    const styles = getComputedStyle(document.body);
+    const gridColor = styles.getPropertyValue('--border').trim();
+    const tickColor = styles.getPropertyValue('--text3').trim();
+    chart.options.scales.x.grid.color = gridColor;
+    chart.options.scales.y.grid.color = gridColor;
+    chart.options.scales.x.ticks.color = tickColor;
+    chart.options.scales.y.ticks.color = tickColor;
+    chart.update('none');
+  }
 }
 document.addEventListener('DOMContentLoaded', () => {
   document.addEventListener('click', function(e) {
@@ -2285,7 +2296,7 @@ function renderSettings() {
       <div class="scard">
       <div class="scard-header">🗄️ Database</div>
       <div class="scard-body">
-        <div style="background:rgba(249,115,22,.08);border:1px solid rgba(249,115,22,.2);border-radius:6px;padding:8px 12px;margin-bottom:12px;font-size:12px;color:var(--text2)">
+        <div style="background:rgba(245,196,81,.08);border:1px solid rgba(245,196,81,.24);border-radius:6px;padding:8px 12px;margin-bottom:12px;font-size:12px;color:var(--text2)">
           💾 <b>Save settings first</b>, then use <b>Test DB</b> to verify the connection.
         </div>
         <div class="form-group">
@@ -2331,7 +2342,7 @@ function renderSettings() {
       </div>
     </div>
 
-    <div class="scard" style="border-color:rgba(249,115,22,.3)">
+    <div class="scard" style="border-color:rgba(245,196,81,.34)">
       <div class="scard-header">🔄 Data Migration</div>
       <div class="scard-body">
         <div style="font-size:12px;color:var(--text2);margin-bottom:12px">

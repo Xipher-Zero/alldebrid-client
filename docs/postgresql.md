@@ -70,7 +70,7 @@ docker run -d \
   -v /path/to/config:/app/config \
   -e DB_TYPE=postgres_internal \
   -e POSTGRES_PASSWORD=your_secure_password \
-  ghcr.io/xipher-zero/alldebrid-client:internal-v0.9.1
+  ghcr.io/xipher-zero/alldebrid-client:internal-v0.9.4
 ```
 
 Both containers are now on `alldebrid-net` and can reach each other

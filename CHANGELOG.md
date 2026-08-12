@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.9.4] — 2026-08-12
+
+### Refreshed themes and application identity
+
+- Reworked the dark theme around charcoal, violet, and blue Laserwave/Dracula-inspired colors.
+- Reworked the light theme around cool Catppuccin-inspired surfaces and medium blues.
+- Strengthened light-theme surface hierarchy after staging review with a darker canvas, white cards, bluer nested controls, and clearer borders.
+- Separated interactive theme accents from the existing download-status colors so dashboard cards, badges, progress, and Recent Activity retain their semantic colors.
+- Replaced orange primary actions and active navigation with theme-specific violet/blue treatments.
+- Added the new download-arrow-and-bucket application logo, compact favicon assets, and the shortened `ACDC` browser title.
+- Removed `(ACDC)` from the expanded sidebar name and replaced colored navigation emoji with a consistent monochrome symbol set.
+- Increased sidebar navigation type, row padding, and section spacing while preserving responsive behavior.
+
 ## [0.9.3] — 2026-08-12
 
 ### Fixed Dashboard viewport overflow

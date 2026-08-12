@@ -1,6 +1,7 @@
 """Focused contract tests for the internal direct/debrid-link workflow."""
 
 import asyncio
+import struct
 import sys
 import types
 import unittest
@@ -173,7 +174,7 @@ class DashboardContractTests(unittest.TestCase):
         self.assertNotIn('id="t-magnet"', html)
         self.assertIn('<span class="nav-label">Downloads</span>', html)
         self.assertIn('id="torrent-card-title">All Downloads</span>', html)
-        self.assertIn('<script src="/app.js?v=7" defer></script>', html)
+        self.assertIn('<script src="/app.js?v=8" defer></script>', html)
         self.assertIn("'/links/add'", js)
         self.assertIn("button.textContent = 'Adding…'", js)
         self.assertIn("🔗 Direct link", js)
@@ -213,7 +214,69 @@ class DashboardContractTests(unittest.TestCase):
         self.assertIn("btn.setAttribute('aria-label', action);", js)
         self.assertIn(".sidebar-theme-control", css)
         self.assertNotIn("position:fixed; bottom:16px; right:16px", css)
-        self.assertIn('<link rel="stylesheet" href="/style.css?v=7">', html)
+        self.assertIn('<link rel="stylesheet" href="/style.css?v=8">', html)
+
+    def test_theme_branding_and_semantic_colors_are_separated(self):
+        repo_root = Path(__file__).resolve().parents[2]
+        html = (repo_root / "frontend/static/index.html").read_text()
+        landing_html = (repo_root / "index.html").read_text()
+        css = (repo_root / "frontend/static/style.css").read_text()
+        logo = (repo_root / "frontend/static/logo.svg").read_text()
+        favicon = (repo_root / "frontend/static/favicon.svg").read_text()
+
+        self.assertIn("<title>ACDC</title>", html)
+        logo_block = html.split('<div class="logo">', 1)[1].split("</div>\n  </div>", 1)[0]
+        self.assertIn("AllDebrid Control &amp;<br>Download Center", logo_block)
+        self.assertNotIn("(ACDC)", logo_block)
+        self.assertIn('href="/favicon.svg?v=4"', html)
+        self.assertIn('href="/favicon-32.png?v=4"', html)
+        self.assertIn('href="/apple-touch-icon.png?v=4"', html)
+        self.assertIn('href="./docs/logo.svg"', landing_html)
+        self.assertIn('src="./docs/logo.svg"', landing_html)
+
+        for glyph in ("&#x25EB;&#xFE0E;", "&#x25BD;&#xFE0E;", "&#x2263;&#xFE0E;",
+                      "&#x2206;&#xFE0E;", "&#x223F;&#xFE0E;", "&#x2699;&#xFE0E;"):
+            self.assertIn(glyph, html)
+
+        for semantic_token in (
+            "--status-total:      #ff8c42;",
+            "--status-completed:  #38d27d;",
+            "--status-active:     #63a4ff;",
+            "--status-processing: #f5c451;",
+            "--status-error:      #ff6b6b;",
+            "--status-downloaded: #b587ff;",
+        ):
+            self.assertIn(semantic_token, css)
+        self.assertIn('.dash-hero-stat[data-c="orange"] { --c: var(--status-total); }', css)
+        self.assertIn('.stat-card[data-c="orange"] { --c: var(--status-total); }', css)
+        self.assertIn("--primary-gradient:", css)
+        self.assertIn(".btn-primary { background: var(--primary-gradient);", css)
+        self.assertIn("font-variant-emoji:text", css)
+        self.assertNotIn("--accent:   #ff8c42;", css)
+        for light_theme_token in (
+            "--bg:       #dbe7f6;",
+            "--surface:  #ffffff;",
+            "--surface2: #e5eef9;",
+            "--border:   #b5c6de;",
+            "--nav-active: rgba(49,95,174,.20);",
+        ):
+            self.assertIn(light_theme_token, css)
+        self.assertIn("body.light .dash-hero-stat,", css)
+        self.assertIn("body.light .dash-kpi-strip { background: var(--surface); }", css)
+
+        self.assertIn('viewBox="0 0 512 512"', logo)
+        self.assertIn("violet and blue download arrow entering a bucket", logo)
+        self.assertEqual((repo_root / "docs/logo.svg").read_text(), logo)
+        self.assertIn('viewBox="0 0 64 64"', favicon)
+
+        for name, expected_size in (
+            ("favicon-32.png", (32, 32)),
+            ("apple-touch-icon.png", (180, 180)),
+            ("favicon.png", (512, 512)),
+        ):
+            data = (repo_root / "frontend/static" / name).read_bytes()
+            self.assertEqual(data[:8], b"\x89PNG\r\n\x1a\n")
+            self.assertEqual(struct.unpack(">II", data[16:24]), expected_size)
 
     def test_dashboard_is_a_fixed_at_a_glance_view(self):
         repo_root = Path(__file__).resolve().parents[2]

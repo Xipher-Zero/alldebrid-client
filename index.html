@@ -3,10 +3,10 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>AllDebrid Control &amp; Download Center (ACDC)</title>
+<title>ACDC</title>
 <meta name="description" content="Self-hosted torrent automation via AllDebrid. Add magnets via Web UI, watch folder, Sonarr/Radarr or API.">
-<link rel="icon" type="image/png" href="./logo.png">
-<link rel="apple-touch-icon" href="./logo.png">
+<link rel="icon" type="image/svg+xml" href="./docs/logo.svg">
+<link rel="apple-touch-icon" href="./docs/logo.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@400;600;800&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 <style>
@@ -149,7 +149,7 @@ footer{padding:48px 5vw;border-top:1px solid var(--brd);display:flex;align-items
 <!-- NAV -->
 <nav>
   <a href="#" class="nav-logo">
-    <img src="./logo.png" alt="Logo">
+    <img src="./docs/logo.svg" alt="AllDebrid Control &amp; Download Center logo">
     <span class="nav-logo-text">AC<span>DC</span></span>
   </a>
   <ul class="nav-links">
@@ -287,7 +287,7 @@ footer{padding:48px 5vw;border-top:1px solid var(--brd);display:flex;align-items
         </div>
         <pre id="cc1"><span class="kw">services</span>:
   <span class="kw">alldebrid-client</span>:
-    <span class="cm">image</span>: <span class="str">ghcr.io/xipher-zero/alldebrid-client:internal-v0.9.1</span>
+    <span class="cm">image</span>: <span class="str">ghcr.io/xipher-zero/alldebrid-client:internal-v0.9.4</span>
     <span class="cm">container_name</span>: <span class="str">alldebrid-client</span>
     <span class="cm">restart</span>: <span class="str">unless-stopped</span>
     <span class="cm">network_mode</span>: <span class="str">host</span>
@@ -314,7 +314,7 @@ footer{padding:48px 5vw;border-top:1px solid var(--brd);display:flex;align-items
   -v /mnt/appdata/alldebrid/config:/app/config \
   -v /mnt/appdata/alldebrid/data:/app/data \
   -v /mnt/downloads/alldebrid:/download \
-  ghcr.io/xipher-zero/alldebrid-client:internal-v0.9.1</span></pre>
+  ghcr.io/xipher-zero/alldebrid-client:internal-v0.9.4</span></pre>
       </div>
     </div>
   </div>

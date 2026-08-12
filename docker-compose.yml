@@ -1,4 +1,4 @@
-# AllDebrid-Client — docker-compose.yml
+# ACDC — AllDebrid Control & Download Center
 #
 # Operating modes:
 #
@@ -24,7 +24,7 @@
 services:
 
   alldebrid-client:
-    image: kroeberd/alldebrid-client:latest
+    image: ghcr.io/xipher-zero/alldebrid-client:internal-v0.9.1
     build: .
     container_name: alldebrid-client
     restart: unless-stopped

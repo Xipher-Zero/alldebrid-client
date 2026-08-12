@@ -41,6 +41,19 @@ class TestValidateAndSanitise:
         result = validate_and_sanitise(cfg)
         assert result.download_folder == "/download"
 
+    @pytest.mark.parametrize("legacy_name", ["AllDebrid-Client", "AllDebrid-Torrent-Client"])
+    def test_legacy_application_identity_migrates_to_acdc(self, legacy_name):
+        cfg = make_cfg(alldebrid_agent=legacy_name, discord_username=legacy_name)
+        result = validate_and_sanitise(cfg)
+        assert result.alldebrid_agent == "ACDC"
+        assert result.discord_username == "ACDC"
+
+    def test_custom_application_identity_is_preserved(self):
+        cfg = make_cfg(alldebrid_agent="My downloader", discord_username="My notifier")
+        result = validate_and_sanitise(cfg)
+        assert result.alldebrid_agent == "My downloader"
+        assert result.discord_username == "My notifier"
+
     def test_numeric_below_min_clamped(self):
         cfg = make_cfg(max_concurrent_downloads=0)
         result = validate_and_sanitise(cfg)

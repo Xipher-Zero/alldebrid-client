@@ -2,8 +2,10 @@ import asyncio
 import random
 import time
 import logging
+from core.branding import REPOSITORY_API_URL
 from core.config import get_settings
 from core.logging_utils import sanitize_exception
+from core.version import normalize_version_tag
 from services.manager_v2 import manager
 
 logger = logging.getLogger("alldebrid.scheduler")
@@ -324,14 +326,14 @@ async def update_check_loop() -> None:
             timeout = _aiohttp.ClientTimeout(total=10)
             async with _aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.get(
-                    "https://api.github.com/repos/kroeberd/alldebrid-client/releases/latest",
+                    f"{REPOSITORY_API_URL}/releases/latest",
                     headers={"Accept": "application/vnd.github.v3+json"},
                 ) as resp:
                     if resp.status != 200:
                         raise RuntimeError(f"GitHub API returned {resp.status}")
                     rel = await resp.json()
 
-            latest = (rel.get("tag_name") or "").lstrip("v")
+            latest = normalize_version_tag(rel.get("tag_name") or "")
 
             def _v(s: str):
                 try:

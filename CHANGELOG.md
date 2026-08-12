@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.9.1] — 2026-08-12
+
+### ACDC identity and unified download UI
+
+- Renamed the application to **AllDebrid Control & Download Center (ACDC)**.
+- Unified runtime, API, notification, container, and sidebar version reporting on `0.9.1`.
+- Renamed the combined torrent/direct-link information page to **Downloads**.
+- Removed the redundant aria2-only Downloads navigation tab and duplicate torrent-entry panel.
+- Reduced the Dashboard direct-link input to one visible line while retaining multiline paste support.
+- Added readable source labels for direct links, magnet links, torrent files, imports, and integrations.
+- Replaced upstream project/support references with the fork repository and removed unrelated community and donation links.
+
 ## [1.9.1] — 2026-05-16
 
 ### 1.9.1 — Missed v1.9.0 items: health endpoint, silent failures, error UX

@@ -1,5 +1,5 @@
 """
-REST API routes for AllDebrid-Client.
+REST API routes for ACDC.
 
 Conventions:
 - All DB access uses get_db() (supports both SQLite and PostgreSQL).
@@ -21,6 +21,7 @@ from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse, Response
 from pydantic import BaseModel
 
+from core.branding import APP_SHORT_NAME, REPOSITORY_API_URL
 from core.config import (
     AppSettings,
     apply_settings,
@@ -30,7 +31,7 @@ from core.config import (
 )
 from core.config_validator import validate_and_sanitise
 from core.logging_utils import sanitize_exception, sanitize_log_value
-from core.version import read_version
+from core.version import normalize_version_tag, read_version
 from db.database import DB_PATH, _is_postgres, get_db
 
 
@@ -202,7 +203,7 @@ _update_check_cache: dict = {}
 def _version_gt(a: str, b: str) -> bool:
     """True if semver a > b."""
     def _t(v: str):
-        try: return tuple(int(x) for x in v.lstrip("v").split("."))
+        try: return tuple(int(x) for x in normalize_version_tag(v).split("."))
         except ValueError: return (0, 0, 0)
     return _t(a) > _t(b)
 
@@ -217,12 +218,12 @@ async def version_check():
     try:
         async with _aiohttp.ClientSession(timeout=_aiohttp.ClientTimeout(total=10)) as s:
             async with s.get(
-                "https://api.github.com/repos/kroeberd/alldebrid-client/releases/latest",
+                f"{REPOSITORY_API_URL}/releases/latest",
                 headers={"Accept": "application/vnd.github.v3+json"},
             ) as r:
                 if r.status != 200: raise RuntimeError("GitHub API " + str(r.status))
                 rel = await r.json()
-        latest = (rel.get("tag_name") or "").lstrip("v")
+        latest = normalize_version_tag(rel.get("tag_name") or "")
         result = {
             "current": current, "latest": latest,
             "update_available": _version_gt(latest, current),
@@ -364,7 +365,7 @@ async def test_jackett_webhook():
     sent = await svc._send(
         url=webhook_url,
         title="📥 Jackett Webhook Test",
-        description="**AllDebrid-Client** can send Jackett notifications.",
+        description=f"**{APP_SHORT_NAME}** can send Jackett notifications.",
         color=COLOR_ADDED,
         fields=[
             {"name": "Source", "value": "Jackett Search", "inline": True},
@@ -579,7 +580,7 @@ async def list_torrents(
             # Deletion is intentionally a soft delete so the torrent hash and
             # prior ownership state remain available for duplicate detection
             # and controlled revival.  Soft-deleted rows must not remain in
-            # the normal "All Torrents" view, however.
+            # the normal "All Downloads" view, however.
             clauses.append("t.status != 'deleted'")
 
         if search:
@@ -1294,7 +1295,7 @@ async def get_changelog():
     try:
         async with _aiohttp.ClientSession(timeout=_aiohttp.ClientTimeout(total=10)) as s:
             async with s.get(
-                "https://api.github.com/repos/kroeberd/alldebrid-client/releases?per_page=25",
+                f"{REPOSITORY_API_URL}/releases?per_page=25",
                 headers={"Accept": "application/vnd.github.v3+json"},
             ) as r:
                 if r.status == 200:

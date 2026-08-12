@@ -537,8 +537,8 @@ def _is_discord_url(url: str) -> bool:
 def _flexget_discord_body(event: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     """Format FlexGet event as a Discord webhook payload (embeds)."""
     from core.config import get_settings as _gs
-    _app  = "AllDebrid-Client"
-    _repo = "https://github.com/kroeberd/alldebrid-client"
+    _app  = "ACDC"
+    _repo = "https://github.com/Xipher-Zero/alldebrid-client"
     try:
         _cfg    = _gs()
         _avatar = (getattr(_cfg, "discord_avatar_url", "") or "").strip()

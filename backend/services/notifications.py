@@ -20,14 +20,15 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import aiohttp
+from core.branding import APP_SHORT_NAME, REPOSITORY_URL
 from core.logging_utils import sanitize_exception
 from core.version import read_version
 
 logger = logging.getLogger("alldebrid.notify")
 
-APP_NAME    = "AllDebrid-Client"
+APP_NAME    = APP_SHORT_NAME
 APP_VERSION = read_version()
-REPO_URL    = "https://github.com/kroeberd/alldebrid-client"
+REPO_URL    = REPOSITORY_URL
 # Default logo — overridden at runtime by discord_avatar_url from settings
 # No SVG default — Discord only accepts PNG/JPG/WEBP for avatar_url
 
@@ -352,7 +353,7 @@ class NotificationService:
         release_url: str = "",
         release_notes: str = "",
     ) -> None:
-        """Notify that a new AllDebrid-Client version is available."""
+        """Notify that a new ACDC version is available."""
         cfg = get_settings()
         if not getattr(cfg, "discord_notify_update", True):
             return
@@ -360,7 +361,7 @@ class NotificationService:
         if not url:
             return False
         desc = (
-            "**AllDebrid-Client " + latest_version + "** is available.\n"
+            "**ACDC " + latest_version + "** is available.\n"
             "You are running **" + current_version + "**."
         )
         fields: List[Dict[str, Any]] = []

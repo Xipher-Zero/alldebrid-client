@@ -1,14 +1,14 @@
 """
 qBittorrent v4.3.2 Web API emulation layer.
 
-Allows Sonarr, Radarr, Lidarr and other *arr applications to use AllDebrid-Client
+Allows Sonarr, Radarr, Lidarr and other *arr applications to use ACDC
 as if it were a standard qBittorrent instance. Configure in *arr:
 
     Download client: qBittorrent
     Host:            <your-host>
     Port:            <your-port>
     Category:        (any — stored but not used for routing)
-    Username/Pass:   (anything — auth handled by AllDebrid-Client's own auth middleware)
+    Username/Pass:   (anything — auth handled by ACDC's own auth middleware)
 
 Implemented endpoints (qBittorrent WebUI API v4.1/v4.3.2):
   POST /api/v2/auth/login
@@ -48,7 +48,7 @@ logger = logging.getLogger("alldebrid.qbit")
 router = APIRouter()
 
 # ── qBit state mapping ────────────────────────────────────────────────────────
-# Maps AllDebrid-Client status → qBittorrent state strings.
+# Maps ACDC status → qBittorrent state strings.
 # Sonarr/Radarr use these to decide whether a torrent is ready to import.
 _STATUS_MAP: dict[str, str] = {
     "pending":     "stalledDL",
@@ -123,7 +123,7 @@ def _torrent_row_to_qbit(row: dict) -> dict:
 
 @router.post("/auth/login")
 async def qbit_login():
-    """Accept any credentials — AllDebrid-Client's own auth middleware handles real auth."""
+    """Accept any credentials — ACDC's own auth middleware handles real auth."""
     return PlainTextResponse("Ok.")
 
 

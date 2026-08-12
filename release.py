@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 release.py — Erstellt ein GitHub Release mit dem aktuellen CHANGELOG-Eintrag.
-Aufruf: python3 release.py <version>  z.B.: python3 release.py 1.5.5
+Aufruf: python3 release.py <version>  z.B.: python3 release.py 0.9.1
 """
 import sys, re, json, subprocess, pathlib
 
@@ -10,7 +10,7 @@ if len(sys.argv) < 2:
     sys.exit(1)
 
 version = sys.argv[1].lstrip('v')
-tag = f"v{version}"
+tag = f"internal-v{version}"
 
 # 1. CHANGELOG-Eintrag extrahieren
 changelog = pathlib.Path("CHANGELOG.md").read_text()
@@ -36,7 +36,7 @@ headers = ["-H", f"Authorization: token {pat}", "-H", "Content-Type: application
 # 3. Existierendes Release holen
 r = subprocess.run(
     ["curl", "-s"] + headers +
-    [f"https://api.github.com/repos/kroeberd/alldebrid-client/releases/tags/{tag}"],
+    [f"https://api.github.com/repos/Xipher-Zero/alldebrid-client/releases/tags/{tag}"],
     capture_output=True, text=True
 )
 existing = json.loads(r.stdout)
@@ -48,7 +48,7 @@ if release_id:
     # Update
     r2 = subprocess.run(
         ["curl", "-s", "-X", "PATCH"] + headers +
-        ["-d", payload, f"https://api.github.com/repos/kroeberd/alldebrid-client/releases/{release_id}"],
+        ["-d", payload, f"https://api.github.com/repos/Xipher-Zero/alldebrid-client/releases/{release_id}"],
         capture_output=True, text=True
     )
     resp = json.loads(r2.stdout)
@@ -57,7 +57,7 @@ else:
     # Neu erstellen
     r2 = subprocess.run(
         ["curl", "-s", "-X", "POST"] + headers +
-        ["-d", payload, "https://api.github.com/repos/kroeberd/alldebrid-client/releases"],
+        ["-d", payload, "https://api.github.com/repos/Xipher-Zero/alldebrid-client/releases"],
         capture_output=True, text=True
     )
     resp = json.loads(r2.stdout)

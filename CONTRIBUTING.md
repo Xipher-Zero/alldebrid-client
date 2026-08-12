@@ -1,4 +1,4 @@
-# Contributing to AllDebrid-Client
+# Contributing to ACDC
 
 Thank you for considering contributing! Here's how to get involved.
 
@@ -8,7 +8,7 @@ Thank you for considering contributing! Here's how to get involved.
 
 1. **Fork** the repository and clone your fork:
    ```bash
-   git clone https://github.com/kroeberd/alldebrid-client.git
+   git clone https://github.com/Xipher-Zero/alldebrid-client.git
    cd alldebrid-client
    ```
 

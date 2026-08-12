@@ -1,16 +1,12 @@
 <div align="center">
-  <img src="docs/logo.svg" width="96" alt="AllDebrid-Client Logo"/>
-  <h1>AllDebrid-Client</h1>
+  <img src="docs/logo.svg" width="96" alt="ACDC Logo"/>
+  <h1>AllDebrid Control &amp; Download Center (ACDC)</h1>
   <p><strong>Self-hosted torrent automation via AllDebrid</strong><br/>Web UI · built-in aria2 · Sonarr/Radarr (qBit API) · Jackett search · SSE live updates · Discord · Prometheus · PostgreSQL</p>
 
-  [![Website](https://img.shields.io/badge/ad-client.mediastarr.de-ff6b2b?logo=googlechrome&logoColor=white)](https://ad-client.mediastarr.de/)
-  [![Release](https://img.shields.io/github/v/release/kroeberd/alldebrid-client?style=flat-square&color=f97316)](https://github.com/kroeberd/alldebrid-client/releases)
-  [![Docker Pulls](https://img.shields.io/docker/pulls/kroeberd/alldebrid-client?style=flat-square&color=3b82f6)](https://hub.docker.com/r/kroeberd/alldebrid-client)
-  [![Discord](https://img.shields.io/badge/Discord-Join-5865f2?logo=discord&logoColor=white)](https://discord.gg/8Vb9cj4ksv)
-  [![License](https://img.shields.io/github/license/kroeberd/alldebrid-client?style=flat-square)](LICENSE)
-  [![Tests](https://img.shields.io/badge/tests-292%20passing-22c55e?style=flat-square)](https://github.com/kroeberd/alldebrid-client/actions/workflows/tests.yml)
-  [![CI](https://img.shields.io/github/actions/workflow/status/kroeberd/alldebrid-client/tests.yml?style=flat-square&label=CI)](https://github.com/kroeberd/alldebrid-client/actions/workflows/tests.yml)
-  [![Docker Build](https://github.com/kroeberd/alldebrid-client/actions/workflows/Docker_Build.yml/badge.svg)](https://github.com/kroeberd/alldebrid-client/actions/workflows/Docker_Build.yml)
+  [![Release](https://img.shields.io/github/v/release/Xipher-Zero/alldebrid-client?style=flat-square&color=f97316)](https://github.com/Xipher-Zero/alldebrid-client/releases)
+  [![License](https://img.shields.io/github/license/Xipher-Zero/alldebrid-client?style=flat-square)](LICENSE)
+  [![Tests](https://img.shields.io/github/actions/workflow/status/Xipher-Zero/alldebrid-client/tests.yml?style=flat-square&label=tests)](https://github.com/Xipher-Zero/alldebrid-client/actions/workflows/tests.yml)
+  [![Fork Image](https://img.shields.io/github/actions/workflow/status/Xipher-Zero/alldebrid-client/fork-image.yml?style=flat-square&label=image)](https://github.com/Xipher-Zero/alldebrid-client/actions/workflows/fork-image.yml)
 </div>
 
 ---
@@ -25,7 +21,7 @@
 
 ## What it does
 
-AllDebrid-Client automates the full torrent lifecycle via your AllDebrid account:
+ACDC automates torrent and direct-link downloads through your AllDebrid account:
 
 1. **Add** magnet links or `.torrent` files via web UI, Jackett search, watch folder, Sonarr/Radarr, or REST API
 2. **Upload** to AllDebrid and poll until ready (bulk API, token-bucket rate limiter, automatic retry on failure)
@@ -80,7 +76,7 @@ AllDebrid-Client automates the full torrent lifecycle via your AllDebrid account
 ### Docker Compose (recommended)
 
 ```bash
-git clone https://github.com/kroeberd/alldebrid-client.git
+git clone https://github.com/Xipher-Zero/alldebrid-client.git
 cd alldebrid-client
 docker compose up -d
 ```
@@ -99,16 +95,10 @@ docker run -d \
   -e TZ=Europe/Berlin \
   -v /path/to/config:/app/config \
   -v /path/to/downloads:/downloads \
-  kroeberd/alldebrid-client:latest
+  ghcr.io/xipher-zero/alldebrid-client:internal-v0.9.1
 ```
 
 > **File permissions:** set `PUID`/`PGID` to the UID/GID of the user that runs your other media containers (Sonarr, Radarr, Plex, etc.). Run `id` on the host to find the right values.
-
-### Unraid
-
-Install **AllDebrid-Client** from the Community Apps store. All paths are pre-filled.
-
----
 
 ## Configuration
 
@@ -132,7 +122,7 @@ See **Help → Settings Reference** in the web UI for a full description of ever
 
 ## Sonarr / Radarr Integration
 
-AllDebrid-Client emulates the **qBittorrent v4.3.2 Web API** at `/api/v2/`. Configure it as a standard qBit download client:
+ACDC emulates the **qBittorrent v4.3.2 Web API** at `/api/v2/`. Configure it as a standard qBit download client:
 
 ```
 Settings → Download Clients → + → qBittorrent
@@ -150,7 +140,7 @@ Click **Test** — it should show a green checkmark. See **Help → Sonarr/Radar
 ## Jackett Search
 
 1. Install and run [Jackett](https://github.com/Jackett/Jackett)
-2. In AllDebrid-Client **Settings → Services → Jackett**: enter URL and API key, enable, Save
+2. In ACDC **Settings → Services → Jackett**: enter URL and API key, enable, Save
 3. The **Search** view appears — search by title, filter by indexer
 4. Add individual results, use **Add Selected** (checkbox per row), or **Add All**
 

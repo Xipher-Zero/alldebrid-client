@@ -3,20 +3,20 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<title>AllDebrid-Torrent-Client</title>
+<title>AllDebrid Control &amp; Download Center (ACDC)</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/style.css?v=5">
 <link rel="icon" type="image/png" sizes="512x512" href="/favicon.png?v=2">
 </head>
 <body>
 
 <aside id="sidebar">
   <div class="logo">
-    <img class="logo-icon" src="/logo.svg" alt="AllDebrid-Torrent-Client logo">
+    <img class="logo-icon" src="/logo.svg" alt="ACDC logo">
     <div class="logo-text">
-      <div class="logo-name" style="font-size:12px">AllDebrid-Torrent-Client</div>
-      <div class="logo-ver" id="sidebar-version">v0.9</div>
+      <div class="logo-name logo-name-full" title="AllDebrid Control &amp; Download Center">AllDebrid Control &amp;<br>Download Center <span class="logo-acronym">(ACDC)</span></div>
+      <div class="logo-ver" id="sidebar-version">v…</div>
     </div>
   </div>
   <nav>
@@ -25,15 +25,11 @@
       <span class="icon">&#9889;</span><span class="nav-label">Dashboard</span>
     </div>
     <div class="nav-item" data-view="torrents" onclick="nav(this)">
-      <span class="icon">&#129522;</span><span class="nav-label">Torrents</span>
+      <span class="icon">&#11015;&#65039;</span><span class="nav-label">Downloads</span>
       <span class="nav-badge" id="nb-active" style="display:none">0</span>
     </div>
     <div class="nav-item" data-view="search" onclick="nav(this)">
       <span class="icon">&#128269;</span><span class="nav-label">Search</span>
-    </div>
-    <div class="nav-item" data-view="aria2queue" onclick="nav(this)">
-      <span class="icon">&#9660;</span><span class="nav-label">Downloads</span>
-      <span class="nav-badge" id="nb-aria2-active" style="display:none">0</span>
     </div>
     <div class="nav-group">Monitor</div>
     <div class="nav-item" data-view="events" onclick="nav(this)">
@@ -126,7 +122,7 @@
           <div class="dhs-icon">📦</div>
           <div class="dhs-body">
             <div class="dhs-val" id="s-total">—</div>
-            <div class="dhs-label">Total Torrents</div>
+            <div class="dhs-label">Total Downloads</div>
           </div>
         </div>
         <div class="dash-hero-stat" data-c="green">
@@ -196,7 +192,7 @@
         <div class="dash-kpi">
           <div class="dash-kpi-val" id="i-avg-duration">—</div>
           <div class="dash-kpi-lbl">Avg Duration</div>
-          <div class="dash-kpi-sub">per torrent</div>
+          <div class="dash-kpi-sub">per download</div>
         </div>
         <div class="dash-kpi-sep"></div>
         <div class="dash-kpi">
@@ -231,7 +227,7 @@
         </div>
         <div style="padding:12px 16px">
           <div style="display:flex;gap:8px;align-items:stretch">
-            <textarea class="input" id="q-debrid-links" rows="2" placeholder="https://example-hoster.com/file/… or paste multiple links, one per line" style="flex:1;resize:vertical;min-height:62px;font-family:'JetBrains Mono',monospace" onkeydown="if((event.ctrlKey||event.metaKey)&&event.key==='Enter')addDebridLinks()"></textarea>
+            <textarea class="input" id="q-debrid-links" rows="1" placeholder="https://example-hoster.com/file/… or paste multiple links, one per line" style="flex:1;resize:none;min-height:38px;font-family:'JetBrains Mono',monospace" onkeydown="if((event.ctrlKey||event.metaKey)&&event.key==='Enter')addDebridLinks()"></textarea>
             <button class="btn btn-primary" id="btn-add-debrid-links" onclick="addDebridLinks()" style="padding:9px 20px" title="Generate each link through AllDebrid and queue the resulting downloads in aria2">Add</button>
           </div>
         </div>
@@ -281,22 +277,8 @@
     </div>
 
 
-    <!-- Torrents -->
+    <!-- Downloads -->
     <div class="view" id="view-torrents">
-      <div class="card" style="margin-bottom:16px">
-        <div style="padding:14px 16px">
-          <div class="input-row">
-            <input class="input" id="t-magnet" placeholder="magnet:?xt=urn:btih:…" />
-            <button class="btn btn-primary" onclick="addMagnet()" title="Add an entered magnet link, or choose a .torrent file when the field is empty">Add Torrent</button>
-          </div>
-          <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
-            <button class="btn btn-ghost btn-sm" onclick="importExisting()" title="Import all AllDebrid magnets not yet in the local database">⬇ Import from AllDebrid</button>
-            <button class="btn btn-ghost btn-sm" id="btn-cleanup-orphans" onclick="cleanupAlldebridOrphans()" title="Delete no-peer/error magnets from AllDebrid that are not tracked locally">&#129529; Clean AD Orphans</button>
-            <button class="btn btn-warn btn-sm" onclick="recoverAll()" title="Reset stuck or errored torrents — re-dispatches from AllDebrid">⟳ Recover All</button>
-          </div>
-        </div>
-      </div>
-
       <!-- Bulk-action toolbar: class="bulk-bar" is required for .bulk-bar.visible CSS -->
       <div class="bulk-bar" id="bulk-bar">
         <span id="bulk-count"></span>
@@ -309,7 +291,7 @@
 
       <div class="card">
         <div class="card-header">
-          <span class="card-title" id="torrent-card-title">All Torrents</span>
+          <span class="card-title" id="torrent-card-title">All Downloads</span>
           <div class="filter-tabs">
             <div class="ftab active" onclick="setFilter(this,'')">All</div>
             <div class="ftab" onclick="setFilter(this,'downloading')">Active</div>
@@ -723,7 +705,7 @@
       </div>
     </div>
 
-    <!-- GitHub -->
+    <!-- Project support -->
     <div class="view" id="view-support">
       <div class="card" style="max-width:560px">
         <div class="card-header">
@@ -731,7 +713,7 @@
         </div>
         <div class="card-body" style="display:flex;flex-direction:column;gap:10px;padding:16px">
 
-          <a href="https://github.com/kroeberd/alldebrid-client" target="_blank" rel="noreferrer"
+          <a href="https://github.com/Xipher-Zero/alldebrid-client" target="_blank" rel="noreferrer"
              style="display:flex;align-items:center;gap:14px;padding:14px 16px;border-radius:var(--radius);
                     border:1px solid var(--border);background:var(--surface2);text-decoration:none;
                     color:var(--text);transition:border-color .15s"
@@ -740,32 +722,6 @@
             <div>
               <div style="font-weight:600;font-size:14px">GitHub</div>
               <div style="font-size:12px;color:var(--text2);margin-top:2px">Source code, issues, releases and changelogs</div>
-            </div>
-            <span style="margin-left:auto;color:var(--text3);font-size:12px">&#8599;</span>
-          </a>
-
-          <a href="https://discord.gg/8Vb9cj4ksv" target="_blank" rel="noreferrer"
-             style="display:flex;align-items:center;gap:14px;padding:14px 16px;border-radius:var(--radius);
-                    border:1px solid var(--border);background:var(--surface2);text-decoration:none;
-                    color:var(--text);transition:border-color .15s"
-             onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'">
-            <span style="font-size:22px">&#128172;</span>
-            <div>
-              <div style="font-weight:600;font-size:14px">Discord</div>
-              <div style="font-size:12px;color:var(--text2);margin-top:2px">Community chat, help and feature discussion</div>
-            </div>
-            <span style="margin-left:auto;color:var(--text3);font-size:12px">&#8599;</span>
-          </a>
-
-          <a href="https://buymeacoffee.com/kroeberd" target="_blank" rel="noreferrer"
-             style="display:flex;align-items:center;gap:14px;padding:14px 16px;border-radius:var(--radius);
-                    border:1px solid var(--border);background:var(--surface2);text-decoration:none;
-                    color:var(--text);transition:border-color .15s"
-             onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'">
-            <span style="font-size:22px">&#9749;</span>
-            <div>
-              <div style="font-weight:600;font-size:14px">Buy Me a Coffee</div>
-              <div style="font-size:12px;color:var(--text2);margin-top:2px">Support ongoing development and maintenance</div>
             </div>
             <span style="margin-left:auto;color:var(--text3);font-size:12px">&#8599;</span>
           </a>
@@ -869,7 +825,7 @@
             <h3 style="margin:0;color:var(--accent);font-size:15px">The download pipeline</h3>
 
             <div style="font-size:13px;color:var(--text2);line-height:1.7">
-              <p style="margin:0 0 10px">AllDebrid-Torrent-Client sits between your torrent sources and your disk. It never downloads directly from peers — AllDebrid's cloud does. You get the finished file via an unlocked HTTPS link.</p>
+              <p style="margin:0 0 10px">ACDC sits between your torrent sources and your disk. It never downloads directly from peers — AllDebrid's cloud does. You get the finished file via an unlocked HTTPS link.</p>
 
               <div style="display:flex;flex-direction:column;gap:10px;font-size:12px">
                 <div style="display:flex;gap:10px;align-items:center">
@@ -908,15 +864,15 @@
             <h3 style="margin:0;color:var(--accent);font-size:15px">Sonarr &amp; Radarr integration via qBittorrent API emulation</h3>
 
             <div style="font-size:13px;color:var(--text2);line-height:1.7">
-              <p style="margin:0 0 10px">AllDebrid-Torrent-Client emulates the <b>qBittorrent v4.3.2 Web API</b> so Sonarr, Radarr, Lidarr and other *arr apps can use it as a native download client — no webhook configuration needed.</p>
+              <p style="margin:0 0 10px">ACDC emulates the <b>qBittorrent v4.3.2 Web API</b> so Sonarr, Radarr, Lidarr and other *arr apps can use it as a native download client — no webhook configuration needed.</p>
 
               <b style="color:var(--text1)">Configure in Sonarr / Radarr:</b>
               <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:14px;margin:10px 0;font-family:'JetBrains Mono',monospace;font-size:12px;line-height:1.8">
                 Settings → Download Clients → + → qBittorrent<br>
                 Host:      <b>your-server-ip</b><br>
                 Port:      <b>8080</b> (or your mapped port)<br>
-                Username:  <i>(leave empty, or match AllDebrid-Torrent-Client auth settings)</i><br>
-                Password:  <i>(leave empty, or match AllDebrid-Torrent-Client auth settings)</i><br>
+                Username:  <i>(leave empty, or match ACDC auth settings)</i><br>
+                Password:  <i>(leave empty, or match ACDC auth settings)</i><br>
                 Category:  <i>(any value — stored but not used for routing)</i><br>
                 ✔ Use SSL: off (unless you have a reverse proxy with TLS)
               </div>
@@ -951,7 +907,7 @@
             <h3 style="margin:0;color:var(--accent);font-size:15px">aria2 — the download engine</h3>
 
             <div style="font-size:13px;color:var(--text2);line-height:1.7">
-              <p style="margin:0 0 10px">AllDebrid-Torrent-Client uses <b>aria2</b> as the actual HTTP download engine. Two modes are supported:</p>
+              <p style="margin:0 0 10px">ACDC uses <b>aria2</b> as the actual HTTP download engine. Two modes are supported:</p>
 
               <b style="color:var(--text1)">Built-in (default)</b>
               <p style="margin:4px 0 10px">aria2 runs inside the container. No external setup needed. Configure options in <b>Settings → Download Client → aria2 Config</b>. The process is managed by the client and restarts automatically.</p>
@@ -1091,7 +1047,7 @@
               <details><summary style="cursor:pointer;font-weight:600;color:var(--text1)">Sonarr/Radarr can't connect (qBit API)</summary>
                 <div style="color:var(--text2);padding:8px 0 0 12px;line-height:1.7">
                   1. Make sure you are using <b>qBittorrent</b> as the download client type, not "Other".<br>
-                  2. Use the exact IP/hostname and port of the AllDebrid-Torrent-Client container — not <code>localhost</code> unless both run on the same host.<br>
+                  2. Use the exact IP/hostname and port of the ACDC container — not <code>localhost</code> unless both run on the same host.<br>
                   3. Leave username/password empty, or match what you set in <b>Settings → Access Control</b>.<br>
                   4. Test the connection with the "Test" button in Sonarr/Radarr. It calls <code>/api/v2/app/version</code> — you can also test manually in a browser.
                 </div>
@@ -1117,7 +1073,7 @@
                 <div style="color:var(--text2);padding:8px 0 0 12px;line-height:1.7">
                   The UI uses Server-Sent Events (SSE) for live updates instead of polling. If you see stale data:<br>
                   1. Check the browser console for <code>EventSource</code> errors.<br>
-                  2. If you use a reverse proxy (nginx, Traefik), ensure it does not buffer responses. For nginx add <code>proxy_buffering off;</code> and <code>proxy_read_timeout 3600s;</code> to the AllDebrid-Torrent-Client location block.<br>
+                  2. If you use a reverse proxy (nginx, Traefik), ensure it does not buffer responses. For nginx add <code>proxy_buffering off;</code> and <code>proxy_read_timeout 3600s;</code> to the ACDC location block.<br>
                   3. The client falls back to 15-second polling automatically if SSE fails.
                 </div>
               </details>
@@ -1229,7 +1185,7 @@
 
 <input id="torrent-file-input" type="file" accept=".torrent,application/x-bittorrent" hidden onchange="uploadTorrentFile(this)">
 
-<script src="/app.js?v=4" defer></script>
+<script src="/app.js?v=5" defer></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <div id="mobile-overlay" onclick="closeSidebar()"></div>
 <button class="theme-toggle" id="theme-toggle" onclick="toggleTheme()" title="Toggle light/dark mode">🌙</button>

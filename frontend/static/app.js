@@ -1,4 +1,4 @@
-/* AllDebrid-Torrent-Client — extracted from index.html */
+/* ACDC — AllDebrid Control & Download Center */
 
 const API = '/api';
 let currentFilter = '';
@@ -46,9 +46,8 @@ function nav(el) {
 
   const titles = {
     dashboard:'Dashboard',
-    torrents:'Torrents',
+    torrents:'Downloads',
     search:'Search',
-    aria2queue:'Downloads',
     events:'Event Log',
     stats:'Statistics',
     analytics:'Analytics',
@@ -115,6 +114,25 @@ function esc(s) {
   // content (torrent names, filenames, labels) into innerHTML.
   return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;')
     .replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+function sourceLabel(source) {
+  const labels = {
+    direct_link: 'Direct link',
+    manual: 'Magnet link',
+    manual_file: 'Torrent file',
+    watch_file: 'Watch folder (.magnet)',
+    watch_torrent: 'Watch folder (.torrent)',
+    alldebrid_existing: 'AllDebrid import',
+    import_existing: 'AllDebrid import',
+    qbit: 'qBittorrent API',
+    api: 'API',
+    jackett: 'Jackett',
+    prowlarr: 'Prowlarr',
+    saved_search: 'Saved search'
+  };
+  const key = String(source || '').trim();
+  return labels[key] || key || '—';
 }
 
 function sanitizeErrorMsg(message) {
@@ -348,7 +366,7 @@ async function loadStats() {
       const s = await api('GET', '/stats');
       // ── populate sidebar version ────────────────────────────────────────
       const versionEl = document.getElementById('sidebar-version');
-      if (versionEl) versionEl.textContent = 'v0.9';
+      if (versionEl) versionEl.textContent = s.version ? `v${s.version}` : 'v—';
       if (settingsData) settingsData.paused = !!s.paused;
       renderTopbarActions();
       setDot('api', 'ok', 'AllDebrid: online');
@@ -713,10 +731,10 @@ async function loadTorrents() {
     torrentTotal = total ?? items.length;
     const tb = document.getElementById('t-tbody');
     const title = document.getElementById('torrent-card-title');
-    if (title) title.textContent = `All Torrents (${torrentTotal})`;
+    if (title) title.textContent = `All Downloads (${torrentTotal})`;
     renderTorrentPagination(torrentTotal, _limit, _offset);
     if (!items.length) {
-      tb.innerHTML = `<tr><td colspan="8"><div class="empty"><div class="empty-icon">&#129522;</div>${currentTorrentSearch || currentFilter ? 'No torrents match the current filter or search.' : 'No torrents found.'}</div></td></tr>`;
+      tb.innerHTML = `<tr><td colspan="8"><div class="empty"><div class="empty-icon">⬇️</div>${currentTorrentSearch || currentFilter ? 'No downloads match the current filter or search.' : 'No downloads found.'}</div></td></tr>`;
       return;
     }
     tb.innerHTML = items.map(t => `<tr data-torrent-id="${t.id}" draggable="true" ondragstart="onTorrentDragStart(event,${t.id})" ondragend="onTorrentDragEnd(event)" ondragover="onTorrentDragOver(event,${t.id})" ondrop="onTorrentDrop(event,${t.id})">
@@ -726,7 +744,7 @@ async function loadTorrents() {
         <div class="t-hash">${(t.hash||'').substring(0,16)}${t.hash?'…':''}</div>
       </td>
       <td class="sz">
-        <div>${t.source||'—'}</div>
+        <div>${sourceLabel(t.source)}</div>
         ${t.label?`<span class="lbl-badge">🏷 ${esc(t.label)}</span>`:''}
       </td>
       <td>${badge(t.status)}</td>
@@ -834,7 +852,7 @@ async function showDetail(id) {
         <div><div class="dk">Provider</div><div class="dv">${t.provider_status ? badge(t.provider_status) : '—'}</div></div>
         <div><div class="dk">Progress</div><div class="dv">${(t.progress||0).toFixed(1)}%</div></div>
         <div><div class="dk">Size</div><div class="dv">${fmtSize(t.size_bytes)}</div></div>
-        <div><div class="dk">Source</div><div class="dv">${t.source||'—'}</div></div>
+        <div><div class="dk">Source</div><div class="dv">${sourceLabel(t.source)}</div></div>
         <div><div class="dk">Downloader</div><div class="dv">${t.download_client||'aria2'}</div></div>
         <div><div class="dk">Added</div><div class="dv">${fmtDate(t.created_at)}</div></div>
         <div><div class="dk">Completed</div><div class="dv">${fmtDate(t.completed_at)}</div></div>
@@ -1209,7 +1227,7 @@ function renderSettings() {
           </div>
           <div class="form-group">
             <label class="form-label">Agent Name</label>
-            <input class="input" id="s-alldebrid_agent" value="${s.alldebrid_agent||'AllDebrid-Torrent-Client'}"/>
+            <input class="input" id="s-alldebrid_agent" value="${s.alldebrid_agent||'ACDC'}"/>
           </div>
         </div>
       </div>
@@ -1641,7 +1659,7 @@ function renderSettings() {
           <p class="form-hint" style="margin:0 0 10px">Receive Discord notifications when torrents are added, complete, or fail.</p>
           <div class="form-group">
             <label class="form-label">Bot Name <span style="font-weight:400;color:var(--muted)">(shown as sender in Discord)</span></label>
-            <input class="input" id="s-discord_username" value="${s.discord_username||'AllDebrid-Torrent-Client'}" placeholder="AllDebrid-Torrent-Client"/>
+            <input class="input" id="s-discord_username" value="${s.discord_username||'ACDC'}" placeholder="ACDC"/>
           </div>
           <div class="form-group">
             <label class="form-label">Bot Avatar <span style="font-weight:400;color:var(--muted)">(PNG/JPG/WEBP only — no SVG)</span></label>
@@ -2398,7 +2416,7 @@ function getFormSettings() {
   return {
     ...settingsData,
     alldebrid_api_key: t('alldebrid_api_key'),
-    alldebrid_agent:   t('alldebrid_agent')||'AllDebrid-Torrent-Client',
+    alldebrid_agent:   t('alldebrid_agent')||'ACDC',
     watch_folder: t('watch_folder'), processed_folder: t('processed_folder'),
     download_folder: t('download_folder'), max_concurrent_downloads: n('max_concurrent_downloads', 3),
     max_speed_mbps: (settingsData && settingsData.max_speed_mbps != null)
@@ -2435,7 +2453,7 @@ function getFormSettings() {
     postgres_password: t('postgres_password'), postgres_schema: t('postgres_schema'),
     postgres_ssl: c('postgres_ssl'),
     postgres_application_name: t('postgres_application_name'),
-    discord_username: t('discord_username') || 'AllDebrid-Torrent-Client',
+    discord_username: t('discord_username') || 'ACDC',
     discord_avatar_url: t('discord_avatar_url'),
     discord_webhook_url: t('discord_webhook_url'),
     discord_webhook_added: t('discord_webhook_added'),
@@ -3087,7 +3105,7 @@ async function loadComprehensiveStats() {
     el.innerHTML = `
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">
         ${[
-          ['Total Torrents', t.total||0, ''],
+          ['Total Downloads', t.total||0, ''],
           ['Completed', t.completed||0, 'var(--green)'],
           ['Errors', t.errors||0, 'var(--red)'],
           ['Success Rate', t.success_rate_pct != null ? t.success_rate_pct+'%' : '—', 'var(--accent)'],
@@ -4356,7 +4374,7 @@ async function loadAnalytics(windowHours) {
         <div class="dash-kpi-sep"></div>
         <div class="dash-kpi"><div class="dash-kpi-val" style="color:${a.success_rate>0.9?'var(--green)':a.success_rate>0.7?'var(--yellow)':'var(--red)'}">${Math.round(a.success_rate*100)}%</div><div class="dash-kpi-lbl">Success Rate</div><div class="dash-kpi-sub">of finished</div></div>
         <div class="dash-kpi-sep"></div>
-        <div class="dash-kpi"><div class="dash-kpi-val">${dur||'—'}</div><div class="dash-kpi-lbl">Avg Duration</div><div class="dash-kpi-sub">per torrent</div></div>
+        <div class="dash-kpi"><div class="dash-kpi-val">${dur||'—'}</div><div class="dash-kpi-lbl">Avg Duration</div><div class="dash-kpi-sub">per download</div></div>
         <div class="dash-kpi-sep"></div>
         <div class="dash-kpi"><div class="dash-kpi-val">${a.throughput_gb.toFixed(1)} GB</div><div class="dash-kpi-lbl">Downloaded</div><div class="dash-kpi-sub">in ${h}h</div></div>
       </div>

@@ -160,7 +160,7 @@ class DirectLinkTransactionTests(unittest.IsolatedAsyncioTestCase):
 
 
 class DashboardContractTests(unittest.TestCase):
-    def test_dashboard_contains_two_line_form_and_recent_activity_marker(self):
+    def test_dashboard_and_downloads_page_match_unified_transfer_ui(self):
         repo_root = Path(__file__).resolve().parents[2]
         html = (repo_root / "frontend/static/index.html").read_text()
         js = (repo_root / "frontend/static/app.js").read_text()
@@ -168,11 +168,18 @@ class DashboardContractTests(unittest.TestCase):
         magnet_heading = "🧲 Add Magnet Links or a Torrent File"
         self.assertIn(direct_heading, html)
         self.assertLess(html.index(direct_heading), html.index(magnet_heading))
-        self.assertIn('id="q-debrid-links" rows="2"', html)
-        self.assertIn('<script src="/app.js?v=4" defer></script>', html)
+        self.assertIn('id="q-debrid-links" rows="1"', html)
+        self.assertNotIn('data-view="aria2queue"', html)
+        self.assertNotIn('id="t-magnet"', html)
+        self.assertIn('<span class="nav-label">Downloads</span>', html)
+        self.assertIn('id="torrent-card-title">All Downloads</span>', html)
+        self.assertIn('<script src="/app.js?v=5" defer></script>', html)
         self.assertIn("'/links/add'", js)
         self.assertIn("button.textContent = 'Adding…'", js)
         self.assertIn("🔗 Direct link", js)
+        self.assertIn("torrents:'Downloads'", js)
+        self.assertIn("`All Downloads (${torrentTotal})`", js)
+        self.assertIn("function sourceLabel(source)", js)
 
 
 if __name__ == "__main__":

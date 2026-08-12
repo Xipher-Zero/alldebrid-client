@@ -1,6 +1,6 @@
 # PostgreSQL Configuration
 
-AllDebrid-Client supports three database options. SQLite is the default and
+ACDC supports three database options. SQLite is the default and
 requires no setup. Existing SQLite installations continue to work unchanged.
 
 ## Option 1 — SQLite (Default)
@@ -70,7 +70,7 @@ docker run -d \
   -v /path/to/config:/app/config \
   -e DB_TYPE=postgres_internal \
   -e POSTGRES_PASSWORD=your_secure_password \
-  kroeberd/alldebrid-client:latest
+  ghcr.io/xipher-zero/alldebrid-client:internal-v0.9.1
 ```
 
 Both containers are now on `alldebrid-net` and can reach each other

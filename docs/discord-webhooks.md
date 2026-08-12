@@ -17,7 +17,7 @@ For all notifications:
 
 ```json
 {
-  "discord_username": "AllDebrid-Client",
+  "discord_username": "ACDC",
   "discord_avatar_url": "https://example.com/avatar.png"
 }
 ```

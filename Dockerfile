@@ -2,9 +2,10 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-LABEL org.opencontainers.image.title="AllDebrid-Client"
-LABEL org.opencontainers.image.version="1.8.19"
-LABEL org.opencontainers.image.description="Automated torrent downloading via AllDebrid with a branded web UI"
+ARG APP_VERSION=0.9.1
+LABEL org.opencontainers.image.title="AllDebrid Control & Download Center"
+LABEL org.opencontainers.image.version="${APP_VERSION}"
+LABEL org.opencontainers.image.description="AllDebrid download control center for torrents and direct links"
 
 # System deps + gosu (for PUID/PGID user-switching)
 RUN apt-get update && apt-get install -y --no-install-recommends \

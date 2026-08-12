@@ -26,6 +26,7 @@ import logging
 from typing import Optional, List, Dict, Any
 
 from core.logging_utils import sanitize_exception
+from core.branding import APP_SHORT_NAME
 
 logger = logging.getLogger("alldebrid.api")
 
@@ -36,7 +37,7 @@ TIMEOUT = aiohttp.ClientTimeout(total=30)
 
 
 class AllDebridService:
-    def __init__(self, api_key: str, agent: str = "AllDebrid-Client"):
+    def __init__(self, api_key: str, agent: str = APP_SHORT_NAME):
         self.api_key = api_key
         self.agent   = agent
 

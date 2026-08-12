@@ -331,7 +331,7 @@ async def send_stats_report(
     }
 
     if _is_discord_webhook(url):
-        _app = "AllDebrid-Client"
+        _app = "ACDC"
         try:
             from services.notifications import _get_discord_identity
             _botname, _avatar = _get_discord_identity()
@@ -339,7 +339,7 @@ async def send_stats_report(
             _botname, _avatar = _app, ""
         embeds = [{
             "title":       f"📊 Statistics Report — Last {hours}h",
-            "description": "Automated activity summary from AllDebrid-Client.",
+            "description": "Automated activity summary from ACDC.",
             "color":       0x3B82F6,
             "fields": [
                 {"name": "Torrents",      "value": str(summary["torrents_processed"]), "inline": True},

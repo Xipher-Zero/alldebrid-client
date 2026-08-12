@@ -5,6 +5,8 @@ import logging
 import re
 from typing import Any
 
+from core.branding import APP_NAME, APP_SHORT_NAME, REPOSITORY_URL
+
 _MAGNET_RE = re.compile(r"magnet:\?xt=urn:btih:([0-9a-zA-Z]{32,40})[^\s\"']*", re.IGNORECASE)
 _WEBHOOK_URL_RE = re.compile(
     r"https?://(?:canary\.|ptb\.)?(?:discord(?:app)?\.com)/api/webhooks/[^\s\"']+",
@@ -78,16 +80,14 @@ def log_startup_banner(
     sep = "-" * 56
     lines = [
         sep,
-        f" AllDebrid-Client  v{version}",
+        f" {APP_NAME} ({APP_SHORT_NAME})  v{version}",
         sep,
         f" Mode:            {mode}",
         f" Database:        {database}",
         f" Download Client: {download_client}",
         f" Web UI:          {web_ui}",
         f" Auth:            {auth}",
-        " GitHub:          https://github.com/kroeberd/alldebrid-client",
-        " Discord:         https://discord.gg/8Vb9cj4ksv",
-        " Support:         https://buymeacoffee.com/kroeberd",
+        f" GitHub:          {REPOSITORY_URL}",
         sep,
     ]
     for line in lines:

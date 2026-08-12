@@ -391,7 +391,8 @@ class FinishedEntryTests(unittest.IsolatedAsyncioTestCase):
         }
         counts_row = {
             "required_count": 2, "completed_count": 2, "error_count": 0,
-            "active_count": 0, "paused_count": 0, "total_files": 2,
+            "active_count": 0, "paused_count": 0, "downloading_count": 0,
+            "total_files": 2,
         }
 
         class FakeCursor:
@@ -430,7 +431,8 @@ class FinishedEntryTests(unittest.IsolatedAsyncioTestCase):
 
         counts_row = {
             "required_count": 3, "completed_count": 1, "error_count": 0,
-            "active_count": 2, "paused_count": 0, "total_files": 3,
+            "active_count": 2, "paused_count": 0, "downloading_count": 2,
+            "total_files": 3,
         }
 
         class FakeCursor:
@@ -483,7 +485,8 @@ class FinishedEntryTests(unittest.IsolatedAsyncioTestCase):
         }
         counts_row = {
             "required_count": 1, "completed_count": 1, "error_count": 0,
-            "active_count": 0, "paused_count": 0, "total_files": 1,
+            "active_count": 0, "paused_count": 0, "downloading_count": 0,
+            "total_files": 1,
         }
 
         class FakeCursor:
@@ -611,6 +614,7 @@ class Aria2RecoverySafetyTests(unittest.IsolatedAsyncioTestCase):
         mgr._reset_torrent_for_redownload = AsyncMock()
         mgr._dispatch_pending_aria2_queue = AsyncMock()
         mgr._finalize_aria2_torrent = AsyncMock()
+        mgr.recover_direct_link_collections = AsyncMock(return_value=0)
         mgr._get_torrent_completion_snapshot = AsyncMock(return_value={
             "id": 7,
             "alldebrid_id": "ad-7",
@@ -619,7 +623,10 @@ class Aria2RecoverySafetyTests(unittest.IsolatedAsyncioTestCase):
             "done": 1,
             "total": 1,
         })
-        mgr.aria2 = lambda: types.SimpleNamespace(get_all=AsyncMock(return_value=[]))
+        mgr.aria2 = lambda: types.SimpleNamespace(
+            get_all=AsyncMock(return_value=[]),
+            tell_status=AsyncMock(side_effect=Aria2RPCError("aria2 [-1]: GID not found")),
+        )
 
         startup_rows = [{
             "torrent_id": 7,
@@ -714,6 +721,10 @@ class Aria2RecoverySafetyTests(unittest.IsolatedAsyncioTestCase):
             async def __aexit__(self, exc_type, exc, tb):
                 return False
             async def execute(self, sql, params=()):
+                if "f.status AS file_status" in sql:
+                    return FakeCursor([])
+                if "SELECT DISTINCT torrent_id" in sql:
+                    return FakeCursor([])
                 if "FROM torrents t" in sql and "JOIN download_files f" in sql:
                     return FakeCursor(sync_rows)
                 raise AssertionError(f"Unexpected SQL: {sql}")
@@ -1626,7 +1637,7 @@ class ManagerDedupeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["files"][0]["progress"], 25.0)
         self.assertEqual(payload["files"][0]["uris"], ["https://example.invalid/file.mkv"])
 
-    async def test_apply_aria2_memory_tuning_uses_settings_values(self):
+    async def test_apply_aria2_memory_tuning_preserves_external_daemon_policy(self):
         mgr = TorrentManager()
         fake_aria2 = types.SimpleNamespace(change_global_options=AsyncMock())
         mgr.aria2 = lambda: fake_aria2
@@ -1646,12 +1657,9 @@ class ManagerDedupeTests(unittest.IsolatedAsyncioTestCase):
         )):
             result = await mgr.apply_aria2_memory_tuning()
         self.assertTrue(result["ok"])
-        applied = fake_aria2.change_global_options.await_args.args[0]
-        self.assertEqual(applied["max-download-result"], "150")
-        self.assertEqual(applied["keep-unfinished-download-result"], "false")
-        self.assertEqual(applied["split"], "12")
-        self.assertEqual(applied["max-connection-per-server"], "6")
-        self.assertNotIn("enable-dht", applied)
+        self.assertTrue(result["skipped"])
+        self.assertEqual(result["reason"], "external aria2 global policy is read-only")
+        fake_aria2.change_global_options.assert_not_awaited()
 
     async def test_apply_aria2_tuning_enforces_safety_in_builtin_mode(self):
         mgr = TorrentManager()
@@ -1695,7 +1703,7 @@ class ManagerDedupeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["diagnostics"]["active_count"], 1)
         fake_aria2.get_memory_diagnostics.assert_awaited_once_with(waiting_limit=25, stopped_limit=40)
 
-    async def test_run_aria2_housekeeping_uses_configured_query_windows(self):
+    async def test_run_aria2_housekeeping_preserves_external_daemon_and_uses_query_windows(self):
         mgr = TorrentManager()
         fake_aria2 = types.SimpleNamespace(
             change_global_options=AsyncMock(),
@@ -1704,6 +1712,7 @@ class ManagerDedupeTests(unittest.IsolatedAsyncioTestCase):
         )
         mgr.aria2 = lambda: fake_aria2
         with patch("services.manager_v2.get_settings", return_value=types.SimpleNamespace(
+            aria2_mode="external",
             aria2_url="http://localhost:6800/jsonrpc",
             aria2_max_download_result=50,
             aria2_keep_unfinished_download_result=False,
@@ -1712,8 +1721,10 @@ class ManagerDedupeTests(unittest.IsolatedAsyncioTestCase):
         )):
             result = await mgr.run_aria2_housekeeping()
         self.assertTrue(result["ok"])
-        fake_aria2.change_global_options.assert_awaited_once()
-        fake_aria2.purge_download_results.assert_awaited_once()
+        self.assertTrue(result["skipped"])
+        self.assertEqual(result["reason"], "external aria2 history is daemon-owned")
+        fake_aria2.change_global_options.assert_not_awaited()
+        fake_aria2.purge_download_results.assert_not_awaited()
         fake_aria2.get_memory_diagnostics.assert_awaited_once_with(waiting_limit=30, stopped_limit=45)
 
     async def test_apply_provider_update_notifies_when_all_debrid_reports_no_peers(self):

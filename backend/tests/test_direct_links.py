@@ -173,13 +173,47 @@ class DashboardContractTests(unittest.TestCase):
         self.assertNotIn('id="t-magnet"', html)
         self.assertIn('<span class="nav-label">Downloads</span>', html)
         self.assertIn('id="torrent-card-title">All Downloads</span>', html)
-        self.assertIn('<script src="/app.js?v=5" defer></script>', html)
+        self.assertIn('<script src="/app.js?v=6" defer></script>', html)
         self.assertIn("'/links/add'", js)
         self.assertIn("button.textContent = 'Adding…'", js)
         self.assertIn("🔗 Direct link", js)
         self.assertIn("torrents:'Downloads'", js)
         self.assertIn("`All Downloads (${torrentTotal})`", js)
         self.assertIn("function sourceLabel(source)", js)
+
+    def test_sidebar_and_settings_match_refined_navigation(self):
+        repo_root = Path(__file__).resolve().parents[2]
+        html = (repo_root / "frontend/static/index.html").read_text()
+        js = (repo_root / "frontend/static/app.js").read_text()
+        css = (repo_root / "frontend/static/style.css").read_text()
+
+        sidebar_nav = html.split("<nav>", 1)[1].split("</nav>", 1)[0]
+        for removed_view in ("learning", "saved-searches", "changelog", "support", "help"):
+            self.assertNotIn(f'data-view="{removed_view}"', sidebar_nav)
+        self.assertNotIn('<div class="nav-group">Project</div>', sidebar_nav)
+        self.assertIn('class="sidebar-theme-control"', sidebar_nav)
+        self.assertIn('aria-label="Switch to light mode"', sidebar_nav)
+        self.assertIn('aria-label="Open the ACDC changelog"', html)
+        self.assertNotIn("data-view=changelog", html)
+
+        sidebar_footer = html.split('<div class="sidebar-footer">', 1)[1].split("</aside>", 1)[0]
+        self.assertNotIn('id="dot-jackett"', sidebar_footer)
+        self.assertNotIn('id="lbl-jackett"', sidebar_footer)
+
+        tabs_start = js.index("  const tabs = [", js.index("function renderSettings()"))
+        tabs_end = js.index("  ];", tabs_start)
+        visible_tabs = js[tabs_start:tabs_end]
+        for removed_tab in ("tab-services", "tab-indexers", "tab-flexget", "tab-automation"):
+            self.assertNotIn(removed_tab, visible_tabs)
+        for retained_tab in ("tab-general", "tab-download", "tab-extract", "tab-notifications", "tab-database", "tab-advanced"):
+            self.assertIn(retained_tab, visible_tabs)
+
+        self.assertIn("if (!requestedTab) id = 'tab-general';", js)
+        self.assertIn("function updateThemeToggle(isLight)", js)
+        self.assertIn("btn.setAttribute('aria-label', action);", js)
+        self.assertIn(".sidebar-theme-control", css)
+        self.assertNotIn("position:fixed; bottom:16px; right:16px", css)
+        self.assertIn('<link rel="stylesheet" href="/style.css?v=6">', html)
 
 
 if __name__ == "__main__":

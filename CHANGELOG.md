@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.9.2] — 2026-08-12
+
+### Sidebar and Settings refinement
+
+- Removed Learning, Saved Searches, and the entire Project group from the sidebar.
+- Moved the theme control into the sidebar beneath Settings with accessible, mode-specific labels.
+- Removed Services, Search / Indexers, FlexGet, and Automation from the visible Settings tabs while preserving their underlying configuration and backend integrations.
+- Added a General-tab fallback for hidden or stale Settings-tab requests.
+- Removed the Jackett status indicator from the sidebar while preserving Jackett functionality.
+
 ## [0.9.1] — 2026-08-12
 
 ### ACDC identity and unified download UI

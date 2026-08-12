@@ -95,7 +95,7 @@ docker run -d \
   -e TZ=Europe/Berlin \
   -v /path/to/config:/app/config \
   -v /path/to/downloads:/downloads \
-  ghcr.io/xipher-zero/alldebrid-client:internal-v0.9.2
+  ghcr.io/xipher-zero/alldebrid-client:internal-v0.9.3
 ```
 
 > **File permissions:** set `PUID`/`PGID` to the UID/GID of the user that runs your other media containers (Sonarr, Radarr, Plex, etc.). Run `id` on the host to find the right values.

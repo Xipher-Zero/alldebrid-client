@@ -6,7 +6,7 @@
 <title>AllDebrid Control &amp; Download Center (ACDC)</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/style.css?v=6">
+<link rel="stylesheet" href="/style.css?v=7">
 <link rel="icon" type="image/png" sizes="512x512" href="/favicon.png?v=2">
 </head>
 <body>
@@ -98,7 +98,7 @@
     <div id="aria2-speed-badge" style="display:none;align-items:center;gap:6px;background:var(--surface2);border:1px solid var(--border);border-radius:20px;padding:3px 10px;font-size:11px;color:var(--text2);cursor:default" title="Active / max — live speed — limit"><span style="color:var(--green)">&#9660;</span><span id="aria2-badge-active">0</span><span style="color:var(--text3)">/</span><span id="aria2-badge-max">—</span><span style="color:var(--border);margin:0 2px">|</span><span id="aria2-badge-speed" style="color:var(--green)">0 B/s</span><span style="color:var(--border);margin:0 2px">|</span><span style="color:var(--text3)">&#9660;</span><span id="aria2-badge-limit">&#8734;</span></div>
     <div id="topbar-actions"></div>
   </div>
-  <div id="content">
+  <div id="content" class="dashboard-active">
 
     <!-- Dashboard -->
     <div class="view active" id="view-dashboard">
@@ -238,7 +238,7 @@
       </div>
 
       <!-- ── Recent Activity ───────────────────────────────────────────────── -->
-      <div class="card">
+      <div class="card" id="dash-activity-card">
         <div class="card-header">
           <span class="card-title">Recent Activity</span>
           <div style="display:flex;align-items:center;gap:8px">
@@ -246,7 +246,7 @@
             <button class="btn btn-ghost btn-sm" onclick="nav(document.querySelector('[data-view=torrents]'))">View All →</button>
           </div>
         </div>
-        <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
+        <div class="dash-activity-table-wrap">
         <table class="t-table" style="min-width:520px">
           <thead>
             <tr>
@@ -1172,7 +1172,7 @@
 
 <input id="torrent-file-input" type="file" accept=".torrent,application/x-bittorrent" hidden onchange="uploadTorrentFile(this)">
 
-<script src="/app.js?v=6" defer></script>
+<script src="/app.js?v=7" defer></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <div id="mobile-overlay" onclick="closeSidebar()"></div>
 </body>

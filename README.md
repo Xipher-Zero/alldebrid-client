@@ -15,6 +15,14 @@
 
 ---
 
+> **Xipher-Zero fork:** This branch starts from upstream v1.9.9. It preserves
+> the shared/external aria2 safety corrections used in production and adds
+> tracked direct/debrid-link downloads. See
+> [INTERNAL_FORK.md](INTERNAL_FORK.md) for the exact base, divergence,
+> validation status, and deployment notes.
+
+---
+
 ## What it does
 
 AllDebrid-Client automates the full torrent lifecycle via your AllDebrid account:

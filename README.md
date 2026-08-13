@@ -1,9 +1,8 @@
 <div align="center">
   <img src="docs/logo.svg" width="96" alt="ACDC Logo"/>
-  <h1>AllDebrid Control &amp; Download Center (ACDC)</h1>
-  <p><strong>Self-hosted torrent automation via AllDebrid</strong><br/>Web UI · built-in aria2 · Sonarr/Radarr (qBit API) · Jackett search · SSE live updates · Discord · Prometheus · PostgreSQL</p>
+  <h1>AllDebrid Control &amp; Download Center</h1>
+  <p><strong>A self-hosted AllDebrid download client for direct links, magnets, and torrent files.</strong><br/>AllDebrid processing · aria2 downloads · unified transfer tracking · recovery · observability</p>
 
-  [![Release](https://img.shields.io/github/v/release/Xipher-Zero/alldebrid-client?style=flat-square&color=a67cff)](https://github.com/Xipher-Zero/alldebrid-client/releases)
   [![License](https://img.shields.io/github/license/Xipher-Zero/alldebrid-client?style=flat-square)](LICENSE)
   [![Tests](https://img.shields.io/github/actions/workflow/status/Xipher-Zero/alldebrid-client/tests.yml?style=flat-square&label=tests)](https://github.com/Xipher-Zero/alldebrid-client/actions/workflows/tests.yml)
   [![Fork Image](https://img.shields.io/github/actions/workflow/status/Xipher-Zero/alldebrid-client/fork-image.yml?style=flat-square&label=image)](https://github.com/Xipher-Zero/alldebrid-client/actions/workflows/fork-image.yml)
@@ -11,371 +10,363 @@
 
 ---
 
-> **Xipher-Zero fork:** This branch starts from upstream v1.9.9. It preserves
-> the shared/external aria2 safety corrections used in production and adds
-> tracked direct/debrid-link downloads. See
-> [INTERNAL_FORK.md](INTERNAL_FORK.md) for the exact base, divergence,
-> validation status, and deployment notes.
+## What is ACDC?
+
+**AllDebrid Control & Download Center (ACDC)** is a self-hosted client for submitting downloads through an AllDebrid account and managing the resulting transfers through aria2.
+
+The normal workflow is intentionally simple:
+
+1. Submit an ordinary HTTP/HTTPS hoster link, magnet link, or `.torrent` file.
+2. ACDC sends it to AllDebrid for unlocking or torrent processing.
+3. AllDebrid produces downloadable HTTP(S) file URLs.
+4. ACDC dispatches those files to aria2.
+5. The resulting transfer is tracked through the Dashboard, Downloads view, statistics, and event log.
+6. Failed or expired transfers can be retried or recovered without rebuilding the download manually.
+
+ACDC can manage its own built-in aria2 instance or safely use a shared external aria2 daemon.
 
 ---
 
-## What it does
+## Core features
 
-ACDC automates torrent and direct-link downloads through your AllDebrid account:
-
-1. **Add** magnet links or `.torrent` files via web UI, Jackett search, watch folder, Sonarr/Radarr, or REST API
-2. **Upload** to AllDebrid and poll until ready (bulk API, token-bucket rate limiter, automatic retry on failure)
-3. **Unlock** download links and submit them to aria2 in FIFO order
-4. **Monitor** aria2 until all files complete, then mark done and remove from AllDebrid
-5. **Notify** via Discord, trigger Sonarr/Radarr import, run post-processing scripts
-
----
-
-## Features
-
-| Category | Details |
-|----------|---------|
-| **Sonarr / Radarr** | Native qBittorrent v4.3.2 API emulation at `/api/v2/` — configure as a standard qBit download client, no webhook setup needed |
-| **Input sources** | Web UI paste, Jackett search (multi-indexer, bulk add), watch folder (`.torrent`/`.magnet`), Sonarr/Radarr, REST API |
-| **Download client** | **Built-in aria2** (default, zero setup) or external aria2 instance via JSON-RPC |
-| **Live updates** | Server-Sent Events (SSE) push status changes instantly — no polling delay |
-| **Access control** | Optional HTTP Basic Auth (Settings → Access Control); health-check paths exempt |
-| **Disk space guard** | Abort download before start if free space below threshold |
-| **Post-processing** | Shell script run after each completed download (`{name}`, `{path}`, `{torrent_id}` placeholders, 300 s timeout) |
-| **Auto-extraction** | `.zip`, `.rar`, `.7z`, `.tar.*` and more after download; configurable concurrency and Discord notification |
-| **Error recovery** | Auto-retry Upload Failed (code 5) and No Peers (code 8); ⟳ Recover All button; stuck-download cleanup |
-| **Rate limiting** | Token-bucket rate limiter for AllDebrid API (configurable req/min) — not a concurrency semaphore |
-| **FIFO queue** | Oldest torrents always processed first (ORDER BY id ASC throughout all dispatch paths) |
-| **Discord webhooks** | Rich embeds per event type: added, complete, error, upload-failed, no-peers, extraction, stats |
-| **Jackett search** | Multi-indexer chip UI, category filters, per-row Add, Add Selected checkbox, Add All button |
-| **Prowlarr search** | Modern Jackett alternative;  — same result format as Jackett |
-| **FlexGet v3** | Schedule and trigger tasks from UI; per-event Discord notifications |
-| **Statistics** | Period selector (1h–all-time), rolling snapshots, Discord summary reports, JSON export |
-| **Prometheus metrics** | `GET /api/metrics` — torrent counts by status, active downloads, errors, SSE subscribers, bytes downloaded |
-| **Database** | SQLite (zero-config default) or external PostgreSQL; automatic schema migration; 8 performance indexes |
-| **Backups** | Scheduled JSON backups with configurable interval and retention |
-| **Event log TTL** | Automatic pruning of old event log entries (default: 30 days); torrent rows never deleted |
-| **Diagnostics** | `GET /api/torrents/diagnose` — status breakdown; `POST /api/torrents/recover-all` — one-click recovery |
-| **State machine** | Formal torrent lifecycle with validated transitions (`services/torrent_state.py`) |
-| **Rule Engine** | JSON-based pre-upload rules: set download path, priority, label, block or pause torrents by title/size/source |
-| **Download Profiles** | Named preset bundles (path + priority + label); one active at a time, overrideable by rules |
-| **Saved Searches** | Scheduled Jackett/Prowlarr queries with auto-add and configurable intervals |
-| **Priority Queue** | Integer priority field; `ORDER BY priority DESC` dispatch; drag-and-drop reordering in UI |
-| **Historical Learning** | Tracks indexer success/failure rates; annotates Jackett results with trust score (0–100) |
-| **Webhook Actions** | Generic HTTP POST webhooks on torrent lifecycle events (added, complete, error); separate from Discord |
-| **Plex / Jellyfin** | Automatic library refresh after each completed download via Plex token or Jellyfin API key |
-| **AllDebrid orphan cleanup** | Auto-deletes error/no-peer magnets on AllDebrid that have no local DB row; manual trigger button |
-| **Extraction passwords** | Per-archive password list (newline-separated); each tried in order for 7z and RAR |
-| **Analytics** | Queue analytics with hourly chart and configurable time windows (1h / 24h / 7d / 30d) |
-| **Smart Scheduler** | Time-window enforcement for download slots; configurable active hours |
+| Feature | Description |
+|---|---|
+| **Direct debrid links** | Submit ordinary HTTP/HTTPS links from AllDebrid-supported hosts directly from the Dashboard |
+| **Batch link submission** | Submit up to 100 unique direct links in one tracked transaction |
+| **Magnet links** | Submit one or more magnets through AllDebrid |
+| **Torrent files** | Upload `.torrent` files directly to AllDebrid |
+| **Delayed link generation** | Automatically handles AllDebrid links that require asynchronous generation |
+| **Built-in aria2** | Run ACDC with its bundled aria2 instance for a self-contained deployment |
+| **External aria2** | Connect to an existing aria2 JSON-RPC daemon |
+| **Shared aria2 safety** | Tracks ACDC-owned downloads and avoids modifying global settings, result history, or unrelated transfers on external aria2 instances |
+| **Unified Downloads view** | Direct links, magnets, torrent files, and imported transfers share one lifecycle and history |
+| **Recent Activity** | Dashboard view of active and recently processed downloads |
+| **Retry and recovery** | Retry failed transfers and regenerate expired AllDebrid download URLs from the original source |
+| **Import existing magnets** | Import AllDebrid magnets not yet represented in the local database |
+| **Live status updates** | Server-Sent Events update transfer state without requiring full-page polling |
+| **Event log** | Searchable transfer and application event history |
+| **Statistics and analytics** | Built-in operational and download statistics |
+| **Auto-extraction** | Optional post-download extraction of common archive formats |
+| **Notifications** | Optional Discord notifications for download lifecycle events |
+| **Prometheus metrics** | Application and transfer metrics through `/api/metrics` |
+| **SQLite or PostgreSQL** | SQLite by default with optional external PostgreSQL |
+| **Access control** | Optional HTTP Basic Authentication |
 
 ---
 
-## Quick Start
+## Direct-link downloads
 
-### Docker Compose (recommended)
+Direct hoster links are first-class ACDC transfers rather than untracked aria2 jobs.
+
+Paste one or more HTTP/HTTPS links into the direct-link field on the Dashboard. ACDC then:
+
+1. validates and records the original URL;
+2. asks AllDebrid to unlock the link;
+3. waits for delayed generation when required;
+4. records the generated file information;
+5. submits the generated download URL to aria2;
+6. tracks progress with the rest of the download queue.
+
+The original source URL is retained. If an AllDebrid-generated URL expires, ACDC can generate a new one during retry or recovery.
+
+A single submission can contain up to **100 unique links**.
+
+---
+
+## Torrent downloads
+
+ACDC supports both magnet links and `.torrent` files.
+
+For a torrent submission:
+
+1. the magnet or torrent metadata is sent to AllDebrid;
+2. ACDC monitors the AllDebrid torrent state;
+3. once files are available, their unlocked HTTP(S) links are retrieved;
+4. those files are dispatched to aria2;
+5. ACDC tracks the complete transfer lifecycle locally.
+
+The local aria2 daemon does **not** need to participate in BitTorrent swarms. AllDebrid performs the torrent-side work and aria2 downloads the resulting files.
+
+---
+
+## aria2 modes
+
+### Built-in aria2
+
+The default configuration can run a bundled aria2 instance controlled by ACDC.
+
+In this mode ACDC owns the daemon and can manage its runtime configuration.
+
+### External aria2
+
+ACDC can instead use an existing aria2 JSON-RPC endpoint.
+
+External mode is designed to be safe for a **shared aria2 daemon**. ACDC maintains ownership information for downloads that it creates and does not assume that every transfer in aria2 belongs to ACDC.
+
+In external mode ACDC intentionally avoids operations such as:
+
+- changing daemon-wide bandwidth limits;
+- rewriting global aria2 configuration;
+- purging global download-result history;
+- controlling unrelated aria2 GIDs.
+
+Application-level concurrency for ACDC-owned jobs remains independently configurable.
+
+---
+
+## Installation
+
+### Docker Compose
+
+Clone the repository:
 
 ```bash
 git clone https://github.com/Xipher-Zero/alldebrid-client.git
 cd alldebrid-client
+```
+
+Review `docker-compose.yml` before starting it. Adapt host paths, UID/GID, timezone, networking, and persistent storage to your environment.
+
+Then start ACDC:
+
+```bash
 docker compose up -d
 ```
 
-Open **http://localhost:8080** → Settings → enter your AllDebrid API key.
+Open:
 
-### Docker run
+```text
+http://your-server:8080
+```
+
+Go to **Settings → General** and configure your AllDebrid API key.
+
+### Docker image
+
+Fork-owned images are published to GHCR.
+
+Current version:
+
+```text
+ghcr.io/xipher-zero/alldebrid-client:internal-v0.9.4
+```
+
+Example:
 
 ```bash
 docker run -d \
   --name alldebrid-client \
   --restart unless-stopped \
   -p 8080:8080 \
-  -e PUID=99 \
-  -e PGID=100 \
-  -e TZ=Europe/Berlin \
-  -v /path/to/config:/app/config \
+  -e PUID=1000 \
+  -e PGID=1000 \
+  -e TZ=America/Phoenix \
+  -e CONFIG_PATH=/app/config/config.json \
+  -e DB_PATH=/app/data/alldebrid.db \
+  -v /path/to/acdc/config:/app/config \
+  -v /path/to/acdc/data:/app/data \
   -v /path/to/downloads:/downloads \
   ghcr.io/xipher-zero/alldebrid-client:internal-v0.9.4
 ```
 
-> **File permissions:** set `PUID`/`PGID` to the UID/GID of the user that runs your other media containers (Sonarr, Radarr, Plex, etc.). Run `id` on the host to find the right values.
+Adjust the paths and UID/GID for your system.
+
+---
 
 ## Configuration
 
-All settings are in the **Settings** page of the web UI. The most important ones to set after first start:
+The primary supported configuration is available through **Settings**.
 
-| Setting | Where | Notes |
-|---------|-------|-------|
-| `PUID` / `PGID` env vars | `docker-compose.yml` | UID/GID for downloaded files |
-| AllDebrid API key | Settings → General | Required |
-| Download folder | Settings → Download Client | Must be writable by the container |
-| aria2 mode | Settings → Download Client | Built-in (default) or External RPC |
-| Discord webhook | Settings → Notifications | Optional |
-| Sonarr / Radarr URL + API key | Settings → Services | Optional |
-| Auth username / password | Settings → Access Control | Optional — leave either empty to disable |
-| Min free disk space (GB) | Settings → Download Client | 0 = disabled |
-| `log_level` / `log_pretty` / `log_format` | `config.json` | Optional Docker-safe logging controls; defaults are `INFO`, `false`, `plain` |
+### General
 
-See **Help → Settings Reference** in the web UI for a full description of every setting.
+Configure:
 
----
+- AllDebrid API key;
+- AllDebrid agent name;
+- optional HTTP Basic Authentication.
 
-## Sonarr / Radarr Integration
+### Download
 
-ACDC emulates the **qBittorrent v4.3.2 Web API** at `/api/v2/`. Configure it as a standard qBit download client:
+Configure:
 
-```
-Settings → Download Clients → + → qBittorrent
-  Host:      your-server-ip
-  Port:      8080  (or your mapped port)
-  Category:  (any value — stored but not used for routing)
-  Username:  (empty, or match Settings → Access Control)
-  Password:  (empty, or match Settings → Access Control)
-```
+- download directory;
+- built-in or external aria2 mode;
+- external aria2 URL and authentication when applicable;
+- ACDC download concurrency;
+- download filtering and limits.
 
-Click **Test** — it should show a green checkmark. See **Help → Sonarr/Radarr** in the web UI for the full status mapping table and troubleshooting guide.
+### Extract
 
----
+Configure optional archive extraction.
 
-## Jackett Search
+### Notifications
 
-1. Install and run [Jackett](https://github.com/Jackett/Jackett)
-2. In ACDC **Settings → Services → Jackett**: enter URL and API key, enable, Save
-3. The **Search** view appears — search by title, filter by indexer
-4. Add individual results, use **Add Selected** (checkbox per row), or **Add All**
+Configure optional Discord lifecycle notifications.
+
+### Database
+
+Use the default SQLite database or configure an external PostgreSQL instance.
+
+### Advanced
+
+Additional application and operational settings are available here.
 
 ---
 
-## Auto-Extraction
+## Dashboard
 
-Enable in **Settings → Auto-Extraction**. Archives are extracted automatically after every successful download. Auto-extract uses the completed file list recorded by the downloader, so it does not recursively scan large media folders.
+The Dashboard is intended for current activity and common download submission.
 
-| Format | Extension(s) | Engine |
-|--------|-------------|--------|
-| ZIP | `.zip` | Python `zipfile` (built-in) |
-| TAR (all compressions) | `.tar`, `.tar.gz`, `.tgz`, `.tar.bz2`, `.tar.xz`, `.tar.zst` | Python `tarfile` (built-in) |
-| Gzip / Bzip2 / XZ | `.gz`, `.bz2`, `.xz` | Python built-ins |
-| 7-Zip | `.7z` | `7z` binary (`p7zip-full`) |
-| RAR / RAR5 | `.rar`, `.r00`, multi-part | `7z` (primary) + `unrar-free` (fallback) |
+It provides:
 
-Both `p7zip-full` and `unrar-free` are included in the Docker image — no extra setup needed.
+- direct-link submission;
+- magnet and `.torrent` submission;
+- import and recovery controls;
+- current queue state;
+- completion and error counts;
+- recent download activity.
 
----
-
-## Discord Webhooks
-
-Set `discord_webhook_url` in Settings → Notifications. Per-event toggles control which events trigger a notification independently.
-
-| Event | Trigger |
-|-------|---------|
-| 📥 Torrent Added | Magnet/torrent accepted by AllDebrid |
-| ✅ Download Complete | All files downloaded successfully |
-| ❌ Download Error | One or more files failed |
-| ⚠️ Upload Failed | AllDebrid returned code 5 (auto-retry in progress) |
-| 🔗 No Peers | AllDebrid returned code 8 (auto-retry or manual re-add needed) |
-| ⚠️ Partial | Some files filtered/blocked, rest downloaded |
-| 🌿 FlexGet | Run started / task result / run finished |
-| 📊 Stats Report | Periodic summary webhook |
+The Dashboard intentionally shows only a small Recent Activity window. Use **Downloads** for full transfer history and management.
 
 ---
 
-## Prometheus Metrics
+## Downloads
 
-```yaml
-# prometheus.yml
-- job_name: alldebrid
-  static_configs:
-    - targets: [your-host:8080]
-  metrics_path: /api/metrics
-```
+The **Downloads** view is the unified transfer history.
 
-Available metrics: `alldebrid_torrents_by_status`, `alldebrid_active_downloads`, `alldebrid_completed_downloads`, `alldebrid_error_torrents`, `alldebrid_pending_files`, `alldebrid_sse_subscribers`, `alldebrid_downloaded_bytes_total`.
+It includes transfers originating from:
+
+- direct debrid links;
+- magnets;
+- `.torrent` files;
+- imported AllDebrid entries;
+- supported API submissions.
+
+Transfers can be searched and filtered by state, with retry, reset, pause, resume, and delete controls available where applicable.
 
 ---
 
 ## REST API
 
-### Core
+ACDC exposes a REST API used by the web interface and available for external automation.
+
+### Download submission and management
 
 | Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/torrents` | List torrents (status filter, search, pagination) |
-| `POST` | `/api/torrents/add-magnet` | Add magnet link |
-| `POST` | `/api/torrents/check-duplicate` | Read-only duplicate preview before adding |
-| `POST` | `/api/torrents/import-existing` | Import all AllDebrid magnets not yet in local DB |
-| `POST` | `/api/torrents/recover-all` | Reset stuck torrents and dispatch all ready AllDebrid magnets |
-| `GET` | `/api/torrents/diagnose` | Status breakdown and sample of non-terminal torrents |
-| `GET` | `/api/torrents/{id}` | Single torrent detail |
-| `DELETE` | `/api/torrents/{id}` | Delete torrent |
-| `POST` | `/api/torrents/{id}/retry` | Retry failed torrent (re-uploads magnet if stored) |
-| `GET` | `/api/stats` | Aggregate statistics |
-| `GET` | `/api/settings` | Current settings |
-| `PUT` | `/api/settings` | Update settings |
+|---|---|---|
+| `POST` | `/api/links/add` | Submit one or more direct HTTP/HTTPS links |
+| `POST` | `/api/torrents/add-magnet` | Submit a magnet link |
+| `POST` | `/api/torrents/add-file` | Upload a `.torrent` file |
+| `GET` | `/api/torrents` | List tracked downloads |
+| `GET` | `/api/torrents/{id}` | Retrieve a tracked download |
+| `DELETE` | `/api/torrents/{id}` | Delete a tracked download |
+| `POST` | `/api/torrents/{id}/retry` | Retry a failed download |
+| `POST` | `/api/torrents/import-existing` | Import existing AllDebrid magnets |
+| `POST` | `/api/torrents/recover-all` | Recover eligible stuck or failed transfers |
+| `GET` | `/api/torrents/diagnose` | Return transfer-state diagnostics |
 
-### SSE
+### Application state
 
 | Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/events/stream` | SSE stream (`connected`, `ping`, `torrent_updated`, `stats_changed`) |
-| `GET` | `/api/events/subscriber-count` | Active SSE connection count |
-
-### qBittorrent API emulation (`/api/v2/`)
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/api/v2/auth/login` | Accept credentials |
-| `GET` | `/api/v2/app/version` | Returns `v4.3.2` |
-| `GET` | `/api/v2/torrents/info` | Torrent list with qBit state mapping |
-| `POST` | `/api/v2/torrents/add` | Add via magnet or `.torrent` upload |
-| `GET` | `/api/v2/torrents/files` | Per-file progress |
-| `GET` | `/api/v2/torrents/properties` | Extended torrent properties |
-| `POST` | `/api/v2/torrents/delete` | Delete torrent(s) |
-| `POST` | `/api/v2/torrents/pause` / `resume` | Pause / resume |
-| `GET` | `/api/v2/transfer/info` | Download speed |
-| `GET` | `/api/v2/sync/maindata` | Full state snapshot |
-
-### Observability & Admin
-
-| Method | Path | Description |
-|--------|------|-------------|
+|---|---|---|
+| `GET` | `/api/stats` | Application and transfer statistics |
+| `GET` | `/api/settings` | Current application settings |
+| `PUT` | `/api/settings` | Update application settings |
+| `GET` | `/api/events/stream` | Server-Sent Events status stream |
 | `GET` | `/api/metrics` | Prometheus-compatible metrics |
-| `GET` | `/api/version` | Client version |
-| `POST` | `/api/admin/full-sync` | Full AllDebrid reconciliation |
-| `POST` | `/api/admin/deep-sync` | aria2 filesystem reconciliation |
-| `POST` | `/api/admin/database/backup` | Create a database backup |
-| `POST` | `/api/admin/migrate` | SQLite ↔ PostgreSQL migration |
-| `POST` | `/api/admin/database/wipe` | Wipe the database (guarded) |
+| `GET` | `/api/version` | ACDC version |
+| `GET` | `/api/health` | Lightweight application health endpoint |
 
 ---
 
-## FlexGet
+## Legacy upstream integrations
 
-```bash
-flexget web gentoken   # generate API token
+ACDC began as a fork of `kroeberd/alldebrid-client` v1.9.9. The upstream project combined an AllDebrid client with a number of media-automation and search functions.
+
+Some inherited backend code is still present in the repository, including support related to:
+
+- qBittorrent API emulation;
+- Sonarr/Radarr integration;
+- Jackett/Prowlarr search;
+- FlexGet;
+- saved-search and automation systems.
+
+These integrations are **not the focus of ACDC and should not be considered part of its supported product direction**.
+
+Their configuration has been removed from the primary Settings interface and they are intentionally not documented as standard ACDC workflows.
+
+Existing backend endpoints or implementation code may remain while the fork continues to diverge from upstream. Compatibility with those legacy integrations is not guaranteed, and they may be further isolated or removed in future releases.
+
+ACDC is intended to be an **AllDebrid download client**, not an all-in-one media automation suite.
+
+---
+
+## Fork history
+
+ACDC is derived from upstream `kroeberd/alldebrid-client` release **v1.9.9**, commit:
+
+```text
+c0f7a5bfeba4f259fb2acc62ac6eed27e8ac4d5c
 ```
 
-Enter the token in **Settings → Services → FlexGet**. Tasks are executed via the FlexGet v3 REST API.
+The fork initially preserved production corrections around AllDebrid processing and shared external aria2 operation, then added tracked direct-link downloading and began simplifying the user interface around the actual AllDebrid download workflow.
+
+See [`INTERNAL_FORK.md`](INTERNAL_FORK.md) for historical notes about the initial divergence.
+
+See [`CHANGELOG.md`](CHANGELOG.md) for current ACDC changes.
 
 ---
 
 ## Development
 
+Backend requirements are under `backend/`.
+
 ```bash
-# Backend (Python 3.12+)
 cd backend
 pip install -r requirements.txt
-uvicorn main:app --reload --port 8080
-
-# Tests
 python -m pytest tests -v
 ```
 
-### Project structure
+Run the development server with:
 
+```bash
+uvicorn main:app --reload --port 8080
 ```
+
+The primary implementation areas are:
+
+```text
 backend/
   api/
-    routes.py          # FastAPI endpoints (71 routes)
-    qbit.py            # qBittorrent v4.3.2 API emulation (28 routes)
-  core/
-    config.py          # Settings model (Pydantic, ~65 settings)
-    scheduler.py       # Poll loops: AllDebrid, aria2, FlexGet, Stats, Events TTL
-  db/
-    database.py        # SQLite/PostgreSQL abstraction + 8 performance indexes
-    migration.py       # Bidirectional SQLite ↔ PostgreSQL migration
+    routes.py
   services/
-    alldebrid.py       # AllDebrid API client (token-bucket rate limited)
-    aria2.py           # aria2 JSON-RPC client (serialised, rate-limited)
-    aria2_runtime.py   # Built-in aria2 process manager
-    extractor.py       # Auto-extraction (zip/7z/rar/tar)
-    flexget.py         # FlexGet v3 REST client
-    jackett.py         # Jackett search proxy
-    manager_v2.py      # Core orchestration (TorrentManager)
-    notifications.py   # Discord webhook service
-    stats.py           # Statistics and reporting
-    backup.py          # Automatic backups
-    db_maintenance.py  # Events TTL cleanup
-    integrations.py    # Sonarr/Radarr import webhooks
-    torrent_state.py   # Formal state machine: TorrentStatus enum + VALID_TRANSITIONS
-  tests/               # 228 tests (pytest + pytest-asyncio)
-frontend/
-  static/index.html    # Single-file web UI (vanilla JS, SSE, no build step)
-docs/
-  logo.svg / logo.png  # App logo
-  postgresql.md        # PostgreSQL setup guide
-  migration.md         # Migration guide
-  discord-webhooks.md  # Discord configuration
+    alldebrid.py
+    aria2.py
+    aria2_runtime.py
+    manager_v2.py
+  db/
+    database.py
+
+frontend/static/
+  index.html
+  app.js
+  style.css
 ```
 
 ---
 
-## Changelog
+## Project direction
 
-See [CHANGELOG.md](CHANGELOG.md) for full release history.
+ACDC favors a focused responsibility:
 
----
+> **Submit work to AllDebrid, retrieve the resulting files, download them reliably, and make that lifecycle observable and recoverable.**
 
-## Performance Tuning
+Features that improve that workflow belong naturally in ACDC.
 
-### aria2 Connections
-The default `split=16` and `max-connection-per-server=16` are optimized for AllDebrid CDN links.
-If you are on a very slow NAS or constrained hardware, reduce these in **Settings → Download → aria2 Live Downloads**.
-
-### Search Speed
-Jackett searches return results as soon as Jackett responds. The client does a bulk hash-lookup
-against your existing queue — no per-result DB calls. Large Jackett indexer lists (20+) may still
-be slow due to Jackett itself; reduce active indexers or increase the Jackett search timeout in Settings.
-
-### Memory Usage
-- `aria2_disk_cache=64M` is the default. Reduce to `0` or `16M` on constrained systems.
-- `aria2_max_download_result=20` keeps aria2's in-memory result history small.
-- `MALLOC_ARENA_MAX=1` is set automatically for the built-in aria2 to prevent glibc arena growth.
-
-## Troubleshooting
-
-### Jackett is slow or times out
-- Increase the search timeout in Settings → Search / Indexers → Jackett
-- Check Jackett logs for indexer-specific errors (`docker logs jackett`)
-- Disable dead indexers in Jackett admin to reduce concurrent requests
-
-### aria2 is not reachable
-- If using built-in aria2: check Settings → Download → aria2 mode is set to **Built-in**
-- If using external aria2: verify the JSON-RPC URL (e.g. `http://aria2:6800/jsonrpc`) and secret
-- Run `POST /api/settings/test-aria2` or use the **Test aria2** button in Settings
-
-### Duplicate detection blocks a re-add
-- The same infohash cannot be added twice while the torrent is active
-- To force a re-add: delete the existing torrent, then add the magnet again
-- Check Settings → General → Duplicate Detection level
-
-### Expired magnets ("Expired — files removed")
-- AllDebrid removes cached files after ~30 days of inactivity
-- The client detects `statusCode 3` and automatically re-uploads the magnet if stored
-- If no magnet is stored, the torrent moves to error state — add the magnet again manually
-
-### No-peer torrents not cleaning up
-- Use **🧹 Clean AD Orphans** in the Torrents view to purge error magnets from AllDebrid
-- These are magnets added directly on AllDebrid outside the client
-- The client also runs `cleanup_alldebrid_orphans()` automatically every sync cycle
-
-### PostgreSQL connection issues
-- Ensure `DB_TYPE=postgres` and all `POSTGRES_*` env vars are set correctly
-- Run `POST /api/settings/test-postgres` or use **Test PostgreSQL** in Settings → Database
-- Check container logs: `docker logs alldebrid-client`
-
-### Permission errors (download folder, extraction)
-- Set `PUID` and `PGID` to match your host user (`id -u` / `id -g`)
-- Ensure the volume mounts exist and are writable by the PUID/PGID user
-- Example: `-e PUID=1000 -e PGID=1000`
-
-### Docker networking (Jackett/aria2 unreachable)
-- All services should be on the same Docker network, or use host IPs
-- Use the container name as hostname: `http://jackett:9117` (if on same bridge)
-- With `network_mode: host`, use `127.0.0.1` as the host
-
+Recreating an entire media-management or indexer ecosystem inside the download client does not.
 
 ---
 
 ## License
 
-MIT — see [LICENSE](LICENSE)
+This project retains the license of the upstream project. See [`LICENSE`](LICENSE) for details.

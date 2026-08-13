@@ -1,41 +1,35 @@
 # Code of Conduct
 
-## Our Pledge
+ACDC is a technical project. Contributions are evaluated primarily on technical quality, maintainability, correctness, and relevance to the project.
 
-We as contributors and maintainers pledge to make participation in ACDC and our community a harassment-free experience for everyone, regardless of age, body size, disability, ethnicity, sex characteristics, gender identity and expression, level of experience, education, socio-economic status, nationality, personal appearance, race, religion, or sexual identity and orientation.
+## Expectations
 
-We pledge to act and interact in ways that contribute to an open, welcoming, diverse, inclusive, and healthy community.
+Contributors are free to disagree, argue technical positions, use blunt language, and hold whatever personal or political views they choose. Maintainers are not interested in policing ordinary interpersonal friction that does not materially affect the project.
 
-## Our Standards
+Criticism of code, architecture, implementation choices, and project decisions is welcome. Strong disagreement is fine. Keep it functional enough that development can continue.
 
-Examples of behavior that contributes to a positive environment:
+## Unacceptable behavior
 
-- Using welcoming and inclusive language
-- Being respectful of differing viewpoints and experiences
-- Gracefully accepting constructive criticism
-- Focusing on what is best for the community
-- Showing empathy towards other community members
+The following is not acceptable in project spaces:
 
-Examples of unacceptable behavior:
+- harassment or repeated targeted abuse;
+- threats or intimidation;
+- doxxing or publishing another person's private information without permission;
+- deliberate disruption, sabotage, spam, or bad-faith interference with project work;
+- sustained personal attacks that make technical collaboration impractical.
 
-- The use of sexualized language or imagery, and sexual attention or advances of any kind
-- Trolling, insulting or derogatory comments, and personal or political attacks
-- Public or private harassment
-- Publishing others' private information, such as a physical or email address, without their explicit permission
-- Other conduct which could reasonably be considered inappropriate in a professional setting
-
-## Enforcement Responsibilities
-
-Project maintainers are responsible for clarifying and enforcing our standards of acceptable behavior and will take appropriate and fair corrective action in response to any behavior that they deem inappropriate, threatening, offensive, or harmful.
-
-## Scope
-
-This Code of Conduct applies within all community spaces, and also applies when an individual is officially representing the community in public spaces.
+Disagreement, profanity, blunt criticism, or unpopular opinions are not by themselves violations of this policy.
 
 ## Enforcement
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be reported by opening an issue or contacting the maintainers directly. All complaints will be reviewed and investigated promptly and fairly.
+Maintainers may remove content, reject contributions, restrict participation, or ban contributors when behavior materially interferes with development, project operations, or the ability of others to contribute.
 
-## Attribution
+Enforcement is at maintainer discretion and should be proportional to the actual disruption or harm involved.
 
-This Code of Conduct is adapted from the [Contributor Covenant](https://www.contributor-covenant.org), version 2.1.
+Reports may be made by opening an issue or contacting a maintainer directly.
+
+## Scope
+
+This policy applies to ACDC-controlled project spaces, including repository issues, pull requests, reviews, discussions, and other official project channels.
+
+In short: **contribute good work, argue about the code if necessary, and don't make yourself impossible to work with.**

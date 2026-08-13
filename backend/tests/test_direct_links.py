@@ -77,7 +77,9 @@ class DirectLinkInputTests(unittest.TestCase):
         )
         self.assertEqual(direct_link_filename("https://host.invalid"), "host.invalid")
         self.assertEqual(
-            direct_link_filename("https://1fichier.com/?AbCdEf123"),
+            direct_link_filename(
+                "https://1fichier.com/?AbCdEf123&af=2701919"
+            ),
             "1fichier.com - AbCdEf123",
         )
         self.assertEqual(

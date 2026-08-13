@@ -36,6 +36,15 @@ API_V41 = "https://api.alldebrid.com/v4.1"
 TIMEOUT = aiohttp.ClientTimeout(total=30)
 
 
+class AllDebridAPIError(Exception):
+    """AllDebrid API failure with a machine-readable provider error code."""
+
+    def __init__(self, code: str, message: str):
+        self.code = str(code or "UNKNOWN")
+        self.message = str(message or "")
+        super().__init__(f"AllDebrid [{self.code}]: {self.message}")
+
+
 class AllDebridService:
     def __init__(self, api_key: str, agent: str = APP_SHORT_NAME):
         self.api_key = api_key
@@ -93,7 +102,7 @@ class AllDebridService:
                     err  = result.get("error", {})
                     code = err.get("code", "UNKNOWN") if isinstance(err, dict) else "UNKNOWN"
                     msg  = err.get("message", str(err)) if isinstance(err, dict) else str(err)
-                    raise Exception(f"AllDebrid [{code}]: {msg}")
+                    raise AllDebridAPIError(code, msg)
                 return result.get("data", {})
 
             if attempt >= attempts:

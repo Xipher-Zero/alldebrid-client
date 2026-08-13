@@ -19,7 +19,7 @@ from core.config import AppSettings, get_settings
 from core.logging_utils import sanitize_exception, sanitize_log_value
 import aiosqlite  # noqa: F401 — used by tests via unittest.mock.patch
 from db.database import _is_postgres, get_db
-from services.alldebrid import AllDebridService, flatten_files
+from services.alldebrid import AllDebridAPIError, AllDebridService, flatten_files
 from services.aria2 import Aria2ConnectionError, Aria2RPCError, Aria2Service
 from services.aria2_runtime import aria2_global_options, effective_rpc_config, is_builtin_mode
 from services.extractor import archive_paths_from_downloads, get_extractor
@@ -277,13 +277,17 @@ def normalize_provider_state(magnet: Dict) -> Dict[str, object]:
     }
 
 
-async def _retry_async(fn, *args, attempts: int = MAX_FILE_RETRIES, delay: float = 1.0):
+async def _retry_async(
+    fn, *args, attempts: int = MAX_FILE_RETRIES, delay: float = 1.0, retry_if=None
+):
     last_error = None
     for attempt in range(1, attempts + 1):
         try:
             return await fn(*args)
         except Exception as exc:
             last_error = exc
+            if retry_if is not None and not retry_if(exc):
+                break
             if attempt >= attempts:
                 break
             await asyncio.sleep(delay * attempt)
@@ -986,6 +990,10 @@ class TorrentManager:
                         generated = await _retry_async(
                             self.ad().unlock_link,
                             row["source_url"],
+                            retry_if=lambda exc: not (
+                                isinstance(exc, AllDebridAPIError)
+                                and exc.code == "LINK_DOWN"
+                            ),
                         )
                         generated_url = str(generated.get("link") or "").strip()
                         parsed = urlparse(generated_url)
@@ -1012,6 +1020,7 @@ class TorrentManager:
                             "filename": safe_name(str(filename)),
                             "size_bytes": max(0, size_bytes),
                             "error": None,
+                            "missing": False,
                         }
                     except Exception as exc:
                         return {
@@ -1022,31 +1031,45 @@ class TorrentManager:
                             ),
                             "size_bytes": 0,
                             "error": sanitize_exception(exc, max_length=500),
+                            "missing": (
+                                isinstance(exc, AllDebridAPIError)
+                                and exc.code == "LINK_DOWN"
+                            ),
                         }
 
             results = await asyncio.gather(*[_unlock(row) for row in file_rows])
             reserved_paths: Set[str] = set()
             succeeded = 0
             failed = 0
+            missing = 0
             total_size = 0
             resolved_names: List[str] = []
 
             for position, result in enumerate(results, start=1):
                 if result["error"]:
                     failed += 1
+                    is_missing = bool(result.get("missing"))
+                    if is_missing:
+                        missing += 1
+                    failure_status = "missing" if is_missing else "error"
+                    failure_reason = (
+                        "File is no longer available on the source host"
+                        if is_missing
+                        else result["error"]
+                    )
                     async with get_db() as db:
                         await db.execute(
                             """UPDATE download_files
-                               SET status='error', block_reason=?,
+                               SET status=?, block_reason=?,
                                    updated_at=CURRENT_TIMESTAMP
                                WHERE id=?""",
-                            (result["error"], result["file_id"]),
+                            (failure_status, failure_reason, result["file_id"]),
                         )
                         await db.execute(
                             "INSERT INTO events (torrent_id, level, message) VALUES (?, 'error', ?)",
                             (
                                 torrent_id,
-                                f"AllDebrid could not generate link {position}: {result['error']}",
+                                f"AllDebrid could not generate link {position}: {failure_reason}",
                             ),
                         )
                         await db.commit()
@@ -1074,8 +1097,12 @@ class TorrentManager:
                         )
                         await db.commit()
 
-            if len(normalized) == 1 and resolved_names:
-                final_name = resolved_names[0]
+            if len(normalized) == 1:
+                final_name = (
+                    resolved_names[0]
+                    if resolved_names
+                    else direct_link_filename(normalized[0], 1)
+                )
             else:
                 final_name = f"Debrid link batch ({len(normalized)} links)"
 
@@ -1114,15 +1141,25 @@ class TorrentManager:
                 )
                 await self._dispatch_pending_aria2_queue()
             else:
-                message = "All submitted links failed during AllDebrid generation"
+                all_missing = failed > 0 and missing == failed
+                message = (
+                    "File is no longer available on the source host"
+                    if all_missing and len(normalized) == 1
+                    else (
+                        f"{missing} submitted files are no longer available on their source hosts"
+                        if all_missing
+                        else "All submitted links failed during AllDebrid generation"
+                    )
+                )
+                provider_status = "missing" if all_missing else "error"
                 async with get_db() as db:
                     await db.execute(
                         """UPDATE torrents
-                           SET name=?, status='error', provider_status='error',
+                           SET name=?, status='error', provider_status=?,
                                error_message=?, progress=0,
                                updated_at=CURRENT_TIMESTAMP
                            WHERE id=?""",
-                        (final_name, message, torrent_id),
+                        (final_name, provider_status, message, torrent_id),
                     )
                     await db.execute(
                         "INSERT INTO events (torrent_id, level, message) VALUES (?, 'error', ?)",

@@ -36,9 +36,10 @@ if "aiosqlite" not in sys.modules:
     )
 
 from db.database import _SCHEMA_COLUMNS_FILES
-from services.alldebrid import AllDebridService
+from services.alldebrid import AllDebridAPIError, AllDebridService
 from services.manager_v2 import (
     TorrentManager,
+    _retry_async,
     direct_link_filename,
     normalize_direct_links,
 )
@@ -107,6 +108,33 @@ class DelayedAllDebridTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["link"], "https://download.invalid/archive.zip")
         self.assertEqual(sleep.await_args_list[0].args, (5,))
         self.assertEqual(service._post.await_count, 3)
+
+
+class MissingDirectLinkTests(unittest.IsolatedAsyncioTestCase):
+    async def test_link_down_keeps_code_and_is_not_retried(self):
+        calls = 0
+
+        async def missing_link():
+            nonlocal calls
+            calls += 1
+            raise AllDebridAPIError(
+                "LINK_DOWN",
+                "This link is not available on the file hoster website",
+            )
+
+        with self.assertRaises(AllDebridAPIError) as caught:
+            await _retry_async(
+                missing_link,
+                attempts=3,
+                retry_if=lambda exc: not (
+                    isinstance(exc, AllDebridAPIError)
+                    and exc.code == "LINK_DOWN"
+                ),
+            )
+
+        self.assertEqual(calls, 1)
+        self.assertEqual(caught.exception.code, "LINK_DOWN")
+        self.assertIn("LINK_DOWN", str(caught.exception))
 
 
 class DirectLinkTransactionTests(unittest.IsolatedAsyncioTestCase):
@@ -181,6 +209,9 @@ class DashboardContractTests(unittest.TestCase):
         self.assertIn("torrents:'Downloads'", js)
         self.assertIn("`All Downloads (${torrentTotal})`", js)
         self.assertIn("function sourceLabel(source)", js)
+        self.assertIn("function transferDisplayStatus(t)", js)
+        self.assertIn("missing:'❌ Missing file'", js)
+        self.assertIn("File is no longer available on the source host", (repo_root / "backend/services/manager_v2.py").read_text())
 
     def test_sidebar_and_settings_match_refined_navigation(self):
         repo_root = Path(__file__).resolve().parents[2]

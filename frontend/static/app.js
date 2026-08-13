@@ -212,8 +212,15 @@ function renderKvMap(arr, formatter) {
 function badge(s) {
   const m = {pending:'⏳ Pending',uploading:'⬆ Uploading',processing:'⚙ Processing',
     queued:'🕓 Queued',paused:'⏸ Paused',downloading:'⬇ Downloading',ready:'✓ Ready',completed:'✅ Done',
-    error:'❌ Error',deleted:'🗑 Deleted',imported:'📋 Imported',partial:'⚠ Partial'};
-  return `<span class="badge badge-${s}">${m[s]||s}</span>`;
+    error:'❌ Error',missing:'❌ Missing file',deleted:'🗑 Deleted',imported:'📋 Imported',partial:'⚠ Partial'};
+  const cls = s === 'missing' ? 'error' : s;
+  return `<span class="badge badge-${cls}">${m[s]||s}</span>`;
+}
+function transferDisplayStatus(t) {
+  if (t && t.source === 'direct_link' && t.status === 'error' && t.provider_status === 'missing') {
+    return 'missing';
+  }
+  return (t && t.status) || '';
 }
 function progress(pct, status) {
   const done   = status === 'completed';
@@ -579,7 +586,7 @@ async function loadRecent() {
           ${t.alldebrid_id ? `<div class="t-hash" style="font-size:10px;color:var(--text3)" title="AllDebrid ID">AD: ${esc(t.alldebrid_id)}</div>` : ''}
           ${t.source === 'direct_link' ? `<div class="t-hash" style="font-size:10px;color:var(--text3)" title="Direct debrid link transfer">🔗 Direct link</div>` : ''}
         </td>
-        <td>${badge(t.status)}</td>
+        <td>${badge(transferDisplayStatus(t))}</td>
         <td>${progress(t.progress,t.status)}</td>
         <td class="sz">${fmtSize(t.size_bytes)}</td>
         <td class="sz">${fmtDate(t.created_at)}</td>
@@ -741,7 +748,7 @@ async function loadTorrents() {
         <div>${sourceLabel(t.source)}</div>
         ${t.label?`<span class="lbl-badge">🏷 ${esc(t.label)}</span>`:''}
       </td>
-      <td>${badge(t.status)}</td>
+      <td>${badge(transferDisplayStatus(t))}</td>
       <td>${progress(t.progress,t.status)}</td>
       <td class="sz">${fmtSize(t.size_bytes)}</td>
       <td class="sz">${fmtDate(t.created_at)}</td>
@@ -842,7 +849,7 @@ async function showDetail(id) {
     document.getElementById('modal-title').textContent = t.name||'Torrent Details';
     document.getElementById('modal-body').innerHTML = `
       <div class="detail-grid">
-        <div><div class="dk">Status</div><div class="dv">${badge(t.status)}</div></div>
+        <div><div class="dk">Status</div><div class="dv">${badge(transferDisplayStatus(t))}</div></div>
         <div><div class="dk">Provider</div><div class="dv">${t.provider_status ? badge(t.provider_status) : '—'}</div></div>
         <div><div class="dk">Progress</div><div class="dv">${(t.progress||0).toFixed(1)}%</div></div>
         <div><div class="dk">Size</div><div class="dv">${fmtSize(t.size_bytes)}</div></div>
@@ -862,7 +869,9 @@ async function showDetail(id) {
             <thead><tr><th>Filename</th><th>Size</th><th>Status</th></tr></thead>
             <tbody>${t.files.map(f=>`<tr>
               <td style="font-family:var(--mono);font-size:11px">${esc(f.filename)}
-                ${f.blocked?`<span class="badge badge-error" style="font-size:9px;margin-left:6px">BLOCKED: ${esc(f.block_reason)}</span>`:''}
+                ${f.blocked
+                  ? `<span class="badge badge-error" style="font-size:9px;margin-left:6px">BLOCKED: ${esc(f.block_reason)}</span>`
+                  : (f.block_reason ? `<div style="font-size:10px;color:var(--red);margin-top:4px">${esc(f.block_reason)}</div>` : '')}
               </td>
               <td class="sz">${fmtSize(f.size_bytes)}</td>
               <td>${badge(f.status)}</td>

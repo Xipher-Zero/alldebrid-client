@@ -187,6 +187,57 @@ def direct_link_filename(url: str, fallback_index: int = 1) -> str:
     return candidate or f"debrid-link-{fallback_index}"
 
 
+def _direct_link_collection_base(filename: str) -> str:
+    """Return a conservative collection stem for known multipart filenames."""
+    name = safe_name(str(filename or "").strip())
+    patterns = (
+        r"(?i)^(?P<base>.+)\.part\d+\.rar$",
+        r"(?i)^(?P<base>.+)\.r\d{2,3}$",
+        r"(?i)^(?P<base>.+)\.(?:7z|zip|rar)\.\d{3}$",
+    )
+    for pattern in patterns:
+        match = re.match(pattern, name)
+        if match:
+            base = match.group("base").rstrip(" .-_")
+            if base:
+                return base
+    return name
+
+
+def direct_link_collection_name(
+    resolved_names: List[str], source_urls: List[str]
+) -> str:
+    """Build a useful parent label without inventing unavailable filenames."""
+    urls = list(source_urls or [])
+    total = len(urls)
+    resolved = [
+        safe_name(str(name))
+        for name in (resolved_names or [])
+        if str(name or "").strip()
+    ]
+
+    if total <= 0:
+        return "Debrid links"
+
+    if total == 1:
+        return (
+            resolved[0]
+            if resolved
+            else direct_link_filename(urls[0], 1)
+        )
+
+    if resolved:
+        bases = [_direct_link_collection_base(name) for name in resolved]
+        first_base = bases[0]
+        if all(base.casefold() == first_base.casefold() for base in bases[1:]):
+            return safe_name(f"{first_base} ({total} links)")
+
+        return safe_name(f"{resolved[0]} + {total - 1} more")
+
+    fallback = direct_link_filename(urls[0], 1)
+    return safe_name(f"{fallback} + {total - 1} more")
+
+
 def is_blocked(filename: str, cfg: AppSettings, size_bytes: int = 0) -> Tuple[bool, str]:
     if not cfg.filters_enabled:
         return False, ""
@@ -1107,14 +1158,9 @@ class TorrentManager:
                         )
                         await db.commit()
 
-            if len(normalized) == 1:
-                final_name = (
-                    resolved_names[0]
-                    if resolved_names
-                    else direct_link_filename(normalized[0], 1)
-                )
-            else:
-                final_name = f"Debrid link batch ({len(normalized)} links)"
+            final_name = direct_link_collection_name(
+                resolved_names, normalized
+            )
 
             if succeeded:
                 error_message = (

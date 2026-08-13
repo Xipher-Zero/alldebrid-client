@@ -40,6 +40,7 @@ from services.alldebrid import AllDebridAPIError, AllDebridService
 from services.manager_v2 import (
     TorrentManager,
     _retry_async,
+    direct_link_collection_name,
     direct_link_filename,
     normalize_direct_links,
 )
@@ -85,6 +86,44 @@ class DirectLinkInputTests(unittest.TestCase):
         self.assertEqual(
             direct_link_filename("https://host.invalid/?token=secret&auth=value"),
             "host.invalid",
+        )
+
+    def test_collection_name_uses_resolved_multipart_base(self):
+        links = [
+            "https://1fichier.com/?part1&af=2701919",
+            "https://1fichier.com/?part2&af=2701919",
+            "https://1fichier.com/?part3&af=2701919",
+        ]
+        self.assertEqual(
+            direct_link_collection_name(
+                ["sc44610-Dispatc.part3.rar"],
+                links,
+            ),
+            "sc44610-Dispatc (3 links)",
+        )
+
+    def test_collection_name_does_not_invent_common_name(self):
+        links = [
+            "https://host.invalid/a",
+            "https://host.invalid/b",
+            "https://host.invalid/c",
+        ]
+        self.assertEqual(
+            direct_link_collection_name(
+                ["alpha.mkv", "beta.srt"],
+                links,
+            ),
+            "alpha.mkv + 2 more",
+        )
+
+    def test_collection_name_falls_back_to_source_identifier(self):
+        links = [
+            "https://1fichier.com/?xo3nibyjy94ymn937127&af=2701919",
+            "https://1fichier.com/?y4eawl85julqc81h1xq0&af=2701919",
+        ]
+        self.assertEqual(
+            direct_link_collection_name([], links),
+            "1fichier.com - xo3nibyjy94ymn937127 + 1 more",
         )
 
     def test_schema_migrates_original_source_url(self):

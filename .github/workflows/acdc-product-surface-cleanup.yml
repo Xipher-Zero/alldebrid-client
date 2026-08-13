@@ -1,0 +1,84 @@
+name: ACDC product surface cleanup
+
+on:
+  push:
+    branches:
+      - agent/readme-product-surface-cleanup
+    paths:
+      - .github/workflows/acdc-product-surface-cleanup.yml
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v5
+        with:
+          ref: agent/readme-product-surface-cleanup
+          fetch-depth: 0
+
+      - name: Remove legacy Search and FlexGet status UI
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('frontend/static/index.html')
+          text = path.read_text()
+
+          search_block = '''    <div class="nav-item" data-view="search" onclick="nav(this)">
+                <span class="icon">&#128269;</span><span class="nav-label">Search</span>
+              </div>
+          '''
+          if search_block not in text:
+              raise SystemExit('Search navigation block not found')
+          text = text.replace(search_block, '', 1)
+
+          flexget_block = '''    <div class="conn-row" id="flexget-running-row" style="display:none">
+                <div class="dot" id="dot-flexget" style="background:var(--accent);animation:pulse 1s infinite"></div>
+                <span id="lbl-flexget" style="color:var(--accent)">FlexGet: running…</span>
+              </div>
+          '''
+          if flexget_block not in text:
+              raise SystemExit('FlexGet footer block not found')
+          text = text.replace(flexget_block, '', 1)
+          path.write_text(text)
+
+          test_path = Path('backend/tests/test_direct_links.py')
+          tests = test_path.read_text()
+          old = '''        for removed_view in ("learning", "saved-searches", "changelog", "support", "help"):
+                      self.assertNotIn(f'data-view="{removed_view}"', sidebar_nav)
+          '''
+          new = '''        for removed_view in ("search", "learning", "saved-searches", "changelog", "support", "help"):
+                      self.assertNotIn(f'data-view="{removed_view}"', sidebar_nav)
+          '''
+          if old not in tests:
+              raise SystemExit('Sidebar removed-view assertion not found')
+          tests = tests.replace(old, new, 1)
+
+          footer_anchor = '''        self.assertNotIn('id="lbl-jackett"', sidebar_footer)
+          '''
+          footer_replacement = '''        self.assertNotIn('id="lbl-jackett"', sidebar_footer)
+                  self.assertNotIn('id="flexget-running-row"', sidebar_footer)
+                  self.assertNotIn('id="dot-flexget"', sidebar_footer)
+                  self.assertNotIn('id="lbl-flexget"', sidebar_footer)
+          '''
+          if footer_anchor not in tests:
+              raise SystemExit('Sidebar footer assertion anchor not found')
+          tests = tests.replace(footer_anchor, footer_replacement, 1)
+          test_path.write_text(tests)
+
+      - name: Validate focused UI contract
+        run: python -m unittest backend.tests.test_direct_links.DashboardContractTests -v
+
+      - name: Remove temporary workflow and commit
+        shell: bash
+        run: |
+          rm .github/workflows/acdc-product-surface-cleanup.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add frontend/static/index.html backend/tests/test_direct_links.py .github/workflows/acdc-product-surface-cleanup.yml
+          git commit -m "Hide legacy integrations from ACDC UI"
+          git push origin HEAD:agent/readme-product-surface-cleanup

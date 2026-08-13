@@ -76,6 +76,14 @@ class DirectLinkInputTests(unittest.TestCase):
             "My File",
         )
         self.assertEqual(direct_link_filename("https://host.invalid"), "host.invalid")
+        self.assertEqual(
+            direct_link_filename("https://1fichier.com/?AbCdEf123"),
+            "1fichier.com - AbCdEf123",
+        )
+        self.assertEqual(
+            direct_link_filename("https://host.invalid/?token=secret&auth=value"),
+            "host.invalid",
+        )
 
     def test_schema_migrates_original_source_url(self):
         self.assertIn(("source_url", "TEXT"), _SCHEMA_COLUMNS_FILES)

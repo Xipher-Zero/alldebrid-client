@@ -172,7 +172,14 @@ def direct_link_filename(url: str, fallback_index: int = 1) -> str:
     parsed = urlparse(str(url or ""))
     candidate = unquote(PurePosixPath(parsed.path or "").name).strip()
     if not candidate:
-        candidate = parsed.hostname or f"debrid-link-{fallback_index}"
+        # Query-only hosters such as 1fichier encode the opaque file identity
+        # in a bare query token. Retain that token for identification when no
+        # filename exists, but do not expose ordinary key=value query params.
+        query_token = unquote(parsed.query or "").strip()
+        if query_token and "=" not in query_token and "&" not in query_token:
+            candidate = f"{parsed.hostname or 'debrid-link'} - {query_token}"
+        else:
+            candidate = parsed.hostname or f"debrid-link-{fallback_index}"
     candidate = safe_name(candidate)
     return candidate or f"debrid-link-{fallback_index}"
 

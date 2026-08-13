@@ -80,5 +80,31 @@ class AllDebridRateLimitTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(limiter._rate, 12)
 
 
+class SettingsFrontendContractTests(unittest.TestCase):
+    def test_active_settings_tab_lookup_is_scoped_to_settings_tabs(self):
+        js = (
+            Path(__file__).resolve().parents[2]
+            / "frontend"
+            / "static"
+            / "app.js"
+        ).read_text()
+
+        self.assertIn(
+            "document.querySelector('#settings-tabs .stab.active')?.dataset.tab",
+            js,
+        )
+        self.assertNotIn(
+            "document.querySelector('.stab.active')?.dataset.tab",
+            js,
+        )
+
+        self.assertIn(
+            "const activeTab=getActiveSettingsTab(); "
+            "settingsData.aria2_mode=this.value; renderSettings(); "
+            "switchSettingsTab(activeTab);",
+            js,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

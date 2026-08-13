@@ -349,7 +349,7 @@ function setDot(id, state, label) {
 }
 
 function getActiveSettingsTab() {
-  return document.querySelector('.stab.active')?.dataset.tab || 'tab-general';
+  return document.querySelector('#settings-tabs .stab.active')?.dataset.tab || 'tab-general';
 }
 
 async function pauseProcessing() {
@@ -1442,7 +1442,7 @@ function renderSettings() {
         </div>
         <div class="form-group">
           <label class="form-label">aria2 Mode</label>
-          <select class="input" id="s-aria2_mode" onchange="settingsData.aria2_mode=this.value; renderSettings(); loadAria2Runtime().catch(()=>{});">
+          <select class="input" id="s-aria2_mode" onchange="const activeTab=getActiveSettingsTab(); settingsData.aria2_mode=this.value; renderSettings(); switchSettingsTab(activeTab); loadAria2Runtime().catch(()=>{});">
             <option value="external" ${(s.aria2_mode||'external')==='external'?'selected':''}>External aria2</option>
             <option value="builtin" ${(s.aria2_mode||'external')==='builtin'?'selected':''}>Built-in aria2</option>
           </select>

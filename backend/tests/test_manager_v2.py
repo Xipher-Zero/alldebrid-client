@@ -391,6 +391,7 @@ class FinishedEntryTests(unittest.IsolatedAsyncioTestCase):
         }
         counts_row = {
             "required_count": 2, "completed_count": 2, "error_count": 0,
+            "missing_count": 0,
             "active_count": 0, "paused_count": 0, "downloading_count": 0,
             "total_files": 2,
         }
@@ -431,6 +432,7 @@ class FinishedEntryTests(unittest.IsolatedAsyncioTestCase):
 
         counts_row = {
             "required_count": 3, "completed_count": 1, "error_count": 0,
+            "missing_count": 0,
             "active_count": 2, "paused_count": 0, "downloading_count": 2,
             "total_files": 3,
         }
@@ -485,6 +487,7 @@ class FinishedEntryTests(unittest.IsolatedAsyncioTestCase):
         }
         counts_row = {
             "required_count": 1, "completed_count": 1, "error_count": 0,
+            "missing_count": 0,
             "active_count": 0, "paused_count": 0, "downloading_count": 0,
             "total_files": 1,
         }

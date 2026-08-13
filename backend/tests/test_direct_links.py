@@ -211,7 +211,11 @@ class DashboardContractTests(unittest.TestCase):
         self.assertIn("function sourceLabel(source)", js)
         self.assertIn("function transferDisplayStatus(t)", js)
         self.assertIn("missing:'❌ Missing file'", js)
-        self.assertIn("File is no longer available on the source host", (repo_root / "backend/services/manager_v2.py").read_text())
+        manager_source = (repo_root / "backend/services/manager_v2.py").read_text()
+        self.assertIn("File is no longer available on the source host", manager_source)
+        self.assertIn("AND f.status != 'missing'", manager_source)
+        self.assertIn("blocked=0 AND status!='missing'", manager_source)
+        self.assertIn("required_count == 0 and missing_count > 0", manager_source)
 
     def test_sidebar_and_settings_match_refined_navigation(self):
         repo_root = Path(__file__).resolve().parents[2]

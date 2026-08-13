@@ -3539,6 +3539,7 @@ class TorrentManager:
                          AND t.status IN ('queued', 'downloading', 'paused')
                          AND f.download_client = 'aria2'
                          AND f.blocked = 0
+                         AND f.status != 'missing'
                        ORDER BY t.id, f.id"""
                 )
             ).fetchall()
@@ -3727,9 +3728,10 @@ class TorrentManager:
             counts = await (
                 await db.execute(
                     """SELECT
-                           SUM(CASE WHEN blocked=0 THEN 1 ELSE 0 END) AS required_count,
+                           SUM(CASE WHEN blocked=0 AND status!='missing' THEN 1 ELSE 0 END) AS required_count,
                            SUM(CASE WHEN blocked=0 AND status='completed' THEN 1 ELSE 0 END) AS completed_count,
                            SUM(CASE WHEN blocked=0 AND status='error' THEN 1 ELSE 0 END) AS error_count,
+                           SUM(CASE WHEN blocked=0 AND status='missing' THEN 1 ELSE 0 END) AS missing_count,
                            SUM(CASE WHEN blocked=0 AND status IN ('pending', 'queued', 'downloading', 'paused') THEN 1 ELSE 0 END) AS active_count,
                            SUM(CASE WHEN blocked=0 AND status='paused' THEN 1 ELSE 0 END) AS paused_count,
                            SUM(CASE WHEN blocked=0 AND status='downloading' THEN 1 ELSE 0 END) AS downloading_count,
@@ -3742,6 +3744,7 @@ class TorrentManager:
             required_count = int(counts["required_count"] or 0)
             completed_count = int(counts["completed_count"] or 0)
             error_count = int(counts["error_count"] or 0)
+            missing_count = int(counts["missing_count"] or 0)
             active_count = int(counts["active_count"] or 0)
             paused_count = int(counts["paused_count"] or 0)
             downloading_count = int(counts["downloading_count"] or 0)
@@ -3752,13 +3755,22 @@ class TorrentManager:
             if total_files == 0:
                 # No file records yet — _download() hasn't run, nothing to do
                 return
+            elif required_count == 0 and missing_count > 0:
+                # Missing source files are terminal failures, not filtered files.
+                # Preserve the parent missing/error state established during unlock.
+                return
             elif required_count == 0:
                 # All files were filtered/blocked — nothing to download
                 should_complete = True
                 event_msg = "All files were filtered/blocked — marked completed"
             elif required_count > 0 and completed_count == required_count and error_count == 0 and active_count == 0:
                 should_complete = True
-                event_msg = f"aria2 completed {completed_count} files"
+                event_msg = (
+                    f"aria2 completed {completed_count} files; "
+                    f"{missing_count} source file(s) missing"
+                    if missing_count
+                    else f"aria2 completed {completed_count} files"
+                )
             elif error_count > 0 and active_count == 0:
                 await db.execute(
                     "UPDATE torrents SET status='error', error_message='One or more aria2 transfers failed', updated_at=CURRENT_TIMESTAMP WHERE id=?",

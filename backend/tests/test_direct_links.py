@@ -36,9 +36,11 @@ if "aiosqlite" not in sys.modules:
     )
 
 from db.database import _SCHEMA_COLUMNS_FILES
-from services.alldebrid import AllDebridService
+from services.alldebrid import AllDebridAPIError, AllDebridService
 from services.manager_v2 import (
     TorrentManager,
+    _retry_async,
+    direct_link_collection_name,
     direct_link_filename,
     normalize_direct_links,
 )
@@ -75,6 +77,54 @@ class DirectLinkInputTests(unittest.TestCase):
             "My File",
         )
         self.assertEqual(direct_link_filename("https://host.invalid"), "host.invalid")
+        self.assertEqual(
+            direct_link_filename(
+                "https://1fichier.com/?AbCdEf123&af=2701919"
+            ),
+            "1fichier.com - AbCdEf123",
+        )
+        self.assertEqual(
+            direct_link_filename("https://host.invalid/?token=secret&auth=value"),
+            "host.invalid",
+        )
+
+    def test_collection_name_uses_resolved_multipart_base(self):
+        links = [
+            "https://1fichier.com/?part1&af=2701919",
+            "https://1fichier.com/?part2&af=2701919",
+            "https://1fichier.com/?part3&af=2701919",
+        ]
+        self.assertEqual(
+            direct_link_collection_name(
+                ["sc44610-Dispatc.part3.rar"],
+                links,
+            ),
+            "sc44610-Dispatc (3 links)",
+        )
+
+    def test_collection_name_does_not_invent_common_name(self):
+        links = [
+            "https://host.invalid/a",
+            "https://host.invalid/b",
+            "https://host.invalid/c",
+        ]
+        self.assertEqual(
+            direct_link_collection_name(
+                ["alpha.mkv", "beta.srt"],
+                links,
+            ),
+            "alpha.mkv + 2 more",
+        )
+
+    def test_collection_name_falls_back_to_source_identifier(self):
+        links = [
+            "https://1fichier.com/?xo3nibyjy94ymn937127&af=2701919",
+            "https://1fichier.com/?y4eawl85julqc81h1xq0&af=2701919",
+        ]
+        self.assertEqual(
+            direct_link_collection_name([], links),
+            "1fichier.com - xo3nibyjy94ymn937127 + 1 more",
+        )
 
     def test_schema_migrates_original_source_url(self):
         self.assertIn(("source_url", "TEXT"), _SCHEMA_COLUMNS_FILES)
@@ -107,6 +157,33 @@ class DelayedAllDebridTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["link"], "https://download.invalid/archive.zip")
         self.assertEqual(sleep.await_args_list[0].args, (5,))
         self.assertEqual(service._post.await_count, 3)
+
+
+class MissingDirectLinkTests(unittest.IsolatedAsyncioTestCase):
+    async def test_link_down_keeps_code_and_is_not_retried(self):
+        calls = 0
+
+        async def missing_link():
+            nonlocal calls
+            calls += 1
+            raise AllDebridAPIError(
+                "LINK_DOWN",
+                "This link is not available on the file hoster website",
+            )
+
+        with self.assertRaises(AllDebridAPIError) as caught:
+            await _retry_async(
+                missing_link,
+                attempts=3,
+                retry_if=lambda exc: not (
+                    isinstance(exc, AllDebridAPIError)
+                    and exc.code == "LINK_DOWN"
+                ),
+            )
+
+        self.assertEqual(calls, 1)
+        self.assertEqual(caught.exception.code, "LINK_DOWN")
+        self.assertIn("LINK_DOWN", str(caught.exception))
 
 
 class DirectLinkTransactionTests(unittest.IsolatedAsyncioTestCase):
@@ -181,6 +258,18 @@ class DashboardContractTests(unittest.TestCase):
         self.assertIn("torrents:'Downloads'", js)
         self.assertIn("`All Downloads (${torrentTotal})`", js)
         self.assertIn("function sourceLabel(source)", js)
+        self.assertIn("function transferDisplayStatus(t)", js)
+        self.assertIn("missing:'❌ Missing file'", js)
+        self.assertIn("downloading_with_errors:'⬇ Downloading'", js)
+        self.assertIn("completed_with_errors:'⚠ Completed with errors'", js)
+        self.assertIn("t.status === 'downloading'", js)
+        self.assertIn("t.status === 'completed'", js)
+        self.assertIn("String(t.error_message || '').trim()", js)
+        manager_source = (repo_root / "backend/services/manager_v2.py").read_text()
+        self.assertIn("File is no longer available on the source host", manager_source)
+        self.assertIn("AND f.status != 'missing'", manager_source)
+        self.assertIn("blocked=0 AND status!='missing'", manager_source)
+        self.assertIn("required_count == 0 and missing_count > 0", manager_source)
 
     def test_sidebar_and_settings_match_refined_navigation(self):
         repo_root = Path(__file__).resolve().parents[2]

@@ -19,7 +19,7 @@ from core.config import AppSettings, get_settings
 from core.logging_utils import sanitize_exception, sanitize_log_value
 import aiosqlite  # noqa: F401 — used by tests via unittest.mock.patch
 from db.database import _is_postgres, get_db
-from services.alldebrid import AllDebridService, flatten_files
+from services.alldebrid import AllDebridAPIError, AllDebridService, flatten_files
 from services.aria2 import Aria2ConnectionError, Aria2RPCError, Aria2Service
 from services.aria2_runtime import aria2_global_options, effective_rpc_config, is_builtin_mode
 from services.extractor import archive_paths_from_downloads, get_extractor
@@ -172,9 +172,70 @@ def direct_link_filename(url: str, fallback_index: int = 1) -> str:
     parsed = urlparse(str(url or ""))
     candidate = unquote(PurePosixPath(parsed.path or "").name).strip()
     if not candidate:
-        candidate = parsed.hostname or f"debrid-link-{fallback_index}"
+        # Query-only hosters such as 1fichier encode the opaque file identity
+        # in the leading bare query component, sometimes followed by ordinary
+        # parameters (for example: ?<token>&af=...). Retain only that leading
+        # opaque component and never expose key=value query parameters.
+        raw_query = str(parsed.query or "").strip()
+        leading_query_part = raw_query.split("&", 1)[0].strip()
+        query_token = unquote(leading_query_part).strip()
+        if query_token and "=" not in query_token and "&" not in query_token:
+            candidate = f"{parsed.hostname or 'debrid-link'} - {query_token}"
+        else:
+            candidate = parsed.hostname or f"debrid-link-{fallback_index}"
     candidate = safe_name(candidate)
     return candidate or f"debrid-link-{fallback_index}"
+
+
+def _direct_link_collection_base(filename: str) -> str:
+    """Return a conservative collection stem for known multipart filenames."""
+    name = safe_name(str(filename or "").strip())
+    patterns = (
+        r"(?i)^(?P<base>.+)\.part\d+\.rar$",
+        r"(?i)^(?P<base>.+)\.r\d{2,3}$",
+        r"(?i)^(?P<base>.+)\.(?:7z|zip|rar)\.\d{3}$",
+    )
+    for pattern in patterns:
+        match = re.match(pattern, name)
+        if match:
+            base = match.group("base").rstrip(" .-_")
+            if base:
+                return base
+    return name
+
+
+def direct_link_collection_name(
+    resolved_names: List[str], source_urls: List[str]
+) -> str:
+    """Build a useful parent label without inventing unavailable filenames."""
+    urls = list(source_urls or [])
+    total = len(urls)
+    resolved = [
+        safe_name(str(name))
+        for name in (resolved_names or [])
+        if str(name or "").strip()
+    ]
+
+    if total <= 0:
+        return "Debrid links"
+
+    if total == 1:
+        return (
+            resolved[0]
+            if resolved
+            else direct_link_filename(urls[0], 1)
+        )
+
+    if resolved:
+        bases = [_direct_link_collection_base(name) for name in resolved]
+        first_base = bases[0]
+        if all(base.casefold() == first_base.casefold() for base in bases[1:]):
+            return safe_name(f"{first_base} ({total} links)")
+
+        return safe_name(f"{resolved[0]} + {total - 1} more")
+
+    fallback = direct_link_filename(urls[0], 1)
+    return safe_name(f"{fallback} + {total - 1} more")
 
 
 def is_blocked(filename: str, cfg: AppSettings, size_bytes: int = 0) -> Tuple[bool, str]:
@@ -277,13 +338,17 @@ def normalize_provider_state(magnet: Dict) -> Dict[str, object]:
     }
 
 
-async def _retry_async(fn, *args, attempts: int = MAX_FILE_RETRIES, delay: float = 1.0):
+async def _retry_async(
+    fn, *args, attempts: int = MAX_FILE_RETRIES, delay: float = 1.0, retry_if=None
+):
     last_error = None
     for attempt in range(1, attempts + 1):
         try:
             return await fn(*args)
         except Exception as exc:
             last_error = exc
+            if retry_if is not None and not retry_if(exc):
+                break
             if attempt >= attempts:
                 break
             await asyncio.sleep(delay * attempt)
@@ -986,6 +1051,10 @@ class TorrentManager:
                         generated = await _retry_async(
                             self.ad().unlock_link,
                             row["source_url"],
+                            retry_if=lambda exc: not (
+                                isinstance(exc, AllDebridAPIError)
+                                and exc.code == "LINK_DOWN"
+                            ),
                         )
                         generated_url = str(generated.get("link") or "").strip()
                         parsed = urlparse(generated_url)
@@ -1012,6 +1081,7 @@ class TorrentManager:
                             "filename": safe_name(str(filename)),
                             "size_bytes": max(0, size_bytes),
                             "error": None,
+                            "missing": False,
                         }
                     except Exception as exc:
                         return {
@@ -1022,31 +1092,45 @@ class TorrentManager:
                             ),
                             "size_bytes": 0,
                             "error": sanitize_exception(exc, max_length=500),
+                            "missing": (
+                                isinstance(exc, AllDebridAPIError)
+                                and exc.code == "LINK_DOWN"
+                            ),
                         }
 
             results = await asyncio.gather(*[_unlock(row) for row in file_rows])
             reserved_paths: Set[str] = set()
             succeeded = 0
             failed = 0
+            missing = 0
             total_size = 0
             resolved_names: List[str] = []
 
             for position, result in enumerate(results, start=1):
                 if result["error"]:
                     failed += 1
+                    is_missing = bool(result.get("missing"))
+                    if is_missing:
+                        missing += 1
+                    failure_status = "missing" if is_missing else "error"
+                    failure_reason = (
+                        "File is no longer available on the source host"
+                        if is_missing
+                        else result["error"]
+                    )
                     async with get_db() as db:
                         await db.execute(
                             """UPDATE download_files
-                               SET status='error', block_reason=?,
+                               SET status=?, block_reason=?,
                                    updated_at=CURRENT_TIMESTAMP
                                WHERE id=?""",
-                            (result["error"], result["file_id"]),
+                            (failure_status, failure_reason, result["file_id"]),
                         )
                         await db.execute(
                             "INSERT INTO events (torrent_id, level, message) VALUES (?, 'error', ?)",
                             (
                                 torrent_id,
-                                f"AllDebrid could not generate link {position}: {result['error']}",
+                                f"AllDebrid could not generate link {position}: {failure_reason}",
                             ),
                         )
                         await db.commit()
@@ -1074,10 +1158,9 @@ class TorrentManager:
                         )
                         await db.commit()
 
-            if len(normalized) == 1 and resolved_names:
-                final_name = resolved_names[0]
-            else:
-                final_name = f"Debrid link batch ({len(normalized)} links)"
+            final_name = direct_link_collection_name(
+                resolved_names, normalized
+            )
 
             if succeeded:
                 error_message = (
@@ -1114,15 +1197,25 @@ class TorrentManager:
                 )
                 await self._dispatch_pending_aria2_queue()
             else:
-                message = "All submitted links failed during AllDebrid generation"
+                all_missing = failed > 0 and missing == failed
+                message = (
+                    "File is no longer available on the source host"
+                    if all_missing and len(normalized) == 1
+                    else (
+                        f"{missing} submitted files are no longer available on their source hosts"
+                        if all_missing
+                        else "All submitted links failed during AllDebrid generation"
+                    )
+                )
+                provider_status = "missing" if all_missing else "error"
                 async with get_db() as db:
                     await db.execute(
                         """UPDATE torrents
-                           SET name=?, status='error', provider_status='error',
+                           SET name=?, status='error', provider_status=?,
                                error_message=?, progress=0,
                                updated_at=CURRENT_TIMESTAMP
                            WHERE id=?""",
-                        (final_name, message, torrent_id),
+                        (final_name, provider_status, message, torrent_id),
                     )
                     await db.execute(
                         "INSERT INTO events (torrent_id, level, message) VALUES (?, 'error', ?)",
@@ -3502,6 +3595,7 @@ class TorrentManager:
                          AND t.status IN ('queued', 'downloading', 'paused')
                          AND f.download_client = 'aria2'
                          AND f.blocked = 0
+                         AND f.status != 'missing'
                        ORDER BY t.id, f.id"""
                 )
             ).fetchall()
@@ -3690,9 +3784,10 @@ class TorrentManager:
             counts = await (
                 await db.execute(
                     """SELECT
-                           SUM(CASE WHEN blocked=0 THEN 1 ELSE 0 END) AS required_count,
+                           SUM(CASE WHEN blocked=0 AND status!='missing' THEN 1 ELSE 0 END) AS required_count,
                            SUM(CASE WHEN blocked=0 AND status='completed' THEN 1 ELSE 0 END) AS completed_count,
                            SUM(CASE WHEN blocked=0 AND status='error' THEN 1 ELSE 0 END) AS error_count,
+                           SUM(CASE WHEN blocked=0 AND status='missing' THEN 1 ELSE 0 END) AS missing_count,
                            SUM(CASE WHEN blocked=0 AND status IN ('pending', 'queued', 'downloading', 'paused') THEN 1 ELSE 0 END) AS active_count,
                            SUM(CASE WHEN blocked=0 AND status='paused' THEN 1 ELSE 0 END) AS paused_count,
                            SUM(CASE WHEN blocked=0 AND status='downloading' THEN 1 ELSE 0 END) AS downloading_count,
@@ -3705,6 +3800,7 @@ class TorrentManager:
             required_count = int(counts["required_count"] or 0)
             completed_count = int(counts["completed_count"] or 0)
             error_count = int(counts["error_count"] or 0)
+            missing_count = int(counts["missing_count"] or 0)
             active_count = int(counts["active_count"] or 0)
             paused_count = int(counts["paused_count"] or 0)
             downloading_count = int(counts["downloading_count"] or 0)
@@ -3715,13 +3811,22 @@ class TorrentManager:
             if total_files == 0:
                 # No file records yet — _download() hasn't run, nothing to do
                 return
+            elif required_count == 0 and missing_count > 0:
+                # Missing source files are terminal failures, not filtered files.
+                # Preserve the parent missing/error state established during unlock.
+                return
             elif required_count == 0:
                 # All files were filtered/blocked — nothing to download
                 should_complete = True
                 event_msg = "All files were filtered/blocked — marked completed"
             elif required_count > 0 and completed_count == required_count and error_count == 0 and active_count == 0:
                 should_complete = True
-                event_msg = f"aria2 completed {completed_count} files"
+                event_msg = (
+                    f"aria2 completed {completed_count} files; "
+                    f"{missing_count} source file(s) missing"
+                    if missing_count
+                    else f"aria2 completed {completed_count} files"
+                )
             elif error_count > 0 and active_count == 0:
                 await db.execute(
                     "UPDATE torrents SET status='error', error_message='One or more aria2 transfers failed', updated_at=CURRENT_TIMESTAMP WHERE id=?",

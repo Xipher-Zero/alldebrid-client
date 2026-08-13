@@ -212,16 +212,25 @@ function renderKvMap(arr, formatter) {
 function badge(s) {
   const m = {pending:'⏳ Pending',uploading:'⬆ Uploading',processing:'⚙ Processing',
     queued:'🕓 Queued',paused:'⏸ Paused',downloading:'⬇ Downloading',ready:'✓ Ready',completed:'✅ Done',
+    downloading_with_errors:'⬇ Downloading',
     completed_with_errors:'⚠ Completed with errors',
     error:'❌ Error',missing:'❌ Missing file',deleted:'🗑 Deleted',imported:'📋 Imported',partial:'⚠ Partial'};
   const cls = s === 'missing'
     ? 'error'
-    : s === 'completed_with_errors'
+    : s === 'completed_with_errors' || s === 'downloading_with_errors'
       ? 'partial'
       : s;
   return `<span class="badge badge-${cls}">${m[s]||s}</span>`;
 }
 function transferDisplayStatus(t) {
+  if (
+    t &&
+    t.source === 'direct_link' &&
+    t.status === 'downloading' &&
+    String(t.error_message || '').trim()
+  ) {
+    return 'downloading_with_errors';
+  }
   if (
     t &&
     t.source === 'direct_link' &&

@@ -44,6 +44,7 @@ function nav(el) {
   const content = document.getElementById('content');
   if (content) {
     content.classList.toggle('dashboard-active', v === 'dashboard');
+    content.classList.toggle('settings-active', v === 'settings');
     content.scrollTop = 0;
   }
 
@@ -1259,6 +1260,7 @@ async function loadSettings() {
 }
 
 function renderSettings() {
+  const _settingsScrollTop = document.getElementById('settings-form')?.scrollTop || 0;
   const s = settingsData;
   const aria2BuiltIn = (s.aria2_mode || 'builtin') === 'builtin';
   flexgetTaskSchedules = parseFlexgetTaskSchedules(s.flexget_task_schedules_json);
@@ -1324,10 +1326,6 @@ function renderSettings() {
         <div class="form-group">
           <label class="form-label">Processed Folder</label>
           <input class="input" id="s-processed_folder" value="${s.processed_folder||''}"/>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Download Folder</label>
-          <input class="input" id="s-download_folder" value="${s.download_folder||''}"/>
         </div>
         <div class="form-group">
           <label class="form-label">Max Concurrent Downloads</label>
@@ -1432,8 +1430,8 @@ function renderSettings() {
           <div id="symlink-settings" style="display:${s.download_client==='symlink'?'block':'none'};margin-top:10px;border-left:3px solid var(--accent);padding-left:12px">
             <div class="form-group">
               <label class="form-label">Symlink / .url Output Path</label>
-              <input class="input" id="s-symlink_path" value="${s.symlink_path||''}" placeholder="Leave empty to use Download Folder"/>
-              <span class="form-hint">Directory where .url files are written. Defaults to Download Folder if empty.</span>
+              <input class="input" id="s-symlink_path" value="${s.symlink_path||''}" placeholder="Leave empty to use Built-in aria2 Download Folder"/>
+              <span class="form-hint">Directory where .url files are written. Defaults to Built-in aria2 Download Folder if empty.</span>
             </div>
           </div>
           <details class="info-details">
@@ -1453,15 +1451,6 @@ function renderSettings() {
                 <div class="info-mode-pros">✔ Faster multi-connection downloads · resumable · aria2 manages bandwidth &amp; concurrency · works across Docker volumes</div>
                 <div class="info-mode-cons">✖ Requires a running aria2 instance with RPC enabled · needs correct RPC URL and optional secret configured below</div>
               </div>
-              <div class="info-mode">
-                <div class="info-mode-title">📁 aria2 Download Root</div>
-                <div class="info-mode-desc">
-                  Only relevant in aria2 mode. When the app and aria2 run in separate Docker containers,
-                  their views of the filesystem differ. Set this to the path that aria2 uses as its download
-                  root (e.g. <code>/downloads</code>) so the app constructs the correct <code>dir</code> and
-                  <code>out</code> options when submitting jobs. Leave empty if both containers share the same mount path.
-                </div>
-              </div>
             </div>
           </details>
         </div>
@@ -1473,6 +1462,101 @@ function renderSettings() {
           </select>
           <span class="form-hint">Built-in aria2 is managed by this container and only receives AllDebrid HTTP(S) links.</span>
         </div>
+
+        <div class="settings-subsection ${aria2BuiltIn ? '' : 'settings-subsection-inactive'}">
+          <div class="settings-subsection-title">Built-in aria2</div>
+
+          <div class="toggle-row">
+            <div class="toggle-info">
+              <div class="tl">Auto-start Built-in aria2</div>
+              <div class="td">Starts the internal aria2 daemon when the app starts in built-in mode.</div>
+            </div>
+            <label class="toggle"><input type="checkbox" id="s-aria2_builtin_auto_start" ${s.aria2_builtin_auto_start!==false?'checked':''} ${aria2BuiltIn?'':'disabled'}><div class="ttrack"></div></label>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Built-in aria2 Port</label>
+            <input class="input" type="number" id="s-aria2_builtin_port" value="${s.aria2_builtin_port??6800}" min="1" max="65535" ${aria2BuiltIn?'':'disabled'}/>
+            <span class="form-hint">The internal RPC secret is managed by the app and cannot be changed from the UI.</span>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Built-in aria2 Log Rotation Size (MB)</label>
+            <input class="input" type="number" id="s-aria2_builtin_log_max_mb" value="${s.aria2_builtin_log_max_mb??25}" min="1" max="1024" ${aria2BuiltIn?'':'disabled'}/>
+            <span class="form-hint">When the aria2 log reaches this size, the client rotates it. Running built-in aria2 is restarted only when needed so the new log file is used.</span>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Built-in aria2 Log Backups</label>
+            <input class="input" type="number" id="s-aria2_builtin_log_backups" value="${s.aria2_builtin_log_backups??3}" min="0" max="20" ${aria2BuiltIn?'':'disabled'}/>
+            <span class="form-hint">How many rotated aria2 log files to keep. 0 truncates the log instead of keeping backups.</span>
+          </div>
+        </div>
+
+        <div class="settings-subsection ${aria2BuiltIn ? 'settings-subsection-inactive' : ''}">
+          <div class="settings-subsection-title">External aria2 Connection</div>
+
+          <div class="form-group">
+            <label class="form-label">aria2 RPC URL</label>
+            <div class="test-row">
+              <input class="input" id="s-aria2_url" value="${aria2BuiltIn ? 'http://127.0.0.1:'+(s.aria2_builtin_port||6800)+'/jsonrpc' : (s.aria2_url||'http://127.0.0.1:6800/jsonrpc')}" placeholder="http://127.0.0.1:6800/jsonrpc" ${aria2BuiltIn?'disabled':''}/>
+              <button class="btn btn-blue btn-sm" onclick="testAria2()" ${aria2BuiltIn?'disabled':''}>Test</button>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">aria2 Secret</label>
+            <input class="input" type="password" id="s-aria2_secret" value="${aria2BuiltIn ? 'managed-internally' : (s.aria2_secret||'')}" placeholder="Optional RPC secret" ${aria2BuiltIn?'disabled':''}/>
+            <span class="form-hint">Used only when aria2 Mode is set to External aria2.</span>
+          </div>
+        </div>
+
+        <div class="settings-subsection">
+          <div class="settings-subsection-title">aria2 Download Path</div>
+
+          <details class="info-details settings-path-help">
+            <summary>How do aria2 download paths work?</summary>
+            <div class="info-details-body">
+              <div class="info-mode">
+                <div class="info-mode-title">Built-in aria2 Download Folder</div>
+                <div class="info-mode-desc">
+                  Built-in aria2 runs inside ACDC and uses the filesystem path visible
+                  inside the ACDC container.
+                </div>
+              </div>
+
+              <div class="info-mode">
+                <div class="info-mode-title">External aria2 Download Path</div>
+                <div class="info-mode-desc">
+                  External aria2 may see the same physical storage at a different
+                  filesystem path. Configure this path as it appears to the external
+                  aria2 daemon.
+                </div>
+              </div>
+
+              <div class="info-mode">
+                <div class="info-mode-title">Example</div>
+                <div class="info-mode-desc">
+                  <code>ACDC / Built-in aria2: /download</code><br>
+                  <code>External aria2: /Volumes/SABnzbdDATA/AriaNG Downloads</code>
+                </div>
+              </div>
+            </div>
+          </details>
+
+          <div class="form-group">
+            <label class="form-label">Built-in aria2 Download Folder</label>
+            <input class="input" id="s-download_folder" value="${s.download_folder||''}"/>
+            <span class="form-hint">Path used by the ACDC-managed aria2 daemon.</span>
+          </div>
+
+          <div class="form-group ${aria2BuiltIn ? 'settings-field-inactive' : ''}">
+            <label class="form-label">External aria2 Download Path</label>
+            <input class="input" id="s-aria2_download_path" value="${s.aria2_download_path||''}" placeholder="Optional external aria2 path" ${aria2BuiltIn?'disabled':''}/>
+            <span class="form-hint">Path to the download location as seen by the external aria2 daemon.</span>
+          </div>
+        </div>
+
         <div class="scard" style="margin-bottom:0">
           <div class="scard-header">aria2 Runtime</div>
           <div class="scard-body">
@@ -1486,6 +1570,7 @@ function renderSettings() {
             </div>
           </div>
         </div>
+
         <div class="scard" style="margin-bottom:0">
           <div class="scard-header">aria2 Live Downloads</div>
           <div class="scard-body">
@@ -1501,44 +1586,8 @@ function renderSettings() {
             </div>
           </div>
         </div>
-        <div class="toggle-row">
-          <div class="toggle-info">
-            <div class="tl">Auto-start Built-in aria2</div>
-            <div class="td">Starts the internal aria2 daemon when the app starts in built-in mode.</div>
-          </div>
-          <label class="toggle"><input type="checkbox" id="s-aria2_builtin_auto_start" ${s.aria2_builtin_auto_start!==false?'checked':''}><div class="ttrack"></div></label>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Built-in aria2 Port</label>
-          <input class="input" type="number" id="s-aria2_builtin_port" value="${s.aria2_builtin_port??6800}" min="1" max="65535"/>
-          <span class="form-hint">The internal RPC secret is managed by the app and cannot be changed from the UI.</span>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Built-in aria2 Log Rotation Size (MB)</label>
-          <input class="input" type="number" id="s-aria2_builtin_log_max_mb" value="${s.aria2_builtin_log_max_mb??25}" min="1" max="1024"/>
-          <span class="form-hint">When the aria2 log reaches this size, the client rotates it. Running built-in aria2 is restarted only when needed so the new log file is used.</span>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Built-in aria2 Log Backups</label>
-          <input class="input" type="number" id="s-aria2_builtin_log_backups" value="${s.aria2_builtin_log_backups??3}" min="0" max="20"/>
-          <span class="form-hint">How many rotated aria2 log files to keep. 0 truncates the log instead of keeping backups.</span>
-        </div>
-        <div class="form-group">
-          <label class="form-label">aria2 RPC URL</label>
-          <div class="test-row">
-            <input class="input" id="s-aria2_url" value="${aria2BuiltIn ? 'http://127.0.0.1:'+(s.aria2_builtin_port||6800)+'/jsonrpc' : (s.aria2_url||'http://127.0.0.1:6800/jsonrpc')}" placeholder="http://127.0.0.1:6800/jsonrpc" ${aria2BuiltIn?'readonly':''}/>
-            <button class="btn btn-blue btn-sm" onclick="testAria2()">Test</button>
-          </div>
-        </div>
-        <div class="form-group">
-          <label class="form-label">aria2 Secret</label>
-          <input class="input" type="password" id="s-aria2_secret" value="${aria2BuiltIn ? 'managed-internally' : (s.aria2_secret||'')}" placeholder="Optional RPC secret" ${aria2BuiltIn?'readonly':''}/>
-        </div>
-        <div class="form-group">
-          <label class="form-label">aria2 Download Root</label>
-          <input class="input" id="s-aria2_download_path" value="${s.aria2_download_path||''}" placeholder="Optional remote root path"/>
-          <span class="form-hint">External aria2 only. Built-in aria2 always uses the Download Folder mount directly.</span>
-        </div>
+
+        <div class="settings-subsection-title settings-subsection-title-spaced">Download Control / Advanced</div>
         <div class="form-group">
           <label class="form-label">aria2 Timeout (seconds)</label>
           <input class="input" type="number" id="s-aria2_operation_timeout_seconds" value="${s.aria2_operation_timeout_seconds??15}" min="5" max="120"/>
@@ -2458,6 +2507,9 @@ function renderSettings() {
     </div>
     </div>`);
   renderFlexgetTaskSchedules();
+  requestAnimationFrame(() => {
+    _sf.scrollTop = _settingsScrollTop;
+  });
 }
 
 function getFormSettings() {
@@ -2655,8 +2707,6 @@ function _updatePremiumLabel(r) {
 }
 
 function switchSettingsTab(id) {
-  const content = document.getElementById('content');
-  const currentTop = content ? content.scrollTop : 0;
   const requestedTab = document.querySelector(`#settings-tabs .stab[data-tab="${id}"]`);
   if (!requestedTab) id = 'tab-general';
   document.querySelectorAll('#settings-tabs .stab').forEach(t => t.classList.toggle('active', t.dataset.tab === id));
@@ -2686,7 +2736,6 @@ function switchSettingsTab(id) {
       if (panel && panel.classList.contains('active')) loadAria2Downloads().catch(()=>{});
     }, 5000);
   }
-  if (content) requestAnimationFrame(() => { content.scrollTop = currentTop; });
 }
 
 async function testAria2() {

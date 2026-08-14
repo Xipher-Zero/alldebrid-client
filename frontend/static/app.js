@@ -382,11 +382,36 @@ function fmtDuration(secs) {
   return (secs/3600).toFixed(1) + 'h';
 }
 
+function updateOperatorTitle(stats) {
+  const active = Math.max(0, parseInt(stats?.operator_active_downloads, 10) || 0);
+
+  if (active === 0) {
+    document.title = 'ACDC';
+    return;
+  }
+
+  const rawProgress = stats?.operator_active_progress_pct;
+  if (rawProgress === null || rawProgress === undefined || rawProgress === '') {
+    document.title = `ACDC | (${active} Active)`;
+    return;
+  }
+
+  const value = Number(rawProgress);
+  if (!Number.isFinite(value)) {
+    document.title = `ACDC | (${active} Active)`;
+    return;
+  }
+
+  const progress = Math.min(100, Math.max(0, Math.round(value)));
+  document.title = `ACDC | (${active} Active) ${progress}%`;
+}
+
 async function loadStats() {
   // Retry up to 5 times — server may be slow on first request after container start
   for (let attempt = 1; attempt <= 5; attempt++) {
     try {
       const s = await api('GET', '/stats');
+      updateOperatorTitle(s);
       // ── populate sidebar version ────────────────────────────────────────
       const versionEl = document.getElementById('sidebar-version');
       if (versionEl) versionEl.textContent = s.version ? `v${s.version}` : 'v—';

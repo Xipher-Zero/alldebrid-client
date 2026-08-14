@@ -773,7 +773,7 @@
                 <div style="background:var(--accent);color:#000;border-radius:50%;min-width:30px;height:30px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;flex-shrink:0">2</div>
                 <div>
                   <div style="font-weight:600;margin-bottom:3px">Set the download folder</div>
-                  <div style="color:var(--text2);font-size:13px">Go to <b>Settings → Download Client</b> and set the <b>Download Folder</b> to an existing path accessible by the container (e.g. <code>/downloads</code>).</div>
+                  <div style="color:var(--text2);font-size:13px">Go to <b>Settings → Download</b> and set the <b>Built-in aria2 Download Folder</b> to an existing path accessible by the container (e.g. <code>/downloads</code>).</div>
                 </div>
               </div>
 
@@ -781,7 +781,7 @@
                 <div style="background:var(--accent);color:#000;border-radius:50%;min-width:30px;height:30px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;flex-shrink:0">3</div>
                 <div>
                   <div style="font-weight:600;margin-bottom:3px">Configure aria2</div>
-                  <div style="color:var(--text2);font-size:13px">By default aria2 runs <b>built-in</b> inside the container — no extra setup. For an external aria2 instance, switch to <b>External RPC</b> in <b>Settings → Download Client</b> and provide the RPC URL.</div>
+                  <div style="color:var(--text2);font-size:13px">By default aria2 runs <b>built-in</b> inside the container — no extra setup. For an external aria2 instance, set <b>aria2 Mode</b> to <b>External aria2</b> in <b>Settings → Download</b> and provide the RPC URL.</div>
                 </div>
               </div>
 
@@ -974,13 +974,14 @@
                   <b>AllDebrid API Key</b> — Required. Get at alldebrid.com/apikeys.<br>
                   <b>Access Control</b> — Optional HTTP Basic Auth. Set both username and password to enable. Leave either empty to disable. Exempt paths: /api/stats, /api/version, /api/avatar (for health checks).<br>
                   <b>Watch Folder</b> — Drop .torrent or .magnet files here for automatic import.<br>
-                  <b>Download Folder</b> — Where aria2 saves files.
                 </div>
               </details>
 
               <details style="margin-bottom:10px"><summary style="cursor:pointer;font-weight:600;color:var(--text1);font-size:13px">Download Client</summary>
                 <div style="padding:6px 0 0 12px">
                   <b>Max Concurrent Downloads</b> — How many torrents are processed (unlocked + dispatched) simultaneously. Default: 3.<br>
+                  <b>Built-in aria2 Download Folder</b> — Local path used by ACDC and built-in aria2.<br>
+                  <b>External aria2 Download Path</b> — Path to that download location as seen by an external aria2 daemon.<br>
                   <b>Min Free Disk Space (GB)</b> — If less than this is available, the download is aborted with an error (torrent row kept). 0 = disabled.<br>
                   <b>On Torrent Complete</b> — Shell command run after each completed download. Placeholders: {name}, {path}, {torrent_id}, {status}.<br>
                   <b>Stuck timeout (hours)</b> — Torrents stuck in active states longer than this are reset. 0 = disabled.
@@ -1044,9 +1045,9 @@
 
               <details><summary style="cursor:pointer;font-weight:600;color:var(--text1)">Downloads start but files are never written to disk</summary>
                 <div style="color:var(--text2);padding:8px 0 0 12px;line-height:1.7">
-                  1. Check the Download Folder path — it must be accessible inside the container.<br>
+                  1. Check the <b>Built-in aria2 Download Folder</b> path — it must be accessible inside the container.<br>
                   2. In Unraid: ensure the path mapping in the Docker template is correct (host path → container path).<br>
-                  3. If using an external aria2 instance, set the <b>aria2 Download Root</b> to the path aria2 uses (may differ from the container path).<br>
+                  3. If using an external aria2 instance, set the <b>External aria2 Download Path</b> to the path seen by that daemon (it may differ from the ACDC container path).<br>
                   4. Check the <code>min_free_disk_gb</code> setting — if the disk is full, downloads abort with an error.
                 </div>
               </details>

@@ -49,6 +49,7 @@
   --font:     'Outfit', sans-serif;
   --mono:     'JetBrains Mono', monospace;
   --sidebar:  240px;
+  --chrome-header-height: 81px;
 }
 body.light {
   /* Light theme: Catppuccin-inspired cool surfaces with blue interaction. */
@@ -269,7 +270,12 @@ nav { flex: 1; padding: 10px 0; overflow-y: auto; }
 #topbar h1 { font-size: 17px; font-weight: 700; flex: 1; }
 #content { flex: 1; overflow-y: auto; padding: 22px 24px; min-height: 0; }
 #content.dashboard-active { overflow-y: hidden; }
-#content.settings-active { overflow-y: hidden; }
+#content.settings-active {
+  overflow-y: hidden;
+  padding-left: 0;
+  padding-right: 0;
+  padding-bottom: 0;
+}
 
 /* ── Buttons ── */
 .btn {
@@ -642,14 +648,13 @@ td { padding: 11px 16px; vertical-align: middle; }
 }
 #settings-tabs {
   flex: 0 0 auto;
-  margin-bottom: 0;
+  margin: 0 24px;
 }
 #settings-form {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
-  padding-top: 18px;
-  padding-right: 4px;
+  padding: 18px 28px 0 24px;
 }
 
 /* Download settings hierarchy. Inactive mode-specific sections remain
@@ -829,7 +834,8 @@ body.light .aria2-err-banner { background: rgba(239,68,68,.07); }
   flex: 0 0 auto;
   background: var(--surface);
   border-top: 1px solid var(--border);
-  padding: 13px 0 0;
+  border-right: 1px solid var(--border);
+  padding: 13px 24px 14px;
   margin: 12px 0 0;
   display: flex;
   align-items: center;
@@ -850,6 +856,17 @@ textarea.input { resize: vertical; }
 
 @media (min-width: 701px) {
   .mobile-menu-btn { display: none; }
+
+  /* Keep the shared page header divider aligned with the sidebar logo divider. */
+  .logo,
+  #topbar {
+    box-sizing: border-box;
+    height: var(--chrome-header-height);
+  }
+
+  #topbar {
+    min-height: var(--chrome-header-height);
+  }
 }
 
 @media (max-width: 700px) {
@@ -948,16 +965,27 @@ textarea.input { resize: vertical; }
   .bulk-bar { flex-wrap: wrap; gap: 6px; font-size: 12px; }
   .stabs { flex-wrap: wrap; gap: 0; }
   .stab  { padding: 7px 9px; font-size: 11px; }
+  #content.settings-active {
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+    padding-bottom: 0 !important;
+  }
+  #settings-tabs {
+    margin-left: 10px;
+    margin-right: 10px;
+  }
   .save-bar {
     flex-wrap: wrap;
     gap: 6px;
     margin: 10px 0 0 !important;
     position: static !important;
-    padding: 10px 0 0 !important;
+    padding: 10px 10px 10px !important;
     box-shadow: none;
   }
   .save-bar .btn { font-size: 11px; padding: 6px 10px; }
-  #settings-form { padding-top: 10px; }
+  #settings-form {
+    padding: 10px 14px 0 10px;
+  }
   .ev-search-row { flex-direction: column; }
   .etime { font-size: 10px; }
   .modal-box { width: 95vw !important; margin: 10px auto; max-height: 90vh; overflow-y: auto; }

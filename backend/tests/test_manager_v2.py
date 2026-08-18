@@ -106,6 +106,60 @@ class ManagerV2Tests(unittest.TestCase):
         self.assertEqual(s["local_status"], "uploading")
 
 
+class GlobalPauseControlTests(unittest.IsolatedAsyncioTestCase):
+    async def test_pause_all_targets_each_active_owned_parent(self):
+        manager = TorrentManager()
+        manager.download_client_name = lambda: "aria2"
+        manager.pause_torrent = AsyncMock(
+            side_effect=[None, RuntimeError("simulated race")]
+        )
+
+        fake_db = types.SimpleNamespace(
+            fetchall=AsyncMock(return_value=[{"id": 11}, {"id": 22}])
+        )
+
+        @asynccontextmanager
+        async def fake_get_db():
+            yield fake_db
+
+        with patch("services.manager_v2.get_db", fake_get_db):
+            result = await manager.pause_all_downloads()
+
+        self.assertEqual(result, {"paused": 1, "failed": 1})
+        self.assertEqual(
+            [call.args[0] for call in manager.pause_torrent.await_args_list],
+            [11, 22],
+        )
+        query = fake_db.fetchall.await_args.args[0]
+        self.assertIn("t.status IN ('queued','downloading')", query)
+        self.assertIn("f.status IN ('queued','downloading')", query)
+
+    async def test_resume_all_only_targets_paused_owned_parents(self):
+        manager = TorrentManager()
+        manager.download_client_name = lambda: "aria2"
+        manager.resume_torrent = AsyncMock()
+
+        fake_db = types.SimpleNamespace(
+            fetchall=AsyncMock(return_value=[{"id": 33}, {"id": 44}])
+        )
+
+        @asynccontextmanager
+        async def fake_get_db():
+            yield fake_db
+
+        with patch("services.manager_v2.get_db", fake_get_db):
+            result = await manager.resume_all_downloads()
+
+        self.assertEqual(result, {"resumed": 2, "failed": 0})
+        self.assertEqual(
+            [call.args[0] for call in manager.resume_torrent.await_args_list],
+            [33, 44],
+        )
+        query = fake_db.fetchall.await_args.args[0]
+        self.assertIn("t.status='paused'", query)
+        self.assertIn("f.status='paused'", query)
+
+
 class ProviderHistoryRetentionTests(unittest.IsolatedAsyncioTestCase):
     async def test_missing_provider_object_is_retained_as_visible_error(self):
         statements = []

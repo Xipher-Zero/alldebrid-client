@@ -137,9 +137,35 @@ def test_dashboard_recent_activity_exposes_pause_resume_but_not_remove():
 
 def test_global_pause_control_is_explicitly_labeled_pause_all():
     frontend = (REPO_ROOT / "frontend/static/app.js").read_text()
+    routes = (REPO_ROOT / "backend/api/routes.py").read_text()
 
     assert "${paused ? 'Resume' : 'Pause All'}" in frontend
     assert "${paused ? 'Resume' : 'Pause'}" not in frontend
+
+    pause_handler = frontend.split("async function pauseProcessing()", 1)[1].split(
+        "async function resumeProcessing()", 1
+    )[0]
+    assert "loadRecent();" in pause_handler
+    assert "loadTorrents()" in pause_handler
+
+    pause_route = routes.split("async def pause_processing():", 1)[1].split(
+        '@router.post("/processing/resume")', 1
+    )[0]
+    resume_route = routes.split("async def resume_processing():", 1)[1].split(
+        "# ── Changelog", 1
+    )[0]
+    assert "await manager.pause_all_downloads()" in pause_route
+    assert "await manager.resume_all_downloads()" in resume_route
+
+    manager = (REPO_ROOT / "backend/services/manager_v2.py").read_text()
+    sync_handler = manager.split("async def sync_aria2_downloads(self):", 1)[1].split(
+        "async def _reset_torrent_for_redownload", 1
+    )[0]
+    dispatch_handler = manager.split(
+        "async def _dispatch_pending_aria2_queue", 1
+    )[1].split("async def sync_download_clients", 1)[0]
+    assert "if self.is_paused()" not in sync_handler.split("all_downloads =", 1)[0]
+    assert "or self.is_paused()" in dispatch_handler.split("return", 1)[0]
 
 
 def test_dashboard_kpi_strip_omits_duplicate_database_tile_and_stays_centered():

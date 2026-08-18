@@ -1221,16 +1221,18 @@ async def pause_processing():
     cfg = cfg.model_copy(update={"paused": True})
     save_settings(cfg)
     apply_settings(cfg)
-    return {"ok": True, "paused": True}
+    result = await manager.pause_all_downloads()
+    return {"ok": True, "paused": True, **result}
 
 
 @router.post("/processing/resume")
 async def resume_processing():
+    result = await manager.resume_all_downloads()
     cfg = get_settings()
     cfg = cfg.model_copy(update={"paused": False})
     save_settings(cfg)
     apply_settings(cfg)
-    return {"ok": True, "paused": False}
+    return {"ok": True, "paused": False, **result}
 
 
 # ── Changelog ──────────────────────────────────────────────────────────────────

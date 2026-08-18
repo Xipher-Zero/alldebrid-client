@@ -357,6 +357,8 @@ async function pauseProcessing() {
     renderTopbarActions();
     toast('Processing paused','warn');
     loadStats();
+    loadRecent();
+    if (document.getElementById('view-torrents').classList.contains('active')) loadTorrents();
   } catch(e) { toast(sanitizeErrorMsg(e.message),'error'); }
 }
 

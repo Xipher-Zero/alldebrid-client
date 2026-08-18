@@ -3099,7 +3099,10 @@ class TorrentManager:
             logger.info("aria2 orphan cleanup: removed %d stale finished/error entries", removed)
 
     async def sync_aria2_downloads(self):
-        if self.is_paused() or self.download_client_name() != "aria2":
+        # Global pause blocks new dispatches, but status monitoring must remain
+        # live. Otherwise an individually resumed transfer would run in aria2
+        # without progress or completion being reflected in DebridPulse.
+        if self.download_client_name() != "aria2":
             return
 
         all_downloads = await self._aria2_get_all()
@@ -3959,15 +3962,28 @@ class TorrentManager:
         async with get_db() as db:
             rows = await (
                 await db.execute(
-                    "SELECT download_id FROM download_files WHERE torrent_id=? AND download_client='aria2' AND blocked=0 AND download_id IS NOT NULL",
+                    """SELECT download_id FROM download_files
+                       WHERE torrent_id=? AND download_client='aria2'
+                         AND blocked=0 AND download_id IS NOT NULL
+                         AND status IN ('queued','downloading')""",
                     (torrent_id,),
                 )
             ).fetchall()
         for row in rows:
             await self.aria2().pause(row["download_id"])
         async with get_db() as db:
-            await db.execute("UPDATE download_files SET status='paused', updated_at=CURRENT_TIMESTAMP WHERE torrent_id=? AND download_client='aria2' AND blocked=0", (torrent_id,))
-            await db.execute("UPDATE torrents SET status='paused', updated_at=CURRENT_TIMESTAMP WHERE id=?", (torrent_id,))
+            await db.execute(
+                """UPDATE download_files
+                   SET status='paused', updated_at=CURRENT_TIMESTAMP
+                   WHERE torrent_id=? AND download_client='aria2' AND blocked=0
+                     AND status IN ('queued','downloading')""",
+                (torrent_id,),
+            )
+            await db.execute(
+                """UPDATE torrents SET status='paused', updated_at=CURRENT_TIMESTAMP
+                   WHERE id=? AND status IN ('queued','downloading')""",
+                (torrent_id,),
+            )
             await db.commit()
         await self._log_event(torrent_id, "info", "Paused aria2 transfer queue")
 
@@ -3977,17 +3993,96 @@ class TorrentManager:
         async with get_db() as db:
             rows = await (
                 await db.execute(
-                    "SELECT download_id FROM download_files WHERE torrent_id=? AND download_client='aria2' AND blocked=0 AND download_id IS NOT NULL",
+                    """SELECT download_id FROM download_files
+                       WHERE torrent_id=? AND download_client='aria2'
+                         AND blocked=0 AND download_id IS NOT NULL
+                         AND status='paused'""",
                     (torrent_id,),
                 )
             ).fetchall()
         for row in rows:
             await self.aria2().resume(row["download_id"])
         async with get_db() as db:
-            await db.execute("UPDATE download_files SET status='queued', updated_at=CURRENT_TIMESTAMP WHERE torrent_id=? AND download_client='aria2' AND blocked=0", (torrent_id,))
-            await db.execute("UPDATE torrents SET status='queued', updated_at=CURRENT_TIMESTAMP WHERE id=?", (torrent_id,))
+            await db.execute(
+                """UPDATE download_files
+                   SET status='queued', updated_at=CURRENT_TIMESTAMP
+                   WHERE torrent_id=? AND download_client='aria2' AND blocked=0
+                     AND status='paused'""",
+                (torrent_id,),
+            )
+            await db.execute(
+                """UPDATE torrents SET status='queued', updated_at=CURRENT_TIMESTAMP
+                   WHERE id=? AND status='paused'""",
+                (torrent_id,),
+            )
             await db.commit()
         await self._log_event(torrent_id, "info", "Resumed aria2 transfer queue")
+
+    async def pause_all_downloads(self) -> dict:
+        """Pause every active DebridPulse-owned aria2 transfer.
+
+        The application-level paused setting prevents new work from being
+        dispatched. This method performs the complementary transfer state
+        transition so dashboard and download-list actions reflect reality and
+        individual downloads can be resumed while global processing remains
+        paused.
+        """
+        if self.download_client_name() != "aria2":
+            return {"paused": 0, "failed": 0}
+        async with get_db() as db:
+            rows = await db.fetchall(
+                """SELECT DISTINCT t.id
+                   FROM torrents t
+                   JOIN download_files f ON f.torrent_id=t.id
+                   WHERE t.status IN ('queued','downloading')
+                     AND f.download_client='aria2' AND f.blocked=0
+                     AND f.download_id IS NOT NULL
+                     AND f.status IN ('queued','downloading')
+                   ORDER BY t.id"""
+            )
+        paused = 0
+        failed = 0
+        for row in rows:
+            try:
+                await self.pause_torrent(row["id"])
+                paused += 1
+            except Exception as exc:
+                failed += 1
+                logger.warning(
+                    "Pause All could not pause torrent %s: %s",
+                    row["id"],
+                    sanitize_exception(exc),
+                )
+        return {"paused": paused, "failed": failed}
+
+    async def resume_all_downloads(self) -> dict:
+        """Resume every paused DebridPulse-owned aria2 transfer."""
+        if self.download_client_name() != "aria2":
+            return {"resumed": 0, "failed": 0}
+        async with get_db() as db:
+            rows = await db.fetchall(
+                """SELECT DISTINCT t.id
+                   FROM torrents t
+                   JOIN download_files f ON f.torrent_id=t.id
+                   WHERE t.status='paused'
+                     AND f.download_client='aria2' AND f.blocked=0
+                     AND f.download_id IS NOT NULL AND f.status='paused'
+                   ORDER BY t.id"""
+            )
+        resumed = 0
+        failed = 0
+        for row in rows:
+            try:
+                await self.resume_torrent(row["id"])
+                resumed += 1
+            except Exception as exc:
+                failed += 1
+                logger.warning(
+                    "Resume All could not resume torrent %s: %s",
+                    row["id"],
+                    sanitize_exception(exc),
+                )
+        return {"resumed": resumed, "failed": failed}
 
     async def _send_partial_summary(self, torrent_id: int, torrent_name: str, flat_files: List[Dict], blocked_items: List[dict], transferred_items: List[dict], failed_items: List[dict]):
         if not blocked_items:

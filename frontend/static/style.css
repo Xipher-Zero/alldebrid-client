@@ -280,7 +280,52 @@ nav { flex: 1; padding: 10px 0; overflow-y: auto; }
   flex: 0 0 190px;
   width: 190px;
   justify-content: center;
+  position: relative;
+  overflow: visible;
 }
+.aria2-cap-control { position: relative; display: inline-flex; align-items: center; }
+.aria2-cap-toggle {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 1px 3px; border: 0; border-radius: 4px;
+  background: transparent; color: var(--text2); font: inherit;
+  cursor: pointer; white-space: nowrap;
+}
+.aria2-cap-toggle:hover,
+.aria2-cap-toggle[aria-expanded="true"] { background: var(--surface3); color: var(--accent); }
+.aria2-cap-menu {
+  position: absolute; top: calc(100% + 10px); right: -10px;
+  width: 240px; padding: 12px;
+  background: var(--surface); border: 1px solid var(--border2);
+  border-radius: 10px; box-shadow: 0 12px 32px rgba(0,0,0,.28);
+  color: var(--text); z-index: 500;
+}
+.aria2-cap-menu[hidden] { display: none; }
+.aria2-cap-title {
+  margin-bottom: 9px; font-size: 11px; font-weight: 700;
+  color: var(--text2); text-transform: uppercase; letter-spacing: .06em;
+}
+.aria2-cap-options { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.aria2-cap-options button {
+  padding: 7px 8px; border: 1px solid var(--border);
+  border-radius: 7px; background: var(--surface2); color: var(--text2);
+  font: inherit; cursor: pointer;
+}
+.aria2-cap-options button:hover { border-color: var(--accent); color: var(--accent); }
+.aria2-cap-options button.active {
+  border-color: var(--accent); background: rgba(var(--accent-rgb),.12); color: var(--accent);
+}
+.aria2-cap-custom {
+  margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border);
+  text-align: left;
+}
+.aria2-cap-custom label { display: block; margin-bottom: 5px; color: var(--text2); font-size: 11px; }
+.aria2-cap-custom > div { display: flex; gap: 6px; }
+.aria2-cap-custom input {
+  min-width: 0; flex: 1; padding: 6px 7px;
+  border: 1px solid var(--border); border-radius: 7px;
+  background: var(--surface2); color: var(--text); font: inherit;
+}
+.aria2-cap-custom small { display: block; margin-top: 5px; color: var(--text3); font-size: 10px; }
 #content { flex: 1; overflow-y: auto; padding: 22px 24px; min-height: 0; }
 #content.dashboard-active { overflow-y: hidden; }
 #content.settings-active {

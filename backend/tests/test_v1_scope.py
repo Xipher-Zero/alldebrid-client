@@ -182,6 +182,8 @@ def test_global_pause_control_exposes_mixed_selective_pause_state():
 
 def test_topbar_uses_live_aria2_speed_with_human_download_units():
     frontend = (REPO_ROOT / "frontend/static/app.js").read_text()
+    index = (REPO_ROOT / "frontend/static/index.html").read_text()
+    styles = (REPO_ROOT / "frontend/static/style.css").read_text()
 
     assert frontend.count("function fmtSpeed(bps)") == 1
     assert "return '0 KB/s'" in frontend
@@ -198,6 +200,15 @@ def test_topbar_uses_live_aria2_speed_with_human_download_units():
     assert "api('GET', '/aria2/global-stat', null, 3000)" in frontend
     assert "}, 1000);" in frontend
     assert "_aria2TopbarStatBusy" in frontend
+    assert 'id="aria2-badge-limit"' in index
+    assert 'id="aria2-cap-menu"' in index
+    assert 'id="aria2-cap-custom-mbps"' in index
+    assert "Custom cap (MB/s)" in index
+    assert "applyAria2TopbarSpeedCap(104857600)" in index
+    assert "Math.round(mbps * 1048576)" in frontend
+    assert "updateAria2TopbarBadge({limitBps: bps})" in frontend
+    assert ".aria2-cap-menu" in styles
+    assert ".aria2-cap-options" in styles
 
 
 def test_watch_folder_ingestion_is_not_shipped_in_v1():

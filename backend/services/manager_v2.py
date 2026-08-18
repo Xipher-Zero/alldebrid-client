@@ -367,6 +367,7 @@ class TorrentManager:
         self._active: Set[int] = set()
         self._direct_link_tasks: Set[asyncio.Task] = set()
         self._direct_link_task_ids: Set[int] = set()
+        self._aria2_state_lock = asyncio.Lock()
         self._aria2_dispatch_lock = asyncio.Lock()
         self._aria2_ownership_lock = asyncio.Lock()
         self._aria2_ownership_ready = False
@@ -1468,6 +1469,10 @@ class TorrentManager:
         await self.sync_download_clients()
 
     async def deep_sync_aria2_finished(self):
+        async with self._aria2_state_lock:
+            return await self._deep_sync_aria2_finished()
+
+    async def _deep_sync_aria2_finished(self):
         """
         API-based deep sync for aria2 downloads.
 
@@ -2949,11 +2954,12 @@ class TorrentManager:
                     await self._finalize_aria2_torrent(row["torrent_id"])
 
     async def sync_download_clients(self):
-        if self.download_client_name() == "aria2":
-            await self.sync_aria2_downloads()
-            # Enforce slot limit and clean up orphaned finished entries
-            await self._dispatch_pending_aria2_queue()
-            await self._cleanup_aria2_orphans()
+        async with self._aria2_state_lock:
+            if self.download_client_name() == "aria2":
+                await self.sync_aria2_downloads()
+                # Enforce slot limit and clean up orphaned finished entries
+                await self._dispatch_pending_aria2_queue()
+                await self._cleanup_aria2_orphans()
 
     async def _cleanup_aria2_orphans(self):
         """
@@ -3858,6 +3864,10 @@ class TorrentManager:
             logger.debug("page cache drop skipped: %s", exc)
 
     async def pause_torrent(self, torrent_id: int):
+        async with self._aria2_state_lock:
+            return await self._pause_torrent_locked(torrent_id)
+
+    async def _pause_torrent_locked(self, torrent_id: int):
         if self.download_client_name() != "aria2":
             raise ValueError("Pause is only supported for the aria2 download client")
         # Serialize item control with slot dispatch so a pending child cannot
@@ -3897,6 +3907,10 @@ class TorrentManager:
             await self._dispatch_pending_aria2_queue()
 
     async def resume_torrent(self, torrent_id: int):
+        async with self._aria2_state_lock:
+            return await self._resume_torrent_locked(torrent_id)
+
+    async def _resume_torrent_locked(self, torrent_id: int):
         if self.download_client_name() != "aria2":
             raise ValueError("Resume is only supported for the aria2 download client")
         async with self._aria2_dispatch_lock:

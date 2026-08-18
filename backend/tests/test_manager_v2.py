@@ -267,6 +267,32 @@ class GlobalPauseControlTests(unittest.IsolatedAsyncioTestCase):
 
         manager._dispatch_pending_aria2_queue.assert_not_awaited()
 
+    async def test_individual_pause_waits_for_in_progress_state_reconciliation(self):
+        manager = TorrentManager()
+        manager.download_client_name = lambda: "aria2"
+        sync_started = asyncio.Event()
+        release_sync = asyncio.Event()
+
+        async def blocked_sync():
+            sync_started.set()
+            await release_sync.wait()
+
+        manager.sync_aria2_downloads = AsyncMock(side_effect=blocked_sync)
+        manager._dispatch_pending_aria2_queue = AsyncMock()
+        manager._cleanup_aria2_orphans = AsyncMock()
+        manager._pause_torrent_locked = AsyncMock()
+
+        sync_task = asyncio.create_task(manager.sync_download_clients())
+        await sync_started.wait()
+        pause_task = asyncio.create_task(manager.pause_torrent(54))
+        await asyncio.sleep(0)
+
+        manager._pause_torrent_locked.assert_not_awaited()
+        release_sync.set()
+        await asyncio.gather(sync_task, pause_task)
+
+        manager._pause_torrent_locked.assert_awaited_once_with(54)
+
 
 class ProviderHistoryRetentionTests(unittest.IsolatedAsyncioTestCase):
     async def test_missing_provider_object_is_retained_as_visible_error(self):

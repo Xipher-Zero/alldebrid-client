@@ -91,7 +91,37 @@
        style="display:none;align-items:center;gap:6px;background:var(--surface2);border:1px solid var(--accent);border-radius:20px;padding:3px 12px;font-size:11px;color:var(--accent);cursor:pointer;text-decoration:none"
        title="Open the DebridPulse changelog">&#128230; <span id="update-badge-version"></span> available</a>
     <div id="topbar-actions"></div>
-    <div id="aria2-speed-badge" style="display:none;align-items:center;gap:6px;background:var(--surface2);border:1px solid var(--border);border-radius:20px;padding:3px 10px;font-size:11px;color:var(--text2);cursor:default" title="Active / max — live speed — limit"><span style="color:var(--green)">&#9660;</span><span id="aria2-badge-active">0</span><span style="color:var(--text3)">/</span><span id="aria2-badge-max">—</span><span style="color:var(--border);margin:0 2px">|</span><span id="aria2-badge-speed" style="color:var(--green)">0 B/s</span><span style="color:var(--border);margin:0 2px">|</span><span style="color:var(--text3)">&#9660;</span><span id="aria2-badge-limit">&#8734;</span></div>
+    <div id="aria2-speed-badge" style="display:none;align-items:center;gap:6px;background:var(--surface2);border:1px solid var(--border);border-radius:20px;padding:3px 10px;font-size:11px;color:var(--text2);cursor:default" title="Active / max — live speed — download speed cap">
+      <span style="color:var(--green)">&#9660;</span><span id="aria2-badge-active">0</span><span style="color:var(--text3)">/</span><span id="aria2-badge-max">—</span>
+      <span style="color:var(--border);margin:0 2px">|</span><span id="aria2-badge-speed" style="color:var(--green)">0 KB/s</span>
+      <span style="color:var(--border);margin:0 2px">|</span>
+      <div class="aria2-cap-control">
+        <button id="aria2-cap-toggle" class="aria2-cap-toggle" type="button" aria-haspopup="menu" aria-expanded="false" onclick="toggleAria2SpeedCapMenu(event)" title="Set download speed cap">
+          <span aria-hidden="true">&#9660;</span><span id="aria2-badge-limit">&#8734;</span>
+        </button>
+        <div id="aria2-cap-menu" class="aria2-cap-menu" role="menu" hidden>
+          <div class="aria2-cap-title">Download speed cap</div>
+          <div class="aria2-cap-options">
+            <button type="button" data-cap-bps="0" onclick="applyAria2TopbarSpeedCap(0)">Unlimited</button>
+            <button type="button" data-cap-bps="1048576" onclick="applyAria2TopbarSpeedCap(1048576)">1 MB/s</button>
+            <button type="button" data-cap-bps="2097152" onclick="applyAria2TopbarSpeedCap(2097152)">2 MB/s</button>
+            <button type="button" data-cap-bps="5242880" onclick="applyAria2TopbarSpeedCap(5242880)">5 MB/s</button>
+            <button type="button" data-cap-bps="10485760" onclick="applyAria2TopbarSpeedCap(10485760)">10 MB/s</button>
+            <button type="button" data-cap-bps="20971520" onclick="applyAria2TopbarSpeedCap(20971520)">20 MB/s</button>
+            <button type="button" data-cap-bps="52428800" onclick="applyAria2TopbarSpeedCap(52428800)">50 MB/s</button>
+            <button type="button" data-cap-bps="104857600" onclick="applyAria2TopbarSpeedCap(104857600)">100 MB/s</button>
+          </div>
+          <div class="aria2-cap-custom">
+            <label for="aria2-cap-custom-mbps">Custom cap (MB/s)</label>
+            <div>
+              <input id="aria2-cap-custom-mbps" type="number" min="0" step="0.1" inputmode="decimal" placeholder="MB/s" onkeydown="if(event.key==='Enter')applyAria2TopbarCustomSpeedCap()">
+              <button type="button" class="btn btn-primary btn-sm" onclick="applyAria2TopbarCustomSpeedCap()">Apply</button>
+            </div>
+            <small>Enter 0 for unlimited.</small>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
   <div id="content" class="dashboard-active">
 

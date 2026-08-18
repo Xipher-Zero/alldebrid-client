@@ -1002,6 +1002,12 @@ document.addEventListener('DOMContentLoaded', () => {
   setInterval(function() {
     loadAria2TopbarStat().catch(()=>{});
   }, 1000);
+  document.addEventListener('click', function(event) {
+    if (!event.target.closest('.aria2-cap-control')) closeAria2SpeedCapMenu();
+  });
+  document.addEventListener('keydown', function(event) {
+    if (event.key === 'Escape') closeAria2SpeedCapMenu();
+  });
   const isLight = localStorage.getItem('theme') === 'light';
   document.body.classList.toggle('light', isLight);
   updateThemeToggle(isLight);
@@ -3209,7 +3215,7 @@ async function loadAria2SpeedLimit() {
     }
 
     // ── Update topbar badge ───────────────────────────────────────────────
-    updateAria2TopbarBadge({ limitBps: bps, maxDl: maxDl });
+    updateAria2TopbarBadge({limitBps: bps, maxDl: maxDl});
 
   } catch (e) { /* aria2 not connected — silently ignore */ }
 }
@@ -3241,9 +3247,11 @@ async function _setAria2Speed(bps) {
     if (st) { st.style.color='var(--green)'; st.textContent = bps > 0 ? 'Set: ' + fmtSpeed(bps) : 'Unlimited'; }
     setTimeout(function(){ if(st) st.style.color='var(--text2)'; }, 3000);
     updateAria2TopbarBadge({limitBps: bps});
+    return true;
   } catch(e) {
     if (st) { st.style.color='var(--red)'; st.textContent='Error: '+e.message; }
     toast('Speed limit error: '+e.message, 'error');
+    return false;
   }
 }
 
@@ -3255,7 +3263,7 @@ function updateAria2Badge(activeCount) {
   badge.style.display = activeCount > 0 ? '' : 'none';
 }
 
-// Topbar badge: live active count, speed limit, max concurrent
+// Topbar badge: live active count, speed cap, and max concurrent
 var _aria2BadgeState = {active: 0, limitBps: 0, maxDl: 3, liveBps: 0};
 var _aria2TopbarStatBusy = false;
 
@@ -3287,6 +3295,48 @@ function updateAria2TopbarBadge(patch) {
   if (elMax)    elMax.textContent    = s.maxDl || '—';
   if (elSpeed)  elSpeed.textContent  = fmtSpeed(s.liveBps || 0);
   if (elLimit)  elLimit.textContent  = s.limitBps > 0 ? fmtSpeed(s.limitBps) : '\u221e';
+  document.querySelectorAll('#aria2-cap-menu [data-cap-bps]').forEach(function(button) {
+    button.classList.toggle('active', Number(button.dataset.capBps) === Number(s.limitBps || 0));
+  });
+}
+
+function toggleAria2SpeedCapMenu(event) {
+  if (event) event.stopPropagation();
+  var menu = document.getElementById('aria2-cap-menu');
+  var toggle = document.getElementById('aria2-cap-toggle');
+  if (!menu || !toggle) return;
+  var opening = menu.hidden;
+  menu.hidden = !opening;
+  toggle.setAttribute('aria-expanded', opening ? 'true' : 'false');
+  if (opening) {
+    var custom = document.getElementById('aria2-cap-custom-mbps');
+    if (custom && _aria2BadgeState.limitBps > 0) {
+      custom.value = (_aria2BadgeState.limitBps / 1048576).toFixed(1).replace(/\.0$/, '');
+    }
+  }
+}
+
+function closeAria2SpeedCapMenu() {
+  var menu = document.getElementById('aria2-cap-menu');
+  var toggle = document.getElementById('aria2-cap-toggle');
+  if (menu) menu.hidden = true;
+  if (toggle) toggle.setAttribute('aria-expanded', 'false');
+}
+
+async function applyAria2TopbarSpeedCap(bps) {
+  var applied = await _setAria2Speed(Math.max(0, Number(bps) || 0));
+  if (applied) closeAria2SpeedCapMenu();
+}
+
+async function applyAria2TopbarCustomSpeedCap() {
+  var input = document.getElementById('aria2-cap-custom-mbps');
+  var raw = input ? input.value.trim() : '';
+  var mbps = raw === '' ? NaN : Number(raw);
+  if (!Number.isFinite(mbps) || mbps < 0) {
+    toast('Enter a speed cap of 0 MB/s or greater', 'error');
+    return;
+  }
+  await applyAria2TopbarSpeedCap(Math.round(mbps * 1048576));
 }
 
 async function applyAria2MaxDlPreset(val) {

@@ -80,7 +80,7 @@ def log_startup_banner(
     sep = "-" * 56
     lines = [
         sep,
-        f" {APP_NAME} ({APP_SHORT_NAME})  v{version}",
+        f" {APP_NAME}  v{version}",
         sep,
         f" Mode:            {mode}",
         f" Database:        {database}",

@@ -1,5 +1,5 @@
 """
-Comprehensive tests for the AllDebrid-Client download logic.
+Comprehensive tests for the DebridPulse download logic.
 
 Tests cover:
 - Status transitions (state machine)

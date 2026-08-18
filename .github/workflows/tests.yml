@@ -54,13 +54,13 @@ jobs:
             services/aria2.py \
             services/backup.py \
             services/db_maintenance.py \
-            services/flexget.py \
-            services/integrations.py \
-            services/jackett.py \
             services/manager_v2.py \
             services/notifications.py \
             services/stats.py
           echo "All files syntax OK"
+
+      - name: Check frontend JavaScript syntax
+        run: node --check frontend/static/app.js
 
   security:
     runs-on: ubuntu-latest

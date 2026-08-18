@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased — V1
+
+### DebridPulse identity
+
+- Finalized the V1 product name as **DebridPulse**.
+- Standardized the repository, container, service, and image name as `debridpulse`.
+- Set browser and notification identity to `DebridPulse` and API/OCI metadata to **DebridPulse — Multi-provider Debrid Download Manager**.
+- Added startup migration from the transitional ACDC identity and prior AllDebrid client names while preserving custom user-supplied identities.
+- Corrected the project landing page to describe the pruned V1 feature set and GPL-2.0-or-later license.
+
 ## [0.9.4] — 2026-08-12
 
 ### Refreshed themes and application identity

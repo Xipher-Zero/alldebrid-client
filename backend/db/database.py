@@ -1,5 +1,5 @@
 """
-Database layer for ACDC.
+Database layer for DebridPulse.
 
 Supports two modes (controlled by db_type in AppSettings):
   sqlite   -> Default, fully backward compatible, no setup needed
@@ -49,7 +49,7 @@ def _build_dsn() -> str:
     if cfg is None:
         raise RuntimeError("Settings not available")
     ssl = "require" if getattr(cfg, "postgres_ssl", False) else "disable"
-    app_name = getattr(cfg, "postgres_application_name", "alldebrid-client")
+    app_name = getattr(cfg, "postgres_application_name", "debridpulse")
     return (
         f"postgresql://{cfg.postgres_user}:{cfg.postgres_password}"
         f"@{cfg.postgres_host}:{cfg.postgres_port}/{cfg.postgres_db}"
@@ -388,38 +388,9 @@ async def _init_db_sqlite():
             )
         """)
         await db.execute("""
-            CREATE TABLE IF NOT EXISTS flexget_runs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                task_name TEXT NOT NULL,
-                status TEXT DEFAULT 'unknown',
-                elapsed_seconds REAL DEFAULT 0,
-                result_json TEXT DEFAULT '{}',
-                triggered_by TEXT DEFAULT 'manual',
-                ran_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        await db.execute("""
             CREATE TABLE IF NOT EXISTS stats_snapshots (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 snapshot_json TEXT NOT NULL,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS saved_searches (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                query TEXT NOT NULL,
-                indexer TEXT DEFAULT '',
-                category TEXT DEFAULT '',
-                min_seeders INTEGER DEFAULT 1,
-                max_size_gb REAL DEFAULT 0,
-                min_size_gb REAL DEFAULT 0,
-                regex_filter TEXT DEFAULT '',
-                auto_add INTEGER DEFAULT 0,
-                enabled INTEGER DEFAULT 1,
-                interval_minutes INTEGER DEFAULT 60,
-                last_run_at DATETIME,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -570,38 +541,9 @@ async def _init_db_postgres():
                 )
             """)
             await conn.execute("""
-                CREATE TABLE IF NOT EXISTS flexget_runs (
-                    id SERIAL PRIMARY KEY,
-                    task_name TEXT NOT NULL,
-                    status TEXT DEFAULT 'unknown',
-                    elapsed_seconds REAL DEFAULT 0,
-                    result_json TEXT DEFAULT '{}',
-                    triggered_by TEXT DEFAULT 'manual',
-                    ran_at TIMESTAMPTZ DEFAULT NOW()
-                )
-            """)
-            await conn.execute("""
                 CREATE TABLE IF NOT EXISTS stats_snapshots (
                     id SERIAL PRIMARY KEY,
                     snapshot_json TEXT NOT NULL,
-                    created_at TIMESTAMPTZ DEFAULT NOW()
-                )
-            """)
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS saved_searches (
-                    id SERIAL PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    query TEXT NOT NULL,
-                    indexer TEXT DEFAULT '',
-                    category TEXT DEFAULT '',
-                    min_seeders INTEGER DEFAULT 1,
-                    max_size_gb DOUBLE PRECISION DEFAULT 0,
-                    min_size_gb DOUBLE PRECISION DEFAULT 0,
-                    regex_filter TEXT DEFAULT '',
-                    auto_add INTEGER DEFAULT 0,
-                    enabled INTEGER DEFAULT 1,
-                    interval_minutes INTEGER DEFAULT 60,
-                    last_run_at TIMESTAMPTZ,
                     created_at TIMESTAMPTZ DEFAULT NOW()
                 )
             """)

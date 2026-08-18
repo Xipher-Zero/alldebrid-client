@@ -33,7 +33,7 @@ class _FakePostgresConnection:
 
 
 @pytest.mark.asyncio
-async def test_postgres_schema_creates_saved_searches_table():
+async def test_postgres_schema_excludes_removed_automation_tables():
     from db.database import _init_db_postgres
 
     fake_conn = _FakePostgresConnection()
@@ -43,12 +43,18 @@ async def test_postgres_schema_creates_saved_searches_table():
         await _init_db_postgres()
 
     ddl = "\n".join(fake_conn.statements)
-    assert "CREATE TABLE IF NOT EXISTS saved_searches" in ddl
-    assert "last_run_at TIMESTAMPTZ" in ddl
-    assert "interval_minutes INTEGER DEFAULT 60" in ddl
+    assert "CREATE TABLE IF NOT EXISTS torrents" in ddl
+    assert "CREATE TABLE IF NOT EXISTS stats_snapshots" in ddl
+    assert "CREATE TABLE IF NOT EXISTS saved_searches" not in ddl
+    assert "CREATE TABLE IF NOT EXISTS flexget_runs" not in ddl
 
 
-def test_saved_searches_are_included_in_bidirectional_migration_tables():
+def test_bidirectional_migration_only_includes_supported_tables():
     from db.migration import MIGRATION_TABLES
 
-    assert MIGRATION_TABLES[-1] == "saved_searches"
+    assert MIGRATION_TABLES == [
+        "torrents",
+        "download_files",
+        "events",
+        "stats_snapshots",
+    ]

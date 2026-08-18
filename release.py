@@ -36,7 +36,7 @@ headers = ["-H", f"Authorization: token {pat}", "-H", "Content-Type: application
 # 3. Existierendes Release holen
 r = subprocess.run(
     ["curl", "-s"] + headers +
-    [f"https://api.github.com/repos/Xipher-Zero/alldebrid-client/releases/tags/{tag}"],
+    [f"https://api.github.com/repos/Xipher-Zero/debridpulse/releases/tags/{tag}"],
     capture_output=True, text=True
 )
 existing = json.loads(r.stdout)
@@ -48,7 +48,7 @@ if release_id:
     # Update
     r2 = subprocess.run(
         ["curl", "-s", "-X", "PATCH"] + headers +
-        ["-d", payload, f"https://api.github.com/repos/Xipher-Zero/alldebrid-client/releases/{release_id}"],
+        ["-d", payload, f"https://api.github.com/repos/Xipher-Zero/debridpulse/releases/{release_id}"],
         capture_output=True, text=True
     )
     resp = json.loads(r2.stdout)
@@ -57,7 +57,7 @@ else:
     # Neu erstellen
     r2 = subprocess.run(
         ["curl", "-s", "-X", "POST"] + headers +
-        ["-d", payload, "https://api.github.com/repos/Xipher-Zero/alldebrid-client/releases"],
+        ["-d", payload, "https://api.github.com/repos/Xipher-Zero/debridpulse/releases"],
         capture_output=True, text=True
     )
     resp = json.loads(r2.stdout)

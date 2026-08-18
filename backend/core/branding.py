@@ -1,6 +1,7 @@
-"""Central product identity for user-visible backend output."""
+"""Central DebridPulse identity for user-visible backend output."""
 
-APP_NAME = "AllDebrid Control & Download Center"
-APP_SHORT_NAME = "ACDC"
-REPOSITORY_URL = "https://github.com/Xipher-Zero/alldebrid-client"
-REPOSITORY_API_URL = "https://api.github.com/repos/Xipher-Zero/alldebrid-client"
+APP_NAME = "DebridPulse"
+APP_SHORT_NAME = "DebridPulse"
+APP_METADATA_TITLE = "DebridPulse — Multi-provider Debrid Download Manager"
+REPOSITORY_URL = "https://github.com/Xipher-Zero/debridpulse"
+REPOSITORY_API_URL = "https://api.github.com/repos/Xipher-Zero/debridpulse"

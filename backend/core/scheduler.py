@@ -77,71 +77,7 @@ async def sync_status_loop():
             await manager.cleanup_stuck_downloads()
         except Exception as e:
             logger.error(f"Stuck download cleanup error: {e}")
-        try:
-            await _enforce_smart_scheduler()
-        except Exception as e:
-            logger.debug(f"Smart scheduler enforcement error: {e}")
         await asyncio.sleep(get_settings().poll_interval_seconds)
-
-
-async def _enforce_smart_scheduler():
-    """
-    Apply Smart Scheduler night-mode limits when outside the configured day window.
-
-    If `bandwidth_day_window` is set (e.g. "08:00-23:00") and the current local
-    time is outside that window, push reduced limits to aria2:
-      - max concurrent downloads = bandwidth_night_max_dl
-      - max speed = bandwidth_night_speed_mbps * 1_000_000 / 8 bytes/s
-
-    When inside the day window the normal aria2 settings are restored.
-    Does nothing if `bandwidth_day_window` is empty.
-    """
-    cfg = get_settings()
-    window = (getattr(cfg, "bandwidth_day_window", "") or "").strip()
-    if not window:
-        return
-
-    import datetime as _dt
-    now = _dt.datetime.now().time()
-
-    def _parse_t(s: str) -> _dt.time:
-        h, m = s.strip().split(":")
-        return _dt.time(int(h), int(m))
-
-    try:
-        start_str, end_str = window.split("-")
-        day_start = _parse_t(start_str)
-        day_end   = _parse_t(end_str)
-    except Exception:
-        return  # invalid format — skip silently
-
-    in_day = day_start <= now < day_end
-
-    night_max_dl = max(0, int(getattr(cfg, "bandwidth_night_max_dl",   1) or 1))
-    night_mbps   = float(getattr(cfg, "bandwidth_night_speed_mbps", 0.0) or 0.0)
-    night_bps    = int(night_mbps * 1_000_000 / 8) if night_mbps > 0 else 0
-
-    day_max_dl   = int(getattr(cfg, "aria2_max_active_downloads", 3) or 3)
-    day_bps      = int(getattr(cfg, "aria2_max_download_limit",   0) or 0)
-
-    try:
-        target_max_dl = day_max_dl if in_day else night_max_dl
-        target_bps    = day_bps    if in_day else night_bps
-
-        options: dict = {}
-        if target_max_dl >= 0:
-            options["max-concurrent-downloads"] = str(target_max_dl)
-        if target_bps >= 0:
-            options["max-overall-download-limit"] = str(target_bps)
-
-        if options:
-            await manager.aria2().change_global_options(options)
-            logger.debug(
-                "smart_scheduler: %s mode — max_dl=%s bps=%s",
-                "day" if in_day else "night", target_max_dl, target_bps,
-            )
-    except Exception as exc:
-        logger.debug("smart_scheduler: aria2 apply failed: %s", exc)
 
 
 async def full_sync_loop():
@@ -387,79 +323,6 @@ async def events_ttl_loop() -> None:
         await asyncio.sleep(86400)  # run once every 24 hours
 
 
-async def saved_searches_loop():
-    """Periodically run all enabled saved searches."""
-    cfg = get_settings()
-    interval = max(5, int(getattr(cfg, "saved_searches_interval_minutes", 60) or 60)) * 60
-    await _jitter_sleep(interval)
-    while True:
-        try:
-            cfg = get_settings()
-            interval = max(5, int(getattr(cfg, "saved_searches_interval_minutes", 60) or 60)) * 60
-            if interval > 0:
-                from db.database import get_db
-                from api.routes import _execute_saved_search
-                async with get_db() as db:
-                    searches = await db.fetchall(
-                        "SELECT * FROM saved_searches WHERE enabled=1"
-                    )
-                for search in (searches or []):
-                    try:
-                        intvl = int(search.get("interval_minutes") or 60)
-                        last_run = search.get("last_run_at")
-                        if last_run:
-                            import datetime as _dt
-                            last = _dt.datetime.fromisoformat(str(last_run).replace('Z',''))
-                            due = last + _dt.timedelta(minutes=intvl)
-                            if _dt.datetime.utcnow() < due:
-                                continue
-                        await _execute_saved_search(dict(search))
-                    except Exception as e:
-                        logger.debug("saved_search run error: %s", e)
-        except Exception as e:
-            logger.error("saved_searches_loop error: %s", e)
-        await asyncio.sleep(interval)
-
-
-async def priority_aging_loop():
-    """
-    Starvation prevention: periodically bump priority of long-waiting torrents.
-
-    Config keys (all with safe defaults):
-      priority_aging_interval_minutes  (int, default 15)
-      priority_aging_threshold_minutes (int, default 60)
-      priority_aging_step              (int, default 1)
-    """
-    await asyncio.sleep(90)          # let startup settle
-    while True:
-        try:
-            cfg      = get_settings()
-            interval  = max(1, int(getattr(cfg, "priority_aging_interval_minutes",  15) or 15))
-            threshold = max(1, int(getattr(cfg, "priority_aging_threshold_minutes", 60) or 60))
-            step      = max(1, int(getattr(cfg, "priority_aging_step",              1)  or 1))
-            if interval > 0:
-                from db.database import get_db
-                async with get_db() as db:
-                    result = await db.execute(
-                        """UPDATE torrents
-                              SET priority   = MIN(priority + ?, 900),
-                                  updated_at = CURRENT_TIMESTAMP
-                            WHERE status IN ('ready','uploading','processing')
-                              AND priority < 900
-                              AND (JULIANDAY('now') - JULIANDAY(created_at)) * 1440 > ?""",
-                        (step, threshold),
-                    )
-                    aged = getattr(result, "rowcount", 0) or 0
-                    if aged:
-                        await db.commit()
-                        logger.debug("priority_aging: bumped %d torrent(s) by +%d", aged, step)
-        except Exception as exc:
-            logger.debug("priority_aging_loop error: %s", exc)
-        await asyncio.sleep(
-            max(1, int(getattr(get_settings(), "priority_aging_interval_minutes", 15) or 15)) * 60
-        )
-
-
 async def recovery_loop():
     """Auto-recovery: detect and heal stuck states every 5 minutes."""
     await asyncio.sleep(120)         # wait for full startup before first check
@@ -509,14 +372,11 @@ async def start_scheduler():
     _tasks.append(asyncio.create_task(aria2_housekeeping_loop()))
     _tasks.append(asyncio.create_task(aria2_log_rotation_loop()))
     _tasks.append(asyncio.create_task(backup_loop()))
-    _tasks.append(asyncio.create_task(flexget_loop()))
     _tasks.append(asyncio.create_task(stats_snapshot_loop()))
     _tasks.append(asyncio.create_task(stats_report_loop()))
     _tasks.append(asyncio.create_task(aria2_restart_loop()))
     _tasks.append(asyncio.create_task(update_check_loop()))
     _tasks.append(asyncio.create_task(events_ttl_loop()))
-    _tasks.append(asyncio.create_task(saved_searches_loop()))
-    _tasks.append(asyncio.create_task(priority_aging_loop()))
     _tasks.append(asyncio.create_task(recovery_loop()))
     _tasks.append(asyncio.create_task(disk_guard_loop()))
     logger.info("Scheduler started")
@@ -526,64 +386,6 @@ async def stop_scheduler():
     for t in _tasks:
         t.cancel()
     _tasks.clear()
-
-
-async def flexget_loop():
-    """
-    Runs scheduled FlexGet tasks individually with per-task intervals and jitter.
-    """
-    from services.flexget import get_task_schedules, next_delay_seconds, run_flexget_tasks, schedule_signature
-
-    next_runs: dict[str, float] = {}
-    last_signature: tuple | None = None
-    await asyncio.sleep(30)  # initial delay
-    while True:
-        cfg = get_settings()
-        if not getattr(cfg, "flexget_enabled", False):
-            next_runs.clear()
-            last_signature = None
-            await asyncio.sleep(60)
-            continue
-
-        schedules = [
-            s for s in get_task_schedules()
-            if bool(s.get("enabled", True)) and int(s.get("interval_minutes", 0) or 0) > 0
-        ]
-        if not schedules:
-            next_runs.clear()
-            last_signature = None
-            await asyncio.sleep(60)
-            continue
-
-        signature = schedule_signature(schedules)
-        now = asyncio.get_running_loop().time()
-        if signature != last_signature:
-            valid_tasks = {str(s["task"]) for s in schedules}
-            next_runs = {task: due_at for task, due_at in next_runs.items() if task in valid_tasks}
-            for schedule in schedules:
-                task_name = str(schedule["task"])
-                if task_name not in next_runs:
-                    next_runs[task_name] = now + next_delay_seconds(schedule)
-            last_signature = signature
-
-        due_schedules = [s for s in schedules if now >= next_runs.get(str(s["task"]), float("inf"))]
-        if not due_schedules:
-            await asyncio.sleep(15)
-            continue
-
-        for schedule in due_schedules:
-            task_name = str(schedule["task"])
-            try:
-                await run_flexget_tasks(
-                    tasks=None if task_name == "*" else [task_name],
-                    triggered_by="schedule",
-                )
-            except Exception as e:
-                logger.error(f"FlexGet scheduled run error ({task_name}): {e}")
-            finally:
-                next_runs[task_name] = asyncio.get_running_loop().time() + next_delay_seconds(schedule)
-
-        await asyncio.sleep(5)
 
 
 async def stats_snapshot_loop():

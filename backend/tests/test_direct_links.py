@@ -251,7 +251,7 @@ class DashboardContractTests(unittest.TestCase):
         self.assertNotIn('id="t-magnet"', html)
         self.assertIn('<span class="nav-label">Downloads</span>', html)
         self.assertIn('id="torrent-card-title">All Downloads</span>', html)
-        self.assertIn('<script src="/app.js?v=8" defer></script>', html)
+        self.assertIn('<script src="/app.js?v=9" defer></script>', html)
         self.assertIn("'/links/add'", js)
         self.assertIn("button.textContent = 'Adding…'", js)
         self.assertIn("🔗 Direct link", js)
@@ -283,7 +283,7 @@ class DashboardContractTests(unittest.TestCase):
         self.assertNotIn('<div class="nav-group">Project</div>', sidebar_nav)
         self.assertIn('class="sidebar-theme-control"', sidebar_nav)
         self.assertIn('aria-label="Switch to light mode"', sidebar_nav)
-        self.assertIn('aria-label="Open the ACDC changelog"', html)
+        self.assertIn('aria-label="Open the DebridPulse changelog"', html)
         self.assertNotIn("data-view=changelog", html)
 
         sidebar_footer = html.split('<div class="sidebar-footer">', 1)[1].split("</aside>", 1)[0]
@@ -303,7 +303,7 @@ class DashboardContractTests(unittest.TestCase):
         self.assertIn("btn.setAttribute('aria-label', action);", js)
         self.assertIn(".sidebar-theme-control", css)
         self.assertNotIn("position:fixed; bottom:16px; right:16px", css)
-        self.assertIn('<link rel="stylesheet" href="/style.css?v=8">', html)
+        self.assertIn('<link rel="stylesheet" href="/style.css?v=9">', html)
 
     def test_theme_branding_and_semantic_colors_are_separated(self):
         repo_root = Path(__file__).resolve().parents[2]
@@ -313,10 +313,10 @@ class DashboardContractTests(unittest.TestCase):
         logo = (repo_root / "frontend/static/logo.svg").read_text()
         favicon = (repo_root / "frontend/static/favicon.svg").read_text()
 
-        self.assertIn("<title>ACDC</title>", html)
+        self.assertIn("<title>DebridPulse</title>", html)
         logo_block = html.split('<div class="logo">', 1)[1].split("</div>\n  </div>", 1)[0]
-        self.assertIn("AllDebrid Control &amp;<br>Download Center", logo_block)
-        self.assertNotIn("(ACDC)", logo_block)
+        self.assertIn("Debrid<span>Pulse</span>", logo_block)
+        self.assertNotIn("ACDC", logo_block)
         self.assertIn('href="/favicon.svg?v=4"', html)
         self.assertIn('href="/favicon-32.png?v=4"', html)
         self.assertIn('href="/apple-touch-icon.png?v=4"', html)

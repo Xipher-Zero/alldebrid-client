@@ -1,5 +1,5 @@
 """
-Tests for AllDebrid-Client backend.
+Tests for the DebridPulse backend.
 
 Deckt ab:
 - aria2 connection robustness (closing transport errors)

@@ -7,7 +7,7 @@
 #   COMPOSE_PROFILES=postgres docker compose up -d
 
 services:
-  alldebrid-client:
+  debridpulse:
     environment:
       - DB_TYPE=postgres_internal
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-alldebrid_internal}

@@ -1,4 +1,4 @@
-/* ACDC — AllDebrid Control & Download Center */
+/* DebridPulse — Multi-provider Debrid Download Manager */
 
 
 
@@ -729,21 +729,6 @@ td { padding: 11px 16px; vertical-align: middle; }
 #settings-form textarea.input { max-width: 100%; }
 #settings-form .test-row { max-width: 940px; align-items: center; }
 #settings-form .test-row .input { min-width: 220px; }
-.flexget-schedule-row {
-  display: grid;
-  grid-template-columns: minmax(220px, 1.35fr) minmax(112px,.45fr) minmax(112px,.45fr) 90px 104px;
-  gap: 10px;
-  align-items: end;
-  padding: 10px 0;
-  border-bottom: 1px solid var(--border);
-}
-.flexget-schedule-row .form-group { margin: 0; max-width: none !important; }
-.flexget-task-cell .input { min-width: 0; }
-.flexget-row-btn { width: 100%; justify-content: center; }
-@media (max-width: 980px) {
-  .flexget-schedule-row { grid-template-columns: 1fr 1fr; align-items: start; }
-  .flexget-task-cell { grid-column: 1 / -1; }
-}
 /* Event search */
 .ev-search-row { display:flex; gap:8px; margin-bottom:10px; }
 .ev-search-row .input { flex:1; }

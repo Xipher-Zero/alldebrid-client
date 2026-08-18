@@ -1,4 +1,4 @@
-# ACDC — AllDebrid Control & Download Center
+# DebridPulse — Multi-provider Debrid Download Manager
 #
 # Operating modes:
 #
@@ -23,19 +23,19 @@
 
 services:
 
-  alldebrid-client:
-    image: ghcr.io/xipher-zero/alldebrid-client:internal-v0.9.4
+  debridpulse:
+    image: ghcr.io/xipher-zero/debridpulse:internal-v0.9.4
     build: .
-    container_name: alldebrid-client
+    container_name: debridpulse
     restart: unless-stopped
     # host mode: avoids custom bridge networks that conflict with Unraid shfs
     network_mode: host
     volumes:
-      - /mnt/user/appdata/alldebrid-client/data:/app/data
-      - /mnt/user/appdata/alldebrid-client/config:/app/config
+      - /mnt/user/appdata/debridpulse/data:/app/data
+      - /mnt/user/appdata/debridpulse/config:/app/config
     environment:
       # File ownership for downloaded files — set to match your host user
-      # so that Sonarr, Radarr, Plex, etc. can read and write the files.
+      # so that other host processes can read and write the files.
       # Run `id` on the host to find your UID and GID.
       - PUID=99
       - PGID=100

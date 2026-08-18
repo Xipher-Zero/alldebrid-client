@@ -8,7 +8,6 @@ not be blocked by a bad config value.
 """
 from __future__ import annotations
 
-import json
 import logging
 import re
 from typing import Any, Dict, List, Tuple
@@ -23,16 +22,6 @@ def _is_valid_url(v: str, require_https: bool = False) -> bool:
         return True  # empty = not configured, not invalid
     pattern = r"^https?://.+" if not require_https else r"^https://.+"
     return bool(re.match(pattern, v.strip()))
-
-
-def _is_valid_json_array(v: str) -> bool:
-    if not v or v.strip() == "[]":
-        return True
-    try:
-        parsed = json.loads(v)
-        return isinstance(parsed, list)
-    except Exception:
-        return False
 
 
 # ── Validation rules ──────────────────────────────────────────────────────────
@@ -51,23 +40,31 @@ def _validate(cfg) -> List[Tuple[str, str, Any, Any]]:
     if cfg.alldebrid_api_key and len(cfg.alldebrid_api_key.strip()) < 10:
         warn("alldebrid_api_key", "looks too short to be valid", cfg.alldebrid_api_key)
 
-    legacy_names = {"AllDebrid-Client", "AllDebrid-Torrent-Client"}
+    legacy_names = {
+        "ACDC",
+        "AllDebrid Control & Download Center",
+        "AllDebrid-Client",
+        "AllDebrid-Torrent-Client",
+    }
     if getattr(cfg, "alldebrid_agent", "") in legacy_names:
-        warn("alldebrid_agent", "legacy application identity migrated to ACDC",
-             cfg.alldebrid_agent, "ACDC")
+        warn("alldebrid_agent", "legacy application identity migrated to DebridPulse",
+             cfg.alldebrid_agent, "DebridPulse")
     if getattr(cfg, "discord_username", "") in legacy_names:
-        warn("discord_username", "legacy notification identity migrated to ACDC",
-             cfg.discord_username, "ACDC")
+        warn("discord_username", "legacy notification identity migrated to DebridPulse",
+             cfg.discord_username, "DebridPulse")
+
+    if getattr(cfg, "postgres_application_name", "") == "alldebrid-client":
+        warn("postgres_application_name", "legacy database identity migrated to debridpulse",
+             cfg.postgres_application_name, "debridpulse")
 
     # ── URLs ──────────────────────────────────────────────────────────────────
-    for field in ("aria2_url", "sonarr_url", "radarr_url", "flexget_url", "jackett_url"):
+    for field in ("aria2_url",):
         val = getattr(cfg, field, "")
         if val and not _is_valid_url(val):
             warn(field, "not a valid HTTP(S) URL", val)
 
     for field in ("discord_webhook_url", "discord_webhook_added",
-                  "flexget_webhook_url", "stats_report_webhook_url",
-                  "jackett_webhook_url"):
+                  "stats_report_webhook_url"):
         val = getattr(cfg, field, "")
         if val and not _is_valid_url(val):
             warn(field, "not a valid HTTP(S) URL — webhook will not fire", val)
@@ -108,8 +105,6 @@ def _validate(cfg) -> List[Tuple[str, str, Any, Any]]:
         "backup_keep_days":               (1, 365),
         "backup_interval_hours":          (1, 168),
         "db_backup_keep_days":            (1, 365),
-        "flexget_retry_delay_minutes":    (0, 60),
-        "flexget_task_timeout_seconds":   (0, 86400),
         "stats_snapshot_interval_minutes":(0, 1440),
         "stats_snapshot_keep_days":       (1, 365),
         "stats_report_interval_hours":    (0, 168),
@@ -127,12 +122,6 @@ def _validate(cfg) -> List[Tuple[str, str, Any, Any]]:
             warn(field, f"value {val} below minimum {lo} — clamped", val, lo)
         elif val > hi:
             warn(field, f"value {val} above maximum {hi} — clamped", val, hi)
-
-    # ── JSON fields ───────────────────────────────────────────────────────────
-    for field in ("flexget_task_schedules_json",):
-        val = getattr(cfg, field, "")
-        if not _is_valid_json_array(val):
-            warn(field, "invalid JSON array — reset to empty", val, "[]")
 
     # ── String sanity ─────────────────────────────────────────────────────────
     if cfg.db_type not in ("sqlite", "postgres"):

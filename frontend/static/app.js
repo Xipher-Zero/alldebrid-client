@@ -1,4 +1,4 @@
-/* ACDC — AllDebrid Control & Download Center */
+/* DebridPulse — Multi-provider Debrid Download Manager */
 
 const API = '/api';
 let currentFilter = '';
@@ -7,8 +7,6 @@ let torrentPage = 1;
 let torrentPageSize = 25;
 let torrentTotal = 0;
 let settingsData = {};
-let flexgetAvailableTasks = [];
-let flexgetTaskSchedules = [];
 let aria2DownloadsTimer = null;
 
 function renderTopbarActions() {
@@ -51,7 +49,6 @@ function nav(el) {
   const titles = {
     dashboard:'Dashboard',
     torrents:'Downloads',
-    search:'Search',
     events:'Event Log',
     stats:'Statistics',
     analytics:'Analytics',
@@ -63,8 +60,7 @@ function nav(el) {
   if (v === 'events')    loadEvents();
   if (v === 'stats')     loadDetailedStats();
   if (v === 'analytics') loadAnalytics(_analyticsWindow || 24);
-  if (v === 'settings')  { loadSettings(); setTimeout(loadSavedSearches, 200); }
-  if (v === 'search')    initSearchView();
+  if (v === 'settings')  loadSettings();
   if (v === 'aria2queue') loadAria2QueueView();
   closeSidebar();
 }
@@ -120,11 +116,7 @@ function sourceLabel(source) {
     watch_torrent: 'Watch folder (.torrent)',
     alldebrid_existing: 'AllDebrid import',
     import_existing: 'AllDebrid import',
-    qbit: 'qBittorrent API',
-    api: 'API',
-    jackett: 'Jackett',
-    prowlarr: 'Prowlarr',
-    saved_search: 'Saved search'
+    api: 'API'
   };
   const key = String(source || '').trim();
   return labels[key] || key || '—';
@@ -316,18 +308,6 @@ async function checkConnections() {
   }
   updateAria2ngLink();
 
-  if (cfg.jackett_enabled && cfg.jackett_url && cfg.jackett_api_key) {
-    try {
-      const result = await api('POST', '/settings/test-jackett');
-      setDot('jackett', 'ok', `Jackett: ${result.version || 'online'}`);
-    } catch(e) {
-      setDot('jackett', 'error', `Jackett: ${e.message || 'error'}`);
-    }
-  } else if (cfg.jackett_enabled) {
-    setDot('jackett', 'warn', 'Jackett: incomplete');
-  } else {
-    setDot('jackett', 'warn', 'Jackett: disabled');
-  }
 }
 
 
@@ -387,24 +367,24 @@ function updateOperatorTitle(stats) {
   const active = Math.max(0, parseInt(stats?.operator_active_downloads, 10) || 0);
 
   if (active === 0) {
-    document.title = 'ACDC';
+    document.title = 'DebridPulse';
     return;
   }
 
   const rawProgress = stats?.operator_active_progress_pct;
   if (rawProgress === null || rawProgress === undefined || rawProgress === '') {
-    document.title = `ACDC | (${active} Active)`;
+    document.title = `DebridPulse | (${active} Active)`;
     return;
   }
 
   const value = Number(rawProgress);
   if (!Number.isFinite(value)) {
-    document.title = `ACDC | (${active} Active)`;
+    document.title = `DebridPulse | (${active} Active)`;
     return;
   }
 
   const progress = Math.min(100, Math.max(0, Math.round(value)));
-  document.title = `ACDC | (${active} Active) ${progress}%`;
+  document.title = `DebridPulse | (${active} Active) ${progress}%`;
 }
 
 async function loadStats() {
@@ -946,99 +926,6 @@ function closeModal(e) {
     document.getElementById('overlay').classList.remove('open');
 }
 
-function parseFlexgetTaskSchedules(raw) {
-  try {
-    const parsed = JSON.parse(raw || '[]');
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .filter(item => item && typeof item === 'object')
-      .map(item => ({
-        task: String(item.task || '').trim(),
-        interval_minutes: Math.max(0, parseInt(item.interval_minutes || 0, 10) || 0),
-        jitter_seconds: Math.max(0, parseInt(item.jitter_seconds || 0, 10) || 0),
-        enabled: item.enabled !== false,
-      }))
-      .filter(item => item.task);
-  } catch (_) {
-    return [];
-  }
-}
-
-function serializeFlexgetTaskSchedules() {
-  return JSON.stringify(
-    flexgetTaskSchedules
-      .map(item => ({
-        task: String(item.task || '').trim(),
-        interval_minutes: Math.max(0, parseInt(item.interval_minutes || 0, 10) || 0),
-        jitter_seconds: Math.max(0, parseInt(item.jitter_seconds || 0, 10) || 0),
-        enabled: item.enabled !== false,
-      }))
-      .filter(item => item.task)
-  );
-}
-
-function renderFlexgetTaskSchedules() {
-  const host = document.getElementById('flexget-schedule-editor');
-  if (!host) return;
-  if (!flexgetTaskSchedules.length) {
-    host.innerHTML = '<div class="form-hint">No scheduled tasks configured yet.</div>';
-    return;
-  }
-  host.innerHTML = flexgetTaskSchedules.map((item, index) => `
-    <div class="flexget-schedule-row">
-      <div class="form-group flexget-task-cell">
-        <label class="form-label" style="display:flex;align-items:center;justify-content:space-between">
-          <span>Task</span>
-          <span style="font-size:10px;font-weight:400;color:var(--text2)">enabled</span>
-        </label>
-        <div style="display:flex;align-items:center;gap:6px">
-          <input class="input" list="flexget-task-options" value="${item.task}" onchange="updateFlexgetTaskSchedule(${index}, 'task', this.value)" />
-          <label style="position:relative;display:inline-block;width:36px;height:20px;flex-shrink:0">
-            <input type="checkbox" style="opacity:0;width:0;height:0;position:absolute" ${item.enabled ? 'checked' : ''} onchange="updateFlexgetTaskSchedule(${index}, 'enabled', this.checked)">
-            <span style="position:absolute;inset:0;background:${item.enabled?'var(--accent)':'var(--border2)'};border-radius:10px;cursor:pointer;transition:background .2s"></span>
-            <span style="position:absolute;left:${item.enabled?'18':'3'}px;top:3px;width:14px;height:14px;background:#fff;border-radius:50%;transition:left .2s;pointer-events:none"></span>
-          </label>
-        </div>
-      </div>
-      <div class="form-group">
-        <label class="form-label">Interval (min)</label>
-        <input class="input" type="number" min="0" max="720" value="${item.interval_minutes}" onchange="updateFlexgetTaskSchedule(${index}, 'interval_minutes', this.value)" />
-      </div>
-      <div class="form-group">
-        <label class="form-label">Jitter (sec)</label>
-        <input class="input" type="number" min="0" max="3600" value="${item.jitter_seconds}" onchange="updateFlexgetTaskSchedule(${index}, 'jitter_seconds', this.value)" />
-      </div>
-      <div class="form-group">
-        <label class="form-label">Run</label>
-        <button class="btn btn-ghost btn-sm flexget-row-btn" onclick="flexgetRunSingleTask('${item.task.replace(/'/g,"\\'")}', this)">▶ Run</button>
-      </div>
-      <div class="form-group">
-        <label class="form-label" style="visibility:hidden">x</label>
-        <button class="btn btn-danger btn-sm flexget-row-btn" onclick="removeFlexgetTaskSchedule(${index})">Remove</button>
-      </div>
-    </div>
-  `).join('');
-}
-
-function updateFlexgetTaskSchedule(index, field, value) {
-  const current = flexgetTaskSchedules[index];
-  if (!current) return;
-  if (field === 'enabled') current.enabled = !!value;
-  else if (field === 'interval_minutes' || field === 'jitter_seconds') current[field] = Math.max(0, parseInt(value || 0, 10) || 0);
-  else current[field] = String(value || '').trim();
-  if (field === 'enabled') renderFlexgetTaskSchedules();
-}
-
-function addFlexgetTaskSchedule(task = '') {
-  flexgetTaskSchedules.push({ task, interval_minutes: 60, jitter_seconds: 0, enabled: true });
-  renderFlexgetTaskSchedules();
-}
-
-function removeFlexgetTaskSchedule(index) {
-  flexgetTaskSchedules.splice(index, 1);
-  renderFlexgetTaskSchedules();
-}
-
 // ── Theme toggle ─────────────────────────────────────────────────────────────
 function toggleSidebar() {
   document.getElementById('sidebar').classList.toggle('open');
@@ -1075,10 +962,6 @@ function updateThemeToggle(isLight) {
   }
 }
 document.addEventListener('DOMContentLoaded', () => {
-  document.addEventListener('click', function(e) {
-    var p = document.getElementById('idx-picker');
-    if (p && !p.contains(e.target)) idxClose();
-  });
   setInterval(function() {
     if (settingsData && (settingsData.aria2_mode||'builtin')==='builtin') {
       loadAria2Runtime().catch(()=>{});
@@ -1263,7 +1146,6 @@ function renderSettings() {
   const _settingsScrollTop = document.getElementById('settings-form')?.scrollTop || 0;
   const s = settingsData;
   const aria2BuiltIn = (s.aria2_mode || 'builtin') === 'builtin';
-  flexgetTaskSchedules = parseFlexgetTaskSchedules(s.flexget_task_schedules_json);
 
   // Define tabs
   const tabs = [
@@ -1293,7 +1175,7 @@ function renderSettings() {
           </div>
           <div class="form-group">
             <label class="form-label">Agent Name</label>
-            <input class="input" id="s-alldebrid_agent" value="${s.alldebrid_agent||'ACDC'}"/>
+            <input class="input" id="s-alldebrid_agent" value="${s.alldebrid_agent||'DebridPulse'}"/>
           </div>
         </div>
       </div>
@@ -1357,18 +1239,6 @@ function renderSettings() {
             <label class="form-label">Disk Check Interval (seconds)</label>
             <input class="input" type="number" id="s-disk_guard_interval_seconds" value="${s.disk_guard_interval_seconds??60}" min="10" max="3600"/>
             <span class="form-hint">How often to check free disk space. 30–120 s is recommended. Lower values increase FUSE/NFS stat() calls.</span>
-          </div>
-        </div>
-      </div>
-
-      <div class="scard">
-        <div class="scard-header">⚙️ Post-Processing Script</div>
-        <p class="form-hint" style="padding:4px 14px 6px;margin:0;font-size:11px;color:var(--text3)">Optional shell command executed after a torrent is fully downloaded and imported into Sonarr/Radarr. Leave empty to disable.</p>
-        <div class="scard-body">
-          <div class="form-group">
-            <label class="form-label">On Torrent Complete</label>
-            <input class="input" id="s-on_torrent_complete" value="${s.on_torrent_complete||''}" placeholder="/scripts/notify.sh &quot;{name}&quot; &quot;{path}&quot;"/>
-            <span class="form-hint">Placeholders: <code>{name}</code> · <code>{path}</code> · <code>{torrent_id}</code> · <code>{status}</code>. Timeout: 300 s.</span>
           </div>
         </div>
       </div>
@@ -1520,8 +1390,8 @@ function renderSettings() {
               <div class="info-mode">
                 <div class="info-mode-title">Built-in aria2 Download Folder</div>
                 <div class="info-mode-desc">
-                  Built-in aria2 runs inside ACDC and uses the filesystem path visible
-                  inside the ACDC container.
+                  Built-in aria2 runs inside DebridPulse and uses the filesystem path visible
+                  inside the DebridPulse container.
                 </div>
               </div>
 
@@ -1537,7 +1407,7 @@ function renderSettings() {
               <div class="info-mode">
                 <div class="info-mode-title">Example</div>
                 <div class="info-mode-desc">
-                  <code>ACDC / Built-in aria2: /download</code><br>
+                  <code>DebridPulse / Built-in aria2: /download</code><br>
                   <code>External aria2: /Volumes/SABnzbdDATA/AriaNG Downloads</code>
                 </div>
               </div>
@@ -1547,7 +1417,7 @@ function renderSettings() {
           <div class="form-group">
             <label class="form-label">Built-in aria2 Download Folder</label>
             <input class="input" id="s-download_folder" value="${s.download_folder||''}"/>
-            <span class="form-hint">Path used by the ACDC-managed aria2 daemon.</span>
+            <span class="form-hint">Path used by the DebridPulse-managed aria2 daemon.</span>
           </div>
 
           <div class="form-group ${aria2BuiltIn ? 'settings-field-inactive' : ''}">
@@ -1772,7 +1642,7 @@ function renderSettings() {
           <p class="form-hint" style="margin:0 0 10px">Receive Discord notifications when torrents are added, complete, or fail.</p>
           <div class="form-group">
             <label class="form-label">Bot Name <span style="font-weight:400;color:var(--muted)">(shown as sender in Discord)</span></label>
-            <input class="input" id="s-discord_username" value="${s.discord_username||'ACDC'}" placeholder="ACDC"/>
+            <input class="input" id="s-discord_username" value="${s.discord_username||'DebridPulse'}" placeholder="DebridPulse"/>
           </div>
           <div class="form-group">
             <label class="form-label">Bot Avatar <span style="font-weight:400;color:var(--muted)">(PNG/JPG/WEBP only — no SVG)</span></label>
@@ -1824,36 +1694,6 @@ function renderSettings() {
           </div>
         </div>
       </div>
-      <div class="scard">
-        <div class="scard-header">🪝 Webhook Actions</div>
-        <p class="form-hint" style="padding:4px 14px 6px;margin:0;font-size:11px;color:var(--text3)">
-          Send an HTTP POST with JSON payload to external services (Home Assistant, n8n, Node-RED, …) on torrent lifecycle events.
-          Separate from Discord notifications.
-        </p>
-        <div class="scard-body">
-          <div class="form-group">
-            <label class="form-label">On torrent added</label>
-            <input class="input" id="s-webhook_on_added" value="${esc(s.webhook_on_added||'')}" placeholder="https://…"/>
-          </div>
-          <div class="form-group">
-            <label class="form-label">On download completed</label>
-            <input class="input" id="s-webhook_on_complete" value="${esc(s.webhook_on_complete||'')}" placeholder="https://…"/>
-          </div>
-          <div class="form-group">
-            <label class="form-label">On torrent error</label>
-            <input class="input" id="s-webhook_on_error" value="${esc(s.webhook_on_error||'')}" placeholder="https://…"/>
-          </div>
-          <div class="form-group">
-            <label class="form-label">Webhook secret (Bearer token)</label>
-            <input class="input" id="s-webhook_secret" value="${esc(s.webhook_secret||'')}" placeholder="optional"/>
-            <span class="form-hint">Sent as <code>Authorization: Bearer &lt;secret&gt;</code> header. Leave empty to disable.</span>
-          </div>
-          <div style="margin-top:8px">
-            <button class="btn btn-ghost btn-sm" onclick="testWebhookFromSettings()">▷ Test webhook</button>
-          </div>
-        </div>
-      </div>
-
       <div class="scard" style="border-color:rgba(59,130,246,.3)">
       <div class="scard-header">ℹ️ About Reporting</div>
       <p class="form-hint" style="padding:4px 14px 6px;margin:0;font-size:11px;color:var(--text3)">Periodic statistics snapshots and optional Discord-based statistics reports.</p>
@@ -1920,381 +1760,7 @@ function renderSettings() {
     </div>
 
     </div>`);
-  _sf.insertAdjacentHTML('beforeend', `<div class="stab-panel" id="tab-services">
-      <div class="scard">
-        <div class="scard-header">📺 Sonarr</div>
-        <div class="scard-body">
-          <div class="toggle-row">
-            <div class="toggle-info"><div class="tl">Enable Sonarr</div><div class="ts">Trigger RescanSeries after download completes</div></div>
-            <label class="toggle"><input type="checkbox" id="s-sonarr_enabled" ${s.sonarr_enabled?'checked':''}><div class="ttrack"></div></label>
-          </div>
-          <div class="form-group">
-            <label class="form-label">Sonarr URL</label>
-            <div class="test-row">
-              <input class="input" id="s-sonarr_url" value="${s.sonarr_url||''}" placeholder="http://sonarr:8989"/>
-              <button class="btn btn-blue btn-sm" onclick="testSonarr()">Test Sonarr</button>
-            </div>
-          </div>
-          <div class="form-group">
-            <label class="form-label">API Key</label>
-            <input class="input" type="password" id="s-sonarr_api_key" value="${s.sonarr_api_key||''}" placeholder="Sonarr API key"/>
-          </div>
-        </div>
-      </div>
-      
-      <div class="scard">
-        <div class="scard-header">🎬 Radarr</div>
-        <div class="scard-body">
-          <div class="toggle-row">
-            <div class="toggle-info"><div class="tl">Enable Radarr</div><div class="ts">Trigger RescanMovie after download completes</div></div>
-            <label class="toggle"><input type="checkbox" id="s-radarr_enabled" ${s.radarr_enabled?'checked':''}><div class="ttrack"></div></label>
-          </div>
-          <div class="form-group">
-            <label class="form-label">Radarr URL</label>
-            <div class="test-row">
-              <input class="input" id="s-radarr_url" value="${s.radarr_url||''}" placeholder="http://radarr:7878"/>
-              <button class="btn btn-blue btn-sm" onclick="testRadarr()">Test Radarr</button>
-            </div>
-          </div>
-          <div class="form-group">
-            <label class="form-label">API Key</label>
-            <input class="input" type="password" id="s-radarr_api_key" value="${s.radarr_api_key||''}" placeholder="Radarr API key"/>
-          </div>
-        </div>
-      </div>
-      
-      <div class="scard">
-        <div class="scard-header">🎬 Media Servers</div>
-        <p class="form-hint" style="padding:4px 14px 6px;margin:0;font-size:11px;color:var(--text3)">
-          Automatically trigger a library scan after each download completes.
-        </p>
-        <div class="scard-body">
-          <div class="form-group">
-            <label class="form-label">Plex URL</label>
-            <input class="input" id="s-plex_url" value="${esc(s.plex_url||'')}" placeholder="http://192.168.1.10:32400"/>
-          </div>
-          <div class="form-group">
-            <label class="form-label">Plex Token (X-Plex-Token)</label>
-            <input class="input" id="s-plex_token" value="${esc(s.plex_token||'')}" placeholder="xxxxxxxxxxxxxxxxxxxx"/>
-          </div>
-          <div class="form-group">
-            <label class="form-label">Plex Library Section ID (empty = all)</label>
-            <input class="input" id="s-plex_library_id" value="${esc(s.plex_library_id||'')}" placeholder="1"/>
-            <span class="form-hint">Find your library IDs at <code>http://plex-ip:32400/library/sections</code></span>
-          </div>
-          <div class="form-group">
-            <label class="form-label">Jellyfin URL</label>
-            <input class="input" id="s-jellyfin_url" value="${esc(s.jellyfin_url||'')}" placeholder="http://192.168.1.10:8096"/>
-          </div>
-          <div class="form-group">
-            <label class="form-label">Jellyfin API Key</label>
-            <input class="input" id="s-jellyfin_api_key" value="${esc(s.jellyfin_api_key||'')}" placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"/>
-          </div>
-        </div>
-      </div>
-
-
-    </div>
-
-    <div class="stab-panel" id="tab-indexers">
-      <div class="scard" style="border-color:rgba(59,130,246,.3)">
-        <div class="scard-header">&#8505;&#65039; Jackett Setup</div>
-        <div class="scard-body">
-          <div style="font-size:12px;line-height:1.6;color:var(--text2)">
-            <b>Jackett</b> is a torrent-indexer proxy that lets you search dozens of trackers from one place.<br><br>
-            Set the <b>Jackett URL</b> (e.g. <code style="background:var(--surface2);padding:1px 5px;border-radius:3px">http://jackett:9117</code>)
-            and paste your <b>API Key</b> from the Jackett dashboard (<em>Dashboard &rarr; API Key</em> button).
-          </div>
-        </div>
-      </div>
-
-      <!-- Plex + Jellyfin -->
-      <div class="scard">
-        <div class="scard-header">&#128269; Jackett Integration</div>
-        <div class="scard-body">
-          <div class="toggle-row">
-            <div class="toggle-info"><div class="tl">Enable Jackett</div><div class="td">Show the Search tab and allow torrent searches</div></div>
-            <label class="toggle"><input type="checkbox" id="s-jackett_enabled" ${s.jackett_enabled?'checked':''}><span class="ttrack"></span></label>
-          </div>
-          <div class="form-group">
-            <label class="form-label">Jackett URL</label>
-            <input class="input" id="s-jackett_url" value="${s.jackett_url||'http://localhost:9117'}" placeholder="http://jackett:9117"/>
-            <span class="form-hint">Base URL of your Jackett instance (no trailing slash).</span>
-          </div>
-          <div class="form-group">
-            <label class="form-label">API Key</label>
-            <input class="input" id="s-jackett_api_key" value="${s.jackett_api_key||''}" placeholder="Jackett API key" type="password"/>
-            <span class="form-hint">Found in the Jackett dashboard. Proxied through the backend &mdash; never exposed to the browser.</span>
-          </div>
-          <div style="margin-top:8px">
-            <button class="btn btn-ghost btn-sm" onclick="testJackett()">&#128268; Test Connection</button>
-            <span id="jackett-test-result" style="margin-left:10px;font-size:12px;color:var(--text2)"></span>
-          </div>
-        </div>
-      </div>
-
-
-      <div class="scard">
-        <div class="scard-header">&#128270; Prowlarr</div>
-        <p class="form-hint" style="padding:4px 14px 6px;margin:0;font-size:11px;color:var(--text3)">Modern indexer manager. Alternative to Jackett with native *arr integration.</p>
-        <div class="scard-body">
-          <div class="form-group">
-            <label class="form-label">Enable Prowlarr</label>
-            <label class="toggle"><input type="checkbox" id="s-prowlarr_enabled" ${s.prowlarr_enabled?'checked':''}/><span class="slider"></span></label>
-          </div>
-          <div class="form-group">
-            <label class="form-label">Prowlarr URL</label>
-            <input class="input" id="s-prowlarr_url" value="${s.prowlarr_url||'http://localhost:9696'}" placeholder="http://localhost:9696"/>
-          </div>
-          <div class="form-group">
-            <label class="form-label">API Key</label>
-            <input class="input" id="s-prowlarr_api_key" value="${s.prowlarr_api_key||''}" placeholder="Prowlarr Settings → General → API Key"/>
-            <span class="form-hint">Find it in Prowlarr → Settings → General. When enabled, Prowlarr results appear in the Search view alongside Jackett results.</span>
-          </div>
-          <div style="margin-top:8px">
-            <button class="btn btn-ghost btn-sm" onclick="testProwlarr()">&#128268; Test Connection</button>
-            <span id="prowlarr-test-result" style="margin-left:10px;font-size:12px;color:var(--text2)"></span>
-          </div>
-        </div>
-      </div>
-      <div class="scard">
-        <div class="scard-header">&#128276; Jackett Webhook</div>
-        <div class="scard-body">
-          <div class="form-group">
-            <label class="form-label">Webhook URL <span style="font-weight:400;color:var(--text2)">(optional)</span></label>
-            <div class="test-row">
-              <input class="input" id="s-jackett_webhook_url" value="${s.jackett_webhook_url||''}" placeholder="https://discord.com/api/webhooks/&hellip;"/>
-              <button class="btn btn-blue btn-sm" onclick="testJackettWebhook()">Test</button>
-            </div>
-            <span class="form-hint">Dedicated webhook for torrents added via Jackett. Falls back to the main Discord webhook if empty.</span>
-          </div>
-        </div>
-      </div>
-    </div>
-    
-
-    </div>
-
-    <div class="stab-panel" id="tab-flexget">
-      <div class="scard" style="border-color:rgba(59,130,246,.3)">
-      <div class="scard-header">ℹ️ FlexGet Setup</div>
-      <div class="scard-body">
-        <div style="font-size:12px;line-height:1.6;color:var(--text2)">
-          FlexGet must be running with its <b>web server enabled</b>.
-          Add this to your <code style="background:var(--surface2);padding:1px 5px;border-radius:3px">config.yml</code>:
-          <pre style="background:var(--surface2);border-radius:6px;padding:10px 12px;margin:8px 0;font-size:11px;overflow-x:auto">web_server:
-  bind: 0.0.0.0
-  port: 5050</pre>
-          <b>Creating an API Key:</b><br>
-          Run <code style="background:var(--surface2);padding:1px 5px;border-radius:3px">flexget web passwd &lt;username&gt;</code> to set a password,
-          then use <code style="background:var(--surface2);padding:1px 5px;border-radius:3px">flexget web gentoken</code> to generate a token.
-          Paste that token as API Key below.<br><br>
-          <b>Docker note:</b> Make sure the FlexGet port (5050) is reachable from this container.
-        </div>
-      </div>
-    </div>
-
-    <div class="scard">
-      <div class="scard-header">🤖 FlexGet Integration</div>
-      <div class="scard-body">
-        <div class="toggle-row">
-          <div class="toggle-info"><div class="tl">Enable FlexGet</div><div class="td">Connect to a running FlexGet instance</div></div>
-          <label class="toggle"><input type="checkbox" id="s-flexget_enabled" ${s.flexget_enabled?'checked':''}><span class="ttrack"></span></label>
-        </div>
-        <div class="form-group">
-          <label class="form-label">FlexGet URL</label>
-          <input class="input" id="s-flexget_url" value="${s.flexget_url||'http://localhost:5050'}" placeholder="http://localhost:5050"/>
-          <span class="form-hint">Base URL of the FlexGet web server.</span>
-        </div>
-        <div class="form-group">
-          <label class="form-label">API Key</label>
-          <input class="input" type="password" id="s-flexget_api_key" value="${s.flexget_api_key||''}" placeholder="Optional API token"/>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Tasks to run (comma-separated)</label>
-          <input class="input" id="s-flexget_tasks_raw" value="${s.flexget_tasks_raw||''}" placeholder="task1, task2 — leave empty for all"/>
-          <span class="form-hint">Used for manual runs. Leave empty to run all tasks on demand.</span>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Scheduled Task Profiles</label>
-          <span class="form-hint">Each task can have its own interval and jitter. Disabled rows are ignored.</span>
-          <datalist id="flexget-task-options">
-            ${flexgetAvailableTasks.map(function(task){return '<option value="'+task+'"></option>';}).join('')}
-          </datalist>
-          <div id="flexget-schedule-editor" style="margin-top:8px"></div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
-            <button class="btn btn-ghost btn-sm" onclick="addFlexgetTaskSchedule()">+ Add Task Schedule</button>
-            <button class="btn btn-ghost btn-sm" onclick="flexgetListTasks(true)">↻ Sync Tasks Into Editor</button>
-          </div>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Task timeout (seconds, 0 = 3600)</label>
-          <input class="input" type="number" id="s-flexget_task_timeout_seconds" value="${s.flexget_task_timeout_seconds??0}" min="0"/>
-          <span class="form-hint">Max time to wait for a single task to complete. Default: 3600s (1 hour). Increase for very long-running tasks.</span>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Retry delay when unreachable (minutes)</label>
-          <input class="input" type="number" id="s-flexget_retry_delay_minutes" value="${s.flexget_retry_delay_minutes??5}" min="0" max="60"/>
-          <span class="form-hint">If FlexGet does not respond, wait this many minutes and try once more. 0 = no retry. A webhook is sent if still unreachable, and again when it recovers.</span>
-        </div>
-
-        <div class="form-group">
-          <label class="form-label">FlexGet Webhook URL <span style="font-weight:400;color:var(--text2)">(optional — uses main Discord webhook if empty)</span></label>
-          <input class="input" id="s-flexget_webhook_url" value="${s.flexget_webhook_url||''}" placeholder="Leave empty to use Discord webhook from Settings → Discord"/>
-          <span class="form-hint">Optional. Receives all FlexGet events (run_started, task_started, task_ok, task_error, run_finished, server_unreachable, server_recovered) as Discord embeds or JSON. Falls back to Settings → Discord webhook when empty.</span>
-        </div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">
-          <button class="btn btn-blue btn-sm" onclick="flexgetListTasks()">🔍 List Tasks</button>
-          <button class="btn btn-primary btn-sm" onclick="flexgetRun()">▶ Run Now</button>
-        </div>
-        <div id="flexget-task-list" style="margin-top:10px;font-size:12px;color:var(--text2)"></div>
-        <div id="flexget-run-result" style="margin-top:8px;font-size:12px;display:none"></div>
-      </div>
-    </div>
-
-    <div class="scard">
-      <div class="scard-header">📋 Recent FlexGet Runs</div>
-      <div class="scard-body">
-        <button class="btn btn-ghost btn-sm" onclick="loadFlexgetHistory()" style="margin-bottom:8px">↻ Refresh</button>
-      <div id="flexget-history" style="font-size:12px;color:var(--text2)">Click refresh to load history.</div>
-      </div>
-    </div>
-    </div>`);
-  _sf.insertAdjacentHTML('beforeend', `<div class="stab-panel" id="tab-automation">
-
-      <!-- Rule Engine -->
-      <div class="scard">
-        <div class="scard-header">🤖 Rule Engine</div>
-        <p class="form-hint" style="padding:4px 14px 6px;margin:0;font-size:11px;color:var(--text3)">
-          Automatically set priority, pause, override download path or block torrents based on title, size, label or source.
-          Rules are evaluated in order — all matching rules are applied.
-        </p>
-        <div class="scard-body">
-          <div class="form-group">
-            <label class="form-label">Enable Rule Engine</label>
-            <label class="toggle"><input type="checkbox" id="s-rules_enabled" ${s.rules_enabled?'checked':''}/><span class="slider"></span></label>
-            <span class="form-hint">When disabled, no rules are evaluated and all torrents proceed normally.</span>
-          </div>
-          <div class="form-group">
-            <label class="form-label">Rules (JSON)</label>
-            <textarea class="input" id="s-rules_list" rows="10" style="font-family:var(--mono);font-size:11px;resize:vertical">${esc(s.rules_list||'[]')}</textarea>
-            <span class="form-hint">
-              JSON array of rules. Each rule: <code>{"if": {...}, "then": {...}}</code><br>
-              Conditions: <code>title_contains</code>, <code>title_matches</code> (regex), <code>size_gb_gt</code>, <code>size_gb_lt</code>, <code>label_contains</code>, <code>source_is</code><br>
-              Actions: <code>priority</code> (int, added to current), <code>pause</code> (bool), <code>download_path</code> (str), <code>label</code> (str), <code>block</code> (bool — skips upload)
-            </span>
-          </div>
-          <div style="margin-top:8px;display:flex;gap:8px">
-            <button class="btn btn-ghost btn-sm" onclick="testRuleEngine()">▷ Test Rules</button>
-            <button class="btn btn-ghost btn-sm" onclick="formatRulesJson()">⟳ Format JSON</button>
-          </div>
-          <div id="rules-test-output" style="display:none;margin-top:10px;padding:10px;background:var(--surface2);border-radius:var(--radius);font-size:12px;font-family:var(--mono)"></div>
-        </div>
-      </div>
-
-      <!-- Saved Searches -->
-      <div class="scard">
-        <div class="scard-header">🔍 Saved Searches</div>
-        <p class="form-hint" style="padding:4px 14px 6px;margin:0;font-size:11px;color:var(--text3)">
-          Recurring searches via Jackett or Prowlarr. Results can be auto-added to the queue.
-        </p>
-        <div class="scard-body">
-          <div class="form-group">
-            <label class="form-label">Run interval (minutes)</label>
-            <input class="input" type="number" id="s-saved_searches_interval_minutes" value="${s.saved_searches_interval_minutes??60}" min="5" max="1440"/>
-            <span class="form-hint">How often to run all enabled saved searches. Default: 60 min. Set to 0 to disable the scheduler.</span>
-          </div>
-        </div>
-        <div id="saved-searches-list" style="padding:0 14px 14px">
-          <div style="color:var(--text3);font-size:12px">Loading saved searches…</div>
-        </div>
-        <div style="padding:0 14px 14px">
-          <button class="btn btn-ghost btn-sm" onclick="showAddSavedSearch()">+ Add Saved Search</button>
-        </div>
-        <div id="saved-search-form" style="display:none;padding:0 14px 14px;border-top:1px solid var(--border);margin-top:4px">
-          <div style="font-weight:600;margin-bottom:10px;font-size:13px">New Saved Search</div>
-          <div class="form-group"><label class="form-label">Name</label><input class="input" id="ss-name" placeholder="e.g. New Anime Releases"/></div>
-          <div class="form-group"><label class="form-label">Search Query</label><input class="input" id="ss-query" placeholder="e.g. Attack on Titan S04"/></div>
-          <div class="form-group"><label class="form-label">Min Seeders</label><input class="input" type="number" id="ss-min-seeders" value="1" min="0"/></div>
-          <div class="form-group"><label class="form-label">Regex Filter (optional)</label><input class="input" id="ss-regex" placeholder="e.g. 1080p"/></div>
-          <div class="form-group"><label class="form-label">Auto-add matching results</label><label class="toggle"><input type="checkbox" id="ss-auto-add"/><span class="slider"></span></label></div>
-          <div style="display:flex;gap:8px;margin-top:8px">
-            <button class="btn btn-primary btn-sm" onclick="saveSavedSearch()">Save</button>
-            <button class="btn btn-ghost btn-sm" onclick="document.getElementById('saved-search-form').style.display='none'">Cancel</button>
-          </div>
-        </div>
-      </div>
-
-      <!-- Download Profiles -->
-      <div class="scard">
-        <div class="scard-header">🎯 Download Profiles</div>
-        <p class="form-hint" style="padding:4px 14px 6px;margin:0;font-size:11px;color:var(--text3)">
-          Named presets that bundle download path, priority and label. Activate one to apply it to all new downloads.
-        </p>
-        <div class="scard-body">
-          <div class="form-group">
-            <label class="form-label">Profiles (JSON)</label>
-            <textarea class="input" id="s-download_profiles" rows="6" style="font-family:var(--mono);font-size:11px;resize:vertical">${esc(s.download_profiles||'[]')}</textarea>
-            <span class="form-hint">
-              JSON array: <code>[{"name":"HQ","download_path":"/media/hq","priority":10,"label":"hq"},…]</code>
-            </span>
-          </div>
-          <div id="profiles-list" style="margin-top:8px"></div>
-        </div>
-      </div>
-
-      <!-- Smart Scheduler -->
-      <div class="scard">
-        <div class="scard-header">🌙 Smart Scheduler</div>
-        <p class="form-hint" style="padding:4px 14px 6px;margin:0;font-size:11px;color:var(--text3)">
-          Reduce activity outside the configured day window (night mode) to avoid conflicts with streaming or work hours.
-        </p>
-        <div class="scard-body">
-          <div class="form-group">
-            <label class="form-label">Day window (HH:MM-HH:MM, 24h local)</label>
-            <input class="input" id="s-bandwidth_day_window" value="${esc(s.bandwidth_day_window||'')}" placeholder="e.g. 08:00-23:00  (leave empty to disable)"/>
-            <span class="form-hint">Downloads INSIDE this window use normal settings. Outside = night mode.</span>
-          </div>
-          <div class="form-group">
-            <label class="form-label">Night mode — max concurrent downloads</label>
-            <input class="input" type="number" id="s-bandwidth_night_max_dl" value="${s.bandwidth_night_max_dl??1}" min="0" max="20"/>
-            <span class="form-hint">Set to 0 to pause all downloads at night.</span>
-          </div>
-          <div class="form-group">
-            <label class="form-label">Night mode — speed limit (Mbps, 0 = unlimited)</label>
-            <input class="input" type="number" id="s-bandwidth_night_speed_mbps" value="${s.bandwidth_night_speed_mbps??0}" min="0" step="0.5"/>
-          </div>
-        </div>
-      </div>
-
-      <!-- Auto-Recovery -->
-      <div class="scard">
-        <div class="scard-header">🔧 Priority Aging & Auto-Recovery</div>
-        <div class="scard-body">
-          <div class="form-group">
-            <label class="form-label">Priority aging — interval (minutes)</label>
-            <input class="input" type="number" id="s-priority_aging_interval_minutes" value="${s.priority_aging_interval_minutes??15}" min="0"/>
-            <span class="form-hint">How often to bump priority of waiting torrents. 0 = disabled. Default: 15.</span>
-          </div>
-          <div class="form-group">
-            <label class="form-label">Priority aging — threshold (minutes)</label>
-            <input class="input" type="number" id="s-priority_aging_threshold_minutes" value="${s.priority_aging_threshold_minutes??60}" min="1"/>
-            <span class="form-hint">A torrent must be waiting at least this long before its priority is bumped. Default: 60.</span>
-          </div>
-          <div class="form-group">
-            <label class="form-label">Priority aging — step</label>
-            <input class="input" type="number" id="s-priority_aging_step" value="${s.priority_aging_step??1}" min="1" max="10"/>
-            <span class="form-hint">Priority increment per aging cycle. Default: 1.</span>
-          </div>
-          <div style="margin-top:10px">
-            <button class="btn btn-ghost btn-sm" onclick="runRecovery()">🔧 Run Auto-Recovery now</button>
-          </div>
-        </div>
-      </div>
-
-    </div>
-
-    <div class="stab-panel" id="tab-advanced">
+  _sf.insertAdjacentHTML('beforeend', `<div class="stab-panel" id="tab-advanced">
       <div class="scard">
         <div class="scard-header">🏷 Labels</div>
         <div class="scard-body">
@@ -2392,9 +1858,6 @@ function renderSettings() {
           <div id="backup-list" style="margin-top:10px;font-size:12px;color:var(--text2)"></div>
         </div>
       </div>
-    </div>
-
-    <div class="stab-panel" id="tab-reporting">
     </div>
 
     <div class="stab-panel" id="tab-database">
@@ -2498,7 +1961,7 @@ function renderSettings() {
             <div class="toggle-info"><div class="tl">Backup Before Wipe</div><div class="ts">Run a DB backup automatically before deleting rows</div></div>
             <label class="toggle"><input type="checkbox" id="s-db_backup_before_wipe" ${s.db_backup_before_wipe!==false?'checked':''}><div class="ttrack"></div></label>
           </div>
-          <div class="form-hint" style="margin-top:10px">Pause processing first. Wipe clears torrents, files, events, FlexGet runs, and stats snapshots.</div>
+          <div class="form-hint" style="margin-top:10px">Pause processing first. Wipe clears torrents, files, events, and stats snapshots.</div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
             <button class="btn btn-danger btn-sm" onclick="wipeDatabase()">🗑️ Wipe Database</button>
           </div>
@@ -2506,7 +1969,6 @@ function renderSettings() {
       </div>
     </div>
     </div>`);
-  renderFlexgetTaskSchedules();
   requestAnimationFrame(() => {
     _sf.scrollTop = _settingsScrollTop;
   });
@@ -2532,7 +1994,7 @@ function getFormSettings() {
   return {
     ...settingsData,
     alldebrid_api_key: t('alldebrid_api_key'),
-    alldebrid_agent:   t('alldebrid_agent')||'ACDC',
+    alldebrid_agent:   t('alldebrid_agent')||'DebridPulse',
     watch_folder: t('watch_folder'), processed_folder: t('processed_folder'),
     download_folder: t('download_folder'), max_concurrent_downloads: n('max_concurrent_downloads', 3),
     max_speed_mbps: (settingsData && settingsData.max_speed_mbps != null)
@@ -2569,7 +2031,7 @@ function getFormSettings() {
     postgres_password: t('postgres_password'), postgres_schema: t('postgres_schema'),
     postgres_ssl: c('postgres_ssl'),
     postgres_application_name: t('postgres_application_name'),
-    discord_username: t('discord_username') || 'ACDC',
+    discord_username: t('discord_username') || 'DebridPulse',
     discord_avatar_url: t('discord_avatar_url'),
     discord_webhook_url: t('discord_webhook_url'),
     discord_webhook_added: t('discord_webhook_added'),
@@ -2577,8 +2039,6 @@ function getFormSettings() {
     discord_notify_error: c('discord_notify_error'),
     discord_notify_update: c('discord_notify_update'),
     update_check_interval_hours: n('update_check_interval_hours', 12),
-    sonarr_enabled: c('sonarr_enabled'), sonarr_url: t('sonarr_url'), sonarr_api_key: t('sonarr_api_key'),
-    radarr_enabled: c('radarr_enabled'), radarr_url: t('radarr_url'), radarr_api_key: t('radarr_api_key'),
     torrent_labels: (t('torrent_labels_raw')||'').split(',').map(s=>s.trim()).filter(Boolean),
     stuck_download_timeout_hours: n('stuck_download_timeout_hours'),
     alldebrid_rate_limit_per_minute: n('alldebrid_rate_limit_per_minute'),
@@ -2601,23 +2061,9 @@ function getFormSettings() {
       extract_max_concurrent:   n('extract_max_concurrent', 1),
       discord_notify_extract:   c('discord_notify_extract', true),
     aria2_error_retry_delay_seconds: n('aria2_error_retry_delay_seconds'),
-    flexget_enabled: c('flexget_enabled'),
-    flexget_url: t('flexget_url'),
-    flexget_api_key: t('flexget_api_key'),
-    flexget_tasks_raw: t('flexget_tasks_raw'),
-    flexget_webhook_url: t('flexget_webhook_url'),
-    flexget_task_schedules_json: serializeFlexgetTaskSchedules(),
-    flexget_task_timeout_seconds: n('flexget_task_timeout_seconds'),
-    flexget_retry_delay_minutes: n('flexget_retry_delay_minutes'),
-
     stats_snapshot_interval_minutes: n('stats_snapshot_interval_minutes'),
     stats_snapshot_keep_days: n('stats_snapshot_keep_days'),
     stats_report_interval_hours: n('stats_report_interval_hours'),
-    // Jackett
-    jackett_enabled:     c('jackett_enabled'),
-    jackett_url:         t('jackett_url'),
-    jackett_api_key:     t('jackett_api_key'),
-    jackett_webhook_url: t('jackett_webhook_url'),
     stats_report_window_hours: reportWindowHours,
     stats_report_webhook_url: t('stats_report_webhook_url'),
     // Disk space guard
@@ -2656,10 +2102,8 @@ async function saveSettings() {
     renderSettings();
     switchSettingsTab(activeTab);
     updateAria2ngLink();
-    updateJackettNav();
     toast('Settings saved!','success');
     checkConnections();
-    checkFlexgetRunning();
     // Sync Downloads panel — PUT /settings may have updated aria2 limits,
     // so reload them from aria2 to keep both views consistent.
     loadAria2SpeedLimit();
@@ -2718,16 +2162,8 @@ function switchSettingsTab(id) {
   if (id === 'tab-advanced') {
     loadDatabaseBackupList();
   }
-  if (id === 'tab-automation') {
-    loadSavedSearches();
-    loadDownloadProfiles();
-  }
   if (id === 'tab-extract') {
     initExtractionPasswordList();
-  }
-  if (id === 'tab-services') {
-    flexgetListTasks();
-    loadFlexgetHistory();
   }
   if (id === 'tab-download') {
     loadAria2Runtime().catch(()=>{});
@@ -2979,20 +2415,6 @@ function clearDiscordAvatar() {
   if (preview) preview.style.display = 'none';
 }
 
-async function testSonarr() {
-  try {
-    const r = await api('POST', '/settings/test-sonarr');
-    toast(`Sonarr ${r.app_name} v${r.version} ✓`, 'success');
-  } catch(e) { toast(e.message, 'error'); }
-}
-
-async function testRadarr() {
-  try {
-    const r = await api('POST', '/settings/test-radarr');
-    toast(`Radarr ${r.app_name} v${r.version} ✓`, 'success');
-  } catch(e) { toast(e.message, 'error'); }
-}
-
 async function runDeepSync() {
   try {
     toast('Running deep sync…', 'info');
@@ -3071,127 +2493,6 @@ async function wipeDatabase() {
     loadRecent().catch(()=>{});
     if (document.getElementById('view-torrents')?.classList.contains('active')) loadTorrents().catch(()=>{});
   } catch(e) { toast(e.message, 'error'); }
-}
-
-async function flexgetListTasks(syncToEditor = false) {
-  const el = document.getElementById('flexget-task-list');
-  if (el) el.textContent = '⏳ Loading tasks…';
-  try {
-    const r = await api('GET', '/flexget/tasks');
-    flexgetAvailableTasks = Array.isArray(r.tasks) ? r.tasks : [];
-    const datalist = document.getElementById('flexget-task-options');
-    if (datalist) {
-      datalist.innerHTML = flexgetAvailableTasks.map(task => `<option value="${task}"></option>`).join('');
-    }
-    if (syncToEditor) {
-      const known = new Set(flexgetTaskSchedules.map(item => item.task));
-      for (const task of flexgetAvailableTasks) {
-        if (!known.has(task)) addFlexgetTaskSchedule(task);
-      }
-    }
-    if (!el) return;
-    if (!r.enabled) { el.textContent = 'FlexGet is not enabled.'; return; }
-    el.innerHTML = flexgetAvailableTasks.length
-      ? '<b>Available tasks (' + flexgetAvailableTasks.length + '):</b><br><div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">'
-        + flexgetAvailableTasks.map(t =>
-            `<span style="display:inline-flex;align-items:center;gap:4px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:2px 6px;font-size:11px">
-              <span>${t}</span>
-              <button onclick="flexgetRunSingleTask('${t.replace(/'/g,"\\'")}')" title="Run ${t}" style="background:none;border:none;color:var(--accent);cursor:pointer;font-size:12px;padding:0 2px;line-height:1" onmouseover="this.style.color='var(--accent2)'" onmouseout="this.style.color='var(--accent)'">▶</button>
-            </span>`
-          ).join('')
-        + '</div>'
-      : 'No tasks found.';
-  } catch(e) { if (el) el.textContent = '✗ ' + e.message; }
-}
-
-async function flexgetRun() {
-  const resultEl = document.getElementById('flexget-run-result');
-  resultEl.style.display = 'block';
-  resultEl.style.color = 'var(--text2)';
-  resultEl.textContent = '⏳ Running FlexGet tasks…';
-  const fgRow = document.getElementById('flexget-running-row');
-  if (fgRow) fgRow.style.display = 'flex';
-  const raw = document.getElementById('s-flexget_tasks_raw')?.value || '';
-  const tasks = raw.split(',').map(s=>s.trim()).filter(Boolean);
-  try {
-    const r = await api('POST', '/flexget/run', tasks.length ? {tasks} : {});
-    const hasErr = r.tasks_error > 0;
-    resultEl.style.color = hasErr ? 'var(--yellow)' : 'var(--green)';
-    let msg = `✓ ${r.tasks_ok}/${r.tasks_total} tasks OK, ${r.tasks_error} error(s)`;
-    if (hasErr && r.first_error) msg += ` — ${r.first_error}`;
-    resultEl.textContent = msg;
-    if (fgRow) { setTimeout(() => { if (fgRow) fgRow.style.display = 'none'; }, 2000); }
-    if (btnEl) { btnEl.disabled = false; btnEl.textContent = '▶ Run'; }
-    loadFlexgetHistory();
-  } catch(e) {
-    resultEl.style.color = 'var(--red)';
-    resultEl.textContent = '✗ ' + e.message;
-  }
-}
-
-async function loadFlexgetHistory() {
-  const el = document.getElementById('flexget-history');
-  if (!el) return;
-  try {
-    const r = await api('GET', '/flexget/history?limit=20');
-    if (!r.runs.length) { el.textContent = 'No FlexGet runs yet.'; return; }
-    el.innerHTML = r.runs.map(run => {
-      const color = run.status === 'ok' ? 'var(--green)' : run.status === 'timeout' ? 'var(--yellow)' : 'var(--red)';
-      return `<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border);font-size:11px">
-        <span style="color:${color}">●</span>
-        <span style="flex:1;margin:0 8px">${run.task_name}</span>
-        <span style="color:var(--text3)">${run.triggered_by}</span>
-        <span style="color:var(--text3);margin-left:8px">${run.elapsed_seconds?.toFixed(1)}s</span>
-        <span style="color:var(--text3);margin-left:8px">${(run.ran_at||'').slice(0,16)}</span>
-      </div>`;
-    }).join('');
-  } catch(e) { el.textContent = '✗ ' + e.message; }
-}
-
-
-
-async function checkFlexgetRunning() {
-  if (!settingsData.flexget_enabled) {
-    const row = document.getElementById('flexget-running-row');
-    if (row) row.style.display = 'none';
-    return;
-  }
-  try {
-    const r = await api('GET', '/flexget/running');
-    const running = Array.isArray(r.running) && r.running.length > 0;
-    const row = document.getElementById('flexget-running-row');
-    const lbl = document.getElementById('lbl-flexget');
-    if (row) row.style.display = running ? 'flex' : 'none';
-    if (lbl && running) lbl.textContent = 'FlexGet: ' + r.running.join(', ') + '…';
-  } catch { /* silent */ }
-}
-
-async function flexgetRunSingleTask(task, btnEl) {
-  const resultEl = document.getElementById('flexget-run-result');
-  resultEl.style.display = 'block';
-  resultEl.style.color = 'var(--text2)';
-  resultEl.textContent = `⏳ Running task: ${task}…`;
-  if (btnEl) { btnEl.disabled = true; btnEl.textContent = '⏳'; }
-  const fgRow = document.getElementById('flexget-running-row');
-  if (fgRow) fgRow.style.display = 'flex';
-  try {
-    const r = await api('POST', `/flexget/run/${encodeURIComponent(task)}`);
-    const ok = r.ok || r.status === 'ok';
-    resultEl.style.color = ok ? 'var(--green)' : 'var(--yellow)';
-    let msg = `${task}: ${ok ? '✓ ok' : '✗ error'}`;
-    if (!ok && r.first_error) msg += ` — ${r.first_error}`;
-    if (r.elapsed) msg += ` (${Number(r.elapsed).toFixed(1)}s)`;
-    resultEl.textContent = msg;
-    setTimeout(() => checkFlexgetRunning(), 1000);
-    if (btnEl) { btnEl.disabled = false; btnEl.textContent = '▶ Run'; }
-    loadFlexgetHistory();
-  } catch(e) {
-    const conflict = e.message && e.message.includes('409');
-    resultEl.style.color = conflict ? 'var(--yellow)' : 'var(--red)';
-    resultEl.textContent = conflict ? `⏳ ${task}: already running` : `✗ ${task}: ${e.message}`;
-    setTimeout(() => checkFlexgetRunning(), 500);
-    if (btnEl) { btnEl.disabled = false; btnEl.textContent = '▶ Run'; }
-  }
 }
 
 async function sendStatsReport() {
@@ -3307,7 +2608,6 @@ async function testPostgres() {
   }
   renderTopbarActions();
   updateAria2ngLink();
-  updateJackettNav();
 
   // Load stats with visible retry
   dbg('Starte loadStats…');
@@ -3338,8 +2638,6 @@ async function testPostgres() {
   }
 
   setInterval(checkPremiumStatus, 12 * 60 * 60 * 1000);
-  setInterval(checkFlexgetRunning, 10000);
-  checkFlexgetRunning();
 
   // ── Server-Sent Events — live updates without 15 s polling ──────────────
   // Falls back to polling if SSE is unavailable (proxy, browser quirk, etc.)
@@ -3391,667 +2689,6 @@ async function testPostgres() {
   })();
   setInterval(()=>checkConnections().catch(()=>{}), 60000);
 })();
-
-
-// ── Jackett Search ────────────────────────────────────────────────────────────
-
-window._jackettResults = [];
-window._jackettSort = { key: null, direction: null };
-window._jackettAddInFlight = {};
-
-function jackettSelectedTrackers() {
-  var sel = document.getElementById('jackett-tracker');
-  if (!sel) return [];
-  return Array.from(sel.selectedOptions).map(function(o){return o.value;}).filter(Boolean);
-}
-
-var _idxSelected = new Set();
-
-function idxToggle(e) {
-  e.stopPropagation();
-  var dd = document.getElementById('idx-dropdown');
-  if (dd) dd.classList.toggle('open');
-}
-function idxClose() {
-  var dd = document.getElementById('idx-dropdown');
-  if (dd) dd.classList.remove('open');
-}
-function idxAllChanged(cb) {
-  if (cb.checked) {
-    _idxSelected.clear();
-    document.querySelectorAll('.idx-item-cb').forEach(function(c){c.checked=false;});
-  }
-  cb.checked = true;
-  idxPickerCommit();
-}
-function idxItemChanged(cb, id) {
-  var allCb = document.getElementById('idx-all-cb');
-  if (cb.checked) {
-    _idxSelected.add(id);
-    if (allCb) allCb.checked = false;
-  } else {
-    _idxSelected.delete(id);
-    if (_idxSelected.size === 0 && allCb) allCb.checked = true;
-  }
-  idxPickerCommit();
-}
-function idxPickerCommit() {
-  var sel = document.getElementById('jackett-tracker');
-  var trigger = document.getElementById('idx-trigger');
-  var placeholder = document.getElementById('idx-placeholder');
-  if (!sel || !trigger) return;
-  while (sel.options.length) sel.remove(0);
-  trigger.querySelectorAll('.idx-chip').forEach(function(c){c.remove();});
-  var names = {};
-  document.querySelectorAll('.idx-item-cb').forEach(function(c){
-    names[c.dataset.id] = c.dataset.name || c.dataset.id;
-  });
-  if (_idxSelected.size === 0) {
-    if (placeholder) { placeholder.textContent = 'All Indexers'; placeholder.style.display = ''; }
-  } else {
-    if (placeholder) placeholder.style.display = 'none';
-    var arrowEl = trigger.querySelector('.idx-arrow');
-    _idxSelected.forEach(function(id) {
-      var opt = document.createElement('option');
-      opt.value = id; opt.selected = true;
-      sel.appendChild(opt);
-      var chip = document.createElement('span');
-      chip.className = 'idx-chip';
-      var nm = document.createElement('span');
-      nm.textContent = names[id] || id;
-      var cl = document.createElement('span');
-      cl.className = 'idx-chip-close';
-      cl.innerHTML = '&#215;';
-      cl.onclick = (function(xid){ return function(ev){ ev.stopPropagation(); idxRemoveChip(xid); }; })(id);
-      chip.appendChild(nm); chip.appendChild(cl);
-      trigger.insertBefore(chip, arrowEl || null);
-    });
-  }
-}
-function idxRemoveChip(id) {
-  _idxSelected.delete(id);
-  var cb = document.querySelector('.idx-item-cb[data-id="'+id+'"]');
-  if (cb) cb.checked = false;
-  var allCb = document.getElementById('idx-all-cb');
-  if (_idxSelected.size === 0 && allCb) allCb.checked = true;
-  idxPickerCommit();
-}
-
-function jackettSortResults(items) {
-  var sorted = (items || []).slice();
-  var byText = function(value) { return String(value || '').toLowerCase(); };
-  var byDate = function(value) { return String(value || ''); };
-  var mode = window._jackettSort || { key: null, direction: null };
-  var composite = mode.key && mode.direction ? (mode.key + '_' + mode.direction) : '';
-  switch (composite) {
-    case 'title_asc':
-      sorted.sort(function(a, b) { return byText(a.title).localeCompare(byText(b.title)); });
-      break;
-    case 'title_desc':
-      sorted.sort(function(a, b) { return byText(b.title).localeCompare(byText(a.title)); });
-      break;
-    case 'indexer_asc':
-      sorted.sort(function(a, b) { return byText(a.indexer).localeCompare(byText(b.indexer)); });
-      break;
-    case 'indexer_desc':
-      sorted.sort(function(a, b) { return byText(b.indexer).localeCompare(byText(a.indexer)); });
-      break;
-    case 'size_desc':
-      sorted.sort(function(a, b) { return (b.size_bytes || 0) - (a.size_bytes || 0); });
-      break;
-    case 'size_asc':
-      sorted.sort(function(a, b) { return (a.size_bytes || 0) - (b.size_bytes || 0); });
-      break;
-    case 'seeders_asc':
-      sorted.sort(function(a, b) { return (a.seeders || 0) - (b.seeders || 0); });
-      break;
-    case 'date_asc':
-      sorted.sort(function(a, b) { return byDate(a.pub_date).localeCompare(byDate(b.pub_date)); });
-      break;
-    case 'date_desc':
-      sorted.sort(function(a, b) { return byDate(b.pub_date).localeCompare(byDate(a.pub_date)); });
-      break;
-    case 'peers_asc':
-      sorted.sort(function(a, b) { return (a.leechers || 0) - (b.leechers || 0); });
-      break;
-    case 'peers_desc':
-      sorted.sort(function(a, b) { return (b.leechers || 0) - (a.leechers || 0); });
-      break;
-    case 'seeders_desc':
-      sorted.sort(function(a, b) {
-        var seederDiff = (b.seeders || 0) - (a.seeders || 0);
-        return seederDiff !== 0 ? seederDiff : byText(a.title).localeCompare(byText(b.title));
-      });
-      break;
-    default:
-      break;
-  }
-  return sorted;
-}
-
-function jackettUpdateSortIndicators() {
-  ['title', 'indexer', 'size', 'seeders', 'peers', 'date'].forEach(function(key) {
-    var el = document.getElementById('jackett-sort-' + key);
-    if (!el) return;
-    if (window._jackettSort.key === key && window._jackettSort.direction === 'asc') {
-      el.textContent = '↑';
-    } else if (window._jackettSort.key === key && window._jackettSort.direction === 'desc') {
-      el.textContent = '↓';
-    } else {
-      el.textContent = '';
-    }
-  });
-}
-
-function jackettCycleSort(key) {
-  var defaults = {
-    title: 'asc',
-    indexer: 'asc',
-    size: 'desc',
-    seeders: 'desc',
-    peers: 'desc',
-    date: 'desc'
-  };
-  if (window._jackettSort.key !== key) {
-    window._jackettSort = { key: key, direction: defaults[key] || 'asc' };
-  } else if (window._jackettSort.direction === (defaults[key] || 'asc')) {
-    window._jackettSort = { key: key, direction: (defaults[key] === 'asc' ? 'desc' : 'asc') };
-  } else {
-    window._jackettSort = { key: null, direction: null };
-  }
-  renderJackettResults();
-}
-
-function renderJackettResults() {
-  var wrap = document.getElementById('jackett-results-wrap');
-  var tbody = document.getElementById('jackett-tbody');
-  var count = document.getElementById('jackett-result-count');
-  var state = document.getElementById('jackett-state');
-  if (!tbody || !wrap) return;
-
-  var results = jackettSortResults(window._jackettResults || []);
-  jackettUpdateSortIndicators();
-
-  // Reset selection on re-render
-  window._jackettSelected = new Set();
-  jackettUpdateBulkBar();
-
-  tbody.innerHTML = '';
-  if (!results.length) {
-    wrap.style.display = 'none';
-    if (count) count.textContent = '';
-    if (state) { state.style.display = 'block'; state.textContent = 'No results found.'; }
-    return;
-  }
-
-  results.forEach(function(r, i) {
-    var tr = document.createElement('tr');
-    tr.style.cursor = 'pointer';
-    var sc = r.seeders > 10 ? 'var(--green)' : r.seeders > 0 ? 'var(--accent)' : 'var(--text3)';
-    var key = String(r.hash || r.torrent_url || (r.title + '|' + r.indexer));
-    var inFlight = !!(window._jackettAddInFlight && window._jackettAddInFlight[key]);
-    var statusBadge = r.already_added
-        ? '<span class="badge badge-'+esc((r.existing_status || 'queued'))+'">'+esc(r.existing_status || 'added')+'</span>'
-        : '<span style="font-size:11px;color:var(--text3)">New</span>';
-    var addBtn = '';
-    if (!(r.magnet || r.torrent_url)) {
-        addBtn = '<span style="font-size:11px;color:var(--text3)">No link</span>';
-    } else if (r.already_added) {
-        addBtn = '<button class="btn btn-ghost btn-sm" disabled id="jbtn-'+i+'">Added</button>';
-    } else if (inFlight) {
-        addBtn = '<button class="btn btn-ghost btn-sm" disabled id="jbtn-'+i+'">Adding...</button>';
-    } else {
-        addBtn = '<button class="btn btn-primary btn-sm" onclick="jackettAdd('+i+');event.stopPropagation()" id="jbtn-'+i+'">Add</button>';
-    }
-    var canSelect = !!(r.magnet || r.torrent_url) && !r.already_added;
-    var chk = canSelect
-      ? '<input type="checkbox" class="jck" data-idx="'+i+'" style="cursor:pointer;accent-color:var(--accent)" onclick="event.stopPropagation()" onchange="jackettRowCheck('+i+',this.checked)">'
-      : '';
-    tr.innerHTML =
-      '<td style="padding:0 6px;width:34px">'+chk+'</td>'+
-      '<td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(r.title)+'">'+esc(r.title)+'</td>'+
-      '<td style="color:var(--text2);font-size:12px">'+esc(r.indexer)+'</td>'+
-      '<td style="white-space:nowrap;font-size:12px">'+esc(r.size_human)+'</td>'+
-      '<td style="text-align:center;color:'+sc+';font-weight:600">'+(r.seeders || 0)+'</td>'+
-      '<td style="text-align:center;color:var(--text2)">'+(r.leechers || 0)+'</td>'+
-      '<td style="font-size:11px;color:var(--text2)">'+esc(r.pub_date)+'</td>'+
-      '<td style="text-align:center">'+(r._score != null ? '<span style="font-size:10px;font-weight:700;color:'+(r._score>=0.7?'var(--green)':r._score>=0.5?'var(--accent)':'var(--text3)')+'">'+Math.round((r._score||0)*100)+'</span>' : '')+'</td>'+
-      '<td>'+statusBadge+'</td>'+
-      '<td>'+addBtn+'</td>';
-    // Row click → toggle selection
-    tr.addEventListener('click', function(e) {
-      if (!canSelect) return;
-      if (e.target.tagName === 'BUTTON' || e.target.tagName === 'INPUT') return;
-      jackettRowCheck(i, null, true); // null = toggle
-    });
-    tbody.appendChild(tr);
-  });
-  wrap.style.display = '';
-  if (state) state.style.display = 'none';
-  if (count) count.textContent = results.length + ' result(s)';
-}
-
-// ── Bulk selection ───────────────────────────────────────────────────────────
-window._jackettSelected = new Set();
-
-function jackettRowCheck(idx, checked, toggle) {
-  if (toggle) checked = !window._jackettSelected.has(idx);
-  if (checked) window._jackettSelected.add(idx);
-  else window._jackettSelected.delete(idx);
-  // Sync checkbox element
-  var chk = document.querySelector('.jck[data-idx="'+idx+'"]');
-  if (chk) chk.checked = checked;
-  jackettUpdateBulkBar();
-}
-
-function jackettUpdateBulkBar() {
-  var bar = document.getElementById('jackett-bulk-bar');
-  var lbl = document.getElementById('jackett-sel-count');
-  var selCount = window._jackettSelected ? window._jackettSelected.size : 0;
-  if (bar) bar.style.display = selCount > 0 ? 'flex' : 'none';
-  if (lbl) lbl.textContent = selCount + ' selected';
-  // Sync header checkbox indeterminate state
-  var allChks = document.querySelectorAll('.jck');
-  var masterChk = document.getElementById('jackett-check-all');
-  if (masterChk && allChks.length) {
-    masterChk.checked = selCount === allChks.length;
-    masterChk.indeterminate = selCount > 0 && selCount < allChks.length;
-  }
-}
-
-function jackettToggleAllCheckboxes(checked) {
-  document.querySelectorAll('.jck').forEach(function(chk) {
-    var idx = parseInt(chk.dataset.idx, 10);
-    chk.checked = checked;
-    if (checked) window._jackettSelected.add(idx);
-    else window._jackettSelected.delete(idx);
-  });
-  jackettUpdateBulkBar();
-}
-
-function jackettSelectAll() {
-  jackettToggleAllCheckboxes(true);
-  var masterChk = document.getElementById('jackett-check-all');
-  if (masterChk) masterChk.checked = true;
-}
-
-function jackettClearSelection() {
-  jackettToggleAllCheckboxes(false);
-  var masterChk = document.getElementById('jackett-check-all');
-  if (masterChk) { masterChk.checked = false; masterChk.indeterminate = false; }
-}
-
-async function jackettAddSelected() {
-  var results = jackettSortResults(window._jackettResults || []);
-  var indices = Array.from(window._jackettSelected || []).sort(function(a,b){return a-b;});
-  if (!indices.length) return;
-  if (indices.length === 1) {
-    await jackettAdd(indices[0]);
-  } else {
-    // Add up to 3 in parallel to stay within AllDebrid rate limits
-    var BATCH = 3;
-    for (var i = 0; i < indices.length; i += BATCH) {
-      var batch = indices.slice(i, i + BATCH);
-      await Promise.all(batch.map(function(idx) { return jackettAdd(idx); }));
-    }
-  }
-  jackettClearSelection();
-}
-
-async function jackettAddAll() {
-  var results = jackettSortResults(window._jackettResults || []);
-  var addable = [];
-  results.forEach(function(r, i) {
-    if ((r.magnet || r.torrent_url) && !r.already_added) addable.push(i);
-  });
-  if (!addable.length) { toast('Nothing new to add', 'warn'); return; }
-  toast('Adding ' + addable.length + ' result(s)…', 'info');
-  // Add in parallel batches of 3 to respect AllDebrid rate limits
-  var BATCH = 3;
-  for (var i = 0; i < addable.length; i += BATCH) {
-    var batch = addable.slice(i, i + BATCH);
-    await Promise.all(batch.map(function(idx) { return jackettAdd(idx); }));
-  }
-  toast('Added ' + addable.length + ' result(s)', 'success');
-}
-
-// ── Genre chip state ─────────────────────────────────────────────────────────
-var _genreChips = new Set();
-
-function toggleSearchAdv(btn) {
-  // No longer used — filters always visible
-  onSearchTypeChange();
-}
-
-function onSearchTypeChange() {
-  var t = (document.getElementById('jackett-search-type')||{value:'search'}).value;
-  var showImdb   = t === 'movie' || t === 'tvsearch';
-  var showYear   = t === 'movie' || t === 'tvsearch';
-  var showSeason = t === 'tvsearch';
-  var showGenre  = t !== 'search';
-  var setDisplay = function(id, show) {
-    var el = document.getElementById(id);
-    if (el) el.style.display = show ? 'flex' : 'none';
-  };
-  setDisplay('adv-genre-wrap',  showGenre);
-  setDisplay('adv-imdbid-wrap', showImdb);
-  setDisplay('adv-year-wrap',   showYear);
-  setDisplay('adv-season-wrap', showSeason);
-  setDisplay('adv-ep-wrap',     showSeason);
-}
-
-function addGenreChip() {
-  var inp = document.getElementById('jackett-genre');
-  if (!inp) return;
-  var val = inp.value.trim().toLowerCase();
-  if (!val) return;
-  _genreChips.add(val);
-  inp.value = '';
-  renderGenreChips();
-}
-
-function updateGenreChips() {
-  var inp = document.getElementById('jackett-genre');
-  if (!inp || !inp.value.includes(',')) return;
-  inp.value.split(',').forEach(function(v) {
-    v = v.trim().toLowerCase();
-    if (v) _genreChips.add(v);
-  });
-  inp.value = '';
-  renderGenreChips();
-}
-
-function renderGenreChips() {
-  var container = document.getElementById('genre-chips');
-  if (!container) return;
-  container.innerHTML = '';
-  _genreChips.forEach(function(tag) {
-    var chip = document.createElement('span');
-    chip.className = 'search-tag-chip active';
-    chip.title = 'Click to remove';
-    var nm = document.createElement('span');
-    nm.textContent = tag;
-    var cl = document.createElement('span');
-    cl.className = 'chip-x';
-    cl.innerHTML = '&#215;';
-    cl.onclick = (function(t){ return function(){ removeGenreChip(t); }; })(tag);
-    chip.appendChild(nm); chip.appendChild(cl);
-    chip.onclick = function(e){ if(e.target !== cl) removeGenreChip(tag); };
-    container.appendChild(chip);
-  });
-}
-
-function removeGenreChip(tag) {
-  _genreChips.delete(tag);
-  renderGenreChips();
-}
-
-function clearSearchAdv() {
-  _genreChips.clear();
-  renderGenreChips();
-  ['jackett-imdbid','jackett-year','jackett-season','jackett-ep','jackett-genre',
-   'jackett-query','jackett-cat','jackett-availability'].forEach(function(id) {
-    var el = document.getElementById(id);
-    if (!el) return;
-    if (el.tagName === 'SELECT') el.selectedIndex = 0;
-    else el.value = '';
-  });
-  var t = document.getElementById('jackett-search-type');
-  if (t) { t.value = 'search'; onSearchTypeChange(); }
-  _idxSelected.clear();
-  var allCb = document.getElementById('idx-all-cb');
-  if (allCb) allCb.checked = true;
-  idxPickerCommit();
-}
-
-// ── Jackett Search state (isolated — never blocks global UI) ─────────────────
-var _jackettSearchInFlight  = false;
-var _jackettSearchController = null;   // AbortController for the current search
-var _jackettSearchReqId      = 0;      // monotonically increasing; old responses are ignored
-
-async function jackettSearch() {
-  var query = (document.getElementById('jackett-query')||{value:''}).value.trim();
-  if (!query) { toast('Please enter a search query', 'warn'); return; }
-  var cat          = ((document.getElementById('jackett-cat')||{}).value)||'0';
-  var trackers     = jackettSelectedTrackers();
-  var availability = ((document.getElementById('jackett-availability')||{}).value)||'all';
-  var hideDead     = availability === 'alive';
-  var searchType   = (document.getElementById('jackett-search-type')||{value:'search'}).value || 'search';
-  var genreVal     = _genreChips.size > 0
-    ? Array.from(_genreChips).join(',')
-    : ((document.getElementById('jackett-genre')||{value:''}).value.trim());
-  var imdbid  = ((document.getElementById('jackett-imdbid')||{value:''}).value.trim());
-  var year    = ((document.getElementById('jackett-year')||{value:''}).value.trim());
-  var season  = ((document.getElementById('jackett-season')||{value:''}).value.trim());
-  var epNum   = ((document.getElementById('jackett-ep')||{value:''}).value.trim());
-
-  var btn   = document.getElementById('jackett-search-btn');
-  var state = document.getElementById('jackett-state');
-  var wrap  = document.getElementById('jackett-results-wrap');
-  var tbody = document.getElementById('jackett-tbody');
-  var count = document.getElementById('jackett-result-count');
-
-  // Abort any in-flight search — prevents stale responses from overwriting
-  if (_jackettSearchController) {
-    _jackettSearchController.abort();
-  }
-  _jackettSearchController = new AbortController();
-  _jackettSearchReqId++;
-  var myReqId = _jackettSearchReqId;
-  _jackettSearchInFlight = true;
-
-  // ── Show busy state (search-scoped only) ──────────────────────────────────
-  if (btn)   { btn.disabled = true; btn.textContent = 'Searching…'; }
-  if (state) { state.style.display = 'block'; state.textContent = 'Searching Jackett indexers…'; }
-  // Keep old results visible while new search is in progress
-  // (only hide them when we have fresh results to show)
-
-  // "Still searching" hint after 8 s — Jackett with many indexers can take 30–120 s
-  var _slowHint = setTimeout(function() {
-    if (_jackettSearchReqId === myReqId && _jackettSearchInFlight) {
-      if (state) state.innerHTML =
-        'Searching… <span style="color:var(--text3);font-size:11px">' +
-        '(querying all indexers — this can take up to 2 minutes)</span>';
-    }
-  }, 8000);
-
-  try {
-    var payload = {
-      query: query, category: parseInt(cat, 10), trackers: trackers,
-      hide_dead: hideDead, search_type: searchType,
-    };
-    if (genreVal) payload.genre  = genreVal;
-    if (imdbid)   payload.imdbid = imdbid;
-    if (year)     payload.year   = year;
-    if (season)   payload.season = season;
-    if (epNum)    payload.ep     = epNum;
-
-    // 150 s timeout — Jackett with many indexers can take a long time
-    var data = await api('POST', '/jackett/search', payload, 150000, {signal: _jackettSearchController.signal});
-
-    // ── Race-condition guard: ignore stale responses ──────────────────────
-    if (_jackettSearchReqId !== myReqId) return;
-
-    if (data.error) {
-      if (state) { state.style.display = 'block'; state.textContent = 'Error: ' + data.error; }
-      return;
-    }
-    if (!data.results || !data.results.length) {
-      var hint = searchType !== 'search' ? ' (indexer may not support ' + searchType + ' mode)' : '';
-      if (state) { state.style.display = 'block'; state.textContent = 'No results for: ' + query + hint; }
-      // Clear stale results from a previous search
-      if (tbody) tbody.innerHTML = '';
-      if (wrap)  wrap.style.display = 'none';
-      return;
-    }
-    var parts = ['"' + query + '"'];
-    if (searchType !== 'search') parts.push('mode: ' + searchType);
-    if (genreVal)  parts.push('genre: ' + genreVal);
-    if (imdbid)    parts.push('IMDb: ' + imdbid);
-    if (year)      parts.push(year);
-    if (hideDead)  parts.push('seeded only');
-    if (count) count.textContent = data.total + ' result(s) for ' + parts.join(' · ');
-    window._jackettResults = data.results;
-    // Only now replace old results
-    if (wrap) wrap.style.display = '';
-    if (state) state.style.display = 'none';
-    renderJackettResults();
-  } catch(e) {
-    if (_jackettSearchReqId !== myReqId) return;  // aborted — ignore
-    if (e && e.name === 'AbortError') return;      // intentional abort
-    var errMsg = e.message || 'Unknown error';
-    var userMsg = errMsg.toLowerCase().includes('timeout')
-      ? 'Search timed out. Try fewer indexers or increase the timeout in Settings → Search / Indexers.'
-      : 'Search error: ' + sanitizeErrorMsg(errMsg);
-    if (state) { state.style.display = 'block'; state.textContent = userMsg; }
-    // Leave existing results visible on error
-  } finally {
-    // Always reset — even on abort or error
-    if (_jackettSearchReqId === myReqId) {
-      _jackettSearchInFlight = false;
-    }
-    clearTimeout(_slowHint);
-    if (btn) { btn.disabled = false; btn.textContent = 'Search'; }
-  }
-
-}
-
-async function jackettAdd(idx) {
-  var r = jackettSortResults(window._jackettResults || [])[idx];
-  if (!r) return;
-  var key = String(r.hash || r.torrent_url || (r.title + '|' + r.indexer));
-  if (window._jackettAddInFlight && window._jackettAddInFlight[key]) return;
-  window._jackettAddInFlight[key] = true;
-  var btn=document.getElementById('jbtn-'+idx);
-  if (btn) { btn.disabled=true; btn.textContent='Adding…'; }
-  try {
-    // Torrent-URL downloads can take up to 30s; give 90s total for the full chain
-    var timeout = r.torrent_url ? 90000 : 60000;
-    var row=await api('POST', '/jackett/add', {
-      hash:r.hash, magnet:r.magnet, torrent_url:r.torrent_url,
-      title:r.title, indexer:r.indexer, size_bytes:r.size_bytes
-    }, timeout);
-    (window._jackettResults || []).forEach(function(item) {
-      if ((item.hash && item.hash === r.hash) || (item.title === r.title && item.indexer === r.indexer)) {
-        item.already_added = true;
-        item.existing_torrent_id = row && row.id ? row.id : null;
-        item.existing_status = row && row.status ? row.status : 'uploading';
-      }
-    });
-    if (btn) {
-      btn.textContent='✅ Added';
-      btn.style.background='var(--green)';
-      btn.style.color='#fff';
-    }
-    delete window._jackettAddInFlight[key];
-    renderJackettResults();
-    var label = row && row.added_via ? row.added_via.replace(/_/g, ' ') : (r.torrent_url ? 'torrent file' : 'magnet');
-    var adId = (row && row.alldebrid_id) ? ' · AD ' + row.alldebrid_id : '';
-    // Show status: cached torrents start immediately
-    var statusHint = (row && row.status === 'ready') ? ' · Starting download…' : '';
-    toast('✔ Queued via ' + label + adId + statusHint + '\n' + r.title.slice(0,50), 'success');
-    if (typeof loadStats === 'function') loadStats().catch(function(){});
-  } catch(e) {
-    delete window._jackettAddInFlight[key];
-    if (btn) { btn.disabled=false; btn.textContent='Add'; }
-    renderJackettResults();
-    var _errMsg = e.message || 'Unknown error';
-    toast('❌ Failed: ' + sanitizeErrorMsg(_errMsg), 'error');
-  }
-}
-
-async function testProwlarr() {
-  var el = document.getElementById('prowlarr-test-result');
-  if (el) el.textContent = 'Testing…';
-  try {
-    await api('POST','/prowlarr/test');
-    if (el) { el.textContent = '✓ Connected'; el.style.color = 'var(--green)'; }
-  } catch(e) {
-    if (el) { el.textContent = '✗ ' + sanitizeErrorMsg(e.message); el.style.color = 'var(--red)'; }
-  }
-}
-
-async function testJackett() {
-  var el=document.getElementById('jackett-test-result');
-  if (el) { el.style.color='var(--text2)'; el.textContent='Testing...'; }
-  try {
-    const activeTab = getActiveSettingsTab();
-    const current = getFormSettings();
-    await api('PUT','/settings', current);
-    settingsData = await api('GET','/settings');
-    renderSettings();
-    switchSettingsTab(activeTab);
-    updateJackettNav();
-    el=document.getElementById('jackett-test-result');
-    if (el) { el.style.color='var(--text2)'; el.textContent='Testing...'; }
-    var r=await api('POST', '/settings/test-jackett');
-    if (el) { el.style.color='var(--green)'; el.textContent='Connected - Jackett '+(r.version||''); }
-  } catch(e) {
-    if (el) { el.style.color='var(--red)'; el.textContent='Error: '+e.message; }
-  }
-}
-
-async function testJackettWebhook() {
-  try {
-    const activeTab = getActiveSettingsTab();
-    const current = getFormSettings();
-    await api('PUT','/settings', current);
-    settingsData = await api('GET','/settings');
-    renderSettings();
-    switchSettingsTab(activeTab);
-    await api('POST', '/settings/test-jackett-webhook');
-    toast('Jackett webhook test sent', 'success');
-  } catch(e) {
-    toast('Jackett webhook test failed: ' + sanitizeErrorMsg(e.message), 'error');
-  }
-}
-
-async function loadJackettIndexers() {
-  try {
-    var items = await api('GET', '/jackett/indexers', null, 15000);
-    var dd = document.getElementById('idx-dropdown');
-    if (!dd) return;
-    dd.querySelectorAll('.idx-item').forEach(function(el){el.remove();});
-    (items||[]).forEach(function(item) {
-      var id = String(item.id||item.name||'');
-      var name = String(item.name||item.id||'');
-      var lbl = document.createElement('label');
-      lbl.className = 'idx-option idx-item';
-      var cb = document.createElement('input');
-      cb.type='checkbox'; cb.className='idx-item-cb';
-      cb.dataset.id=id; cb.dataset.name=name;
-      cb.checked = _idxSelected.has(id);
-      cb.onchange = (function(xcb,xid){return function(){idxItemChanged(xcb,xid);};})(cb,id);
-      var sp = document.createElement('span');
-      sp.textContent = name;
-      lbl.appendChild(cb); lbl.appendChild(sp);
-      dd.appendChild(lbl);
-    });
-    idxPickerCommit();
-  } catch(e) { /* indexers optional */ }
-}
-
-function initSearchView() {
-  var cfg=settingsData||{};
-  var notConf=document.getElementById('jackett-not-configured');
-  var searchBar=document.getElementById('jackett-search-bar');
-  if (!cfg.jackett_enabled || !cfg.jackett_url || !cfg.jackett_api_key) {
-    if (notConf) notConf.style.display='';
-    if (searchBar) searchBar.style.display='none';
-    return;
-  }
-  if (notConf) notConf.style.display='none';
-  if (searchBar) searchBar.style.display='flex';
-  onSearchTypeChange();
-  loadJackettIndexers();
-  setTimeout(function(){ var q=document.getElementById('jackett-query'); if(q)q.focus(); }, 100);
-}
-
-function updateJackettNav() {
-  var cfg=settingsData||{};
-  var el=document.querySelector('[data-view="search"]');
-  if (el) el.style.display=cfg.jackett_enabled?'':'none';
-}
 
 
 // ── Downloads View (aria2 Queue) ─────────────────────────────────────────────
@@ -4294,167 +2931,6 @@ function initExtractionPasswordList() {
   renderExtractionPasswordList();
 }
 
-async function deleteSavedSearch2(id) {
-  if (!confirm('Delete this saved search?')) return;
-  try {
-    await api('DELETE', '/saved-searches/' + id);
-    toast('Deleted', 'success');
-    loadSavedSearchesView();
-  } catch(e) { toast(e.message, 'error'); }
-}
-
-// ── Automation (Rule Engine + Saved Searches) ─────────────────────────────
-
-async function testRuleEngine() {
-  const name  = prompt('Torrent name to test against rules:');
-  if (name === null) return;
-  const size  = parseFloat(prompt('Size in GB (0 = unknown):', '0') || '0');
-  const out   = document.getElementById('rules-test-output');
-  if (out) out.style.display = '';
-  try {
-    const res = await api('POST', '/rules/test', {
-      name, size_bytes: Math.round(size * 1024**3), source: 'manual',
-    });
-    if (out) out.innerHTML =
-      `<b>Rules evaluated:</b> ${res.rules_count}<br>` +
-      `<b>Actions applied:</b> ${JSON.stringify(res.actions, null, 2)}`;
-  } catch(e) {
-    if (out) out.innerHTML = '<span style="color:var(--red)">Error: ' + esc(e.message) + '</span>';
-  }
-}
-
-function formatRulesJson() {
-  const ta = document.getElementById('s-rules_list');
-  if (!ta) return;
-  try {
-    ta.value = JSON.stringify(JSON.parse(ta.value), null, 2);
-  } catch(e) {
-    toast('Invalid JSON: ' + e.message, 'error');
-  }
-}
-
-var _savedSearches = [];
-
-async function loadSavedSearches() {
-  const el = document.getElementById('saved-searches-list');
-  if (!el) return;
-  try {
-    _savedSearches = await api('GET', '/saved-searches');
-    if (!_savedSearches.length) {
-      el.innerHTML = '<div style="color:var(--text3);font-size:12px">No saved searches yet.</div>';
-      return;
-    }
-    el.innerHTML = _savedSearches.map(ss => `
-      <div class="saved-search-row" style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">
-        <div style="flex:1;min-width:0">
-          <div style="font-weight:600;font-size:13px">${esc(ss.name)}</div>
-          <div style="font-size:11px;color:var(--text3)">${esc(ss.query)}${ss.regex_filter?` · filter: ${esc(ss.regex_filter)}`:''} · every ${ss.interval_minutes} min · ${ss.auto_add?'auto-add':'manual'}</div>
-          ${ss.last_run_at ? `<div style="font-size:10px;color:var(--text3)">Last run: ${fmtDate(ss.last_run_at)}</div>` : ''}
-        </div>
-        <div style="display:flex;gap:6px;flex-shrink:0">
-          <button class="btn btn-ghost btn-sm" onclick="runSavedSearch(${ss.id})">▷ Run</button>
-          <button class="btn btn-danger btn-sm" onclick="deleteSavedSearch(${ss.id})">✕</button>
-        </div>
-      </div>
-    `).join('');
-  } catch(e) {
-    el.innerHTML = '<div style="color:var(--red);font-size:12px">Failed to load: ' + esc(e.message) + '</div>';
-  }
-}
-
-async function loadSavedSearchesView() {
-  const el = document.getElementById('saved-searches-view-list');
-  if (!el) return;
-  el.innerHTML = '<div style="color:var(--text3);padding:20px 0;font-size:12px">Loading saved searches…</div>';
-  try {
-    _savedSearches = await api('GET', '/saved-searches');
-    if (!_savedSearches.length) {
-      el.innerHTML = '<div style="color:var(--text3);padding:20px 0;font-size:12px">No saved searches yet.</div>';
-      return;
-    }
-    el.innerHTML = _savedSearches.map(ss => `
-      <div class="saved-search-row" style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)">
-        <div style="flex:1;min-width:0">
-          <div style="font-weight:700;font-size:13px">${esc(ss.name || 'Untitled search')}</div>
-          <div style="font-size:11px;color:var(--text3);margin-top:2px">
-            ${esc(ss.query || '')}${ss.regex_filter ? ` · filter: ${esc(ss.regex_filter)}` : ''} · every ${ss.interval_minutes || 60} min · ${ss.auto_add ? 'auto-add' : 'manual'}
-          </div>
-          ${ss.last_run_at ? `<div style="font-size:10px;color:var(--text3);margin-top:2px">Last run: ${fmtDate(ss.last_run_at)}</div>` : ''}
-        </div>
-        <div style="display:flex;gap:6px;flex-shrink:0">
-          <button class="btn btn-ghost btn-sm" onclick="runSavedSearch(${ss.id})">▷ Run</button>
-          <button class="btn btn-danger btn-sm" onclick="deleteSavedSearch(${ss.id})">✕ Delete</button>
-        </div>
-      </div>
-    `).join('');
-  } catch(e) {
-    el.innerHTML = '<div style="color:var(--red);padding:20px 0;font-size:12px">Failed to load saved searches: ' + esc(e.message) + '</div>';
-  }
-}
-
-function showAddSavedSearch() {
-  const viewVisible = document.getElementById('view-saved-searches')?.classList.contains('active');
-  const form = document.getElementById(viewVisible ? 'saved-search-form-view' : 'saved-search-form');
-  if (form) form.style.display = form.style.display === 'none' ? '' : 'none';
-}
-
-async function saveSavedSearch2() {
-  var name  = (document.getElementById('ss2-name')?.value || '').trim();
-  var query = (document.getElementById('ss2-query')?.value || '').trim();
-  if (!name || !query) { toast('Name and query are required', 'warn'); return; }
-  try {
-    await api('POST', '/saved-searches', {
-      name, query,
-      min_seeders:      parseInt(document.getElementById('ss2-min-seeders')?.value || '1'),
-      regex_filter:     document.getElementById('ss2-regex')?.value || '',
-      auto_add:         document.getElementById('ss2-auto-add')?.checked || false,
-      enabled:          true,
-      interval_minutes: parseInt(document.getElementById('ss2-interval')?.value || '60'),
-    });
-    toast('Saved search created!', 'success');
-    document.getElementById('saved-search-form-view').style.display = 'none';
-    loadSavedSearchesView();
-  } catch(e) { toast(e.message, 'error'); }
-}
-
-async function saveSavedSearch() {
-  const name  = (document.getElementById('ss-name')?.value || '').trim();
-  const query = (document.getElementById('ss-query')?.value || '').trim();
-  if (!name || !query) { toast('Name and query are required', 'warn'); return; }
-  try {
-    await api('POST', '/saved-searches', {
-      name, query,
-      min_seeders: parseInt(document.getElementById('ss-min-seeders')?.value || '1'),
-      regex_filter: document.getElementById('ss-regex')?.value || '',
-      auto_add: document.getElementById('ss-auto-add')?.checked || false,
-      enabled: true,
-      interval_minutes: 60,
-    });
-    toast('Saved search created!', 'success');
-    document.getElementById('saved-search-form').style.display = 'none';
-    await loadSavedSearches();
-  } catch(e) { toast(e.message, 'error'); }
-}
-
-async function runSavedSearch(id) {
-  try {
-    const res = await api('POST', `/saved-searches/${id}/run`, {}, 60000);
-    toast(`Search done: ${res.results?.results_count||0} result(s), ${res.results?.added_count||0} added`, 'success');
-    await loadSavedSearches();
-    await loadSavedSearchesView();
-  } catch(e) { toast(e.message, 'error'); }
-}
-
-async function deleteSavedSearch(id) {
-  if (!confirm('Delete this saved search?')) return;
-  try {
-    await api('DELETE', `/saved-searches/${id}`);
-    toast('Deleted', 'success');
-    await loadSavedSearches();
-    await loadSavedSearchesView();
-  } catch(e) { toast(e.message, 'error'); }
-}
-
 // ── Priority Queue ─────────────────────────────────────────────────────────
 
 async function setTorrentPriority(torrentId, priority) {
@@ -4575,18 +3051,6 @@ async function setTorrentPriority(torrentId, priority) {
 
 
 
-// ── Webhook Settings Test ─────────────────────────────────────────────────────
-
-async function testWebhookFromSettings() {
-  var url    = (document.getElementById('s-webhook_on_complete')?.value || '').trim();
-  var secret = (document.getElementById('s-webhook_secret')?.value || '').trim();
-  if (!url) { toast('Enter a webhook URL first', 'warn'); return; }
-  try {
-    var res = await api('POST', '/webhooks/test', {url, secret}, 15000);
-    toast(res.ok ? 'Webhook delivered successfully' : 'Webhook responded with error', res.ok ? 'success' : 'warn');
-  } catch(e) { toast(sanitizeErrorMsg(e.message), 'error'); }
-}
-
 // ── System Health Bar (Dashboard) ─────────────────────────────────────────────
 
 async function updateHealthBar() {
@@ -4606,33 +3070,6 @@ async function updateHealthBar() {
       bar.style.display = 'none';
     }
   } catch(e) { /* silently ignore */ }
-}
-
-// ── Historical Learning View ───────────────────────────────────────────────────
-
-async function loadLearningStats() {
-  var el = document.getElementById('learning-body');
-  if (!el) return;
-  el.innerHTML = '<div style="color:var(--text3);padding:20px">Loading…</div>';
-  try {
-    var d = await api('GET', '/stats/learning');
-    if (d.error) { el.innerHTML = '<div style="color:var(--red)">' + esc(d.error) + '</div>'; return; }
-    el.innerHTML =
-      '<div style="font-weight:700;font-size:12px;color:var(--text2);margin-bottom:8px">INDEXER PERFORMANCE — last ' + d.window_days + ' days</div>' +
-      (d.indexers.length ? '<table class="t-table" style="width:100%;margin-bottom:16px"><thead><tr><th>Source</th><th>Total</th><th>Completed</th><th>Errors</th><th>No Peer</th><th>Success %</th><th>Score</th></tr></thead><tbody>' +
-        d.indexers.map(function(ix) {
-          var col = ix.score >= 0.8 ? 'var(--green)' : ix.score >= 0.5 ? 'var(--accent)' : 'var(--red)';
-          return '<tr><td>' + esc(ix.indexer) + '</td><td class="sz">' + ix.total + '</td><td class="sz">' + ix.completed + '</td><td class="sz">' + ix.errors + '</td><td class="sz">' + ix.no_peer + '</td><td class="sz">' + Math.round(ix.success_rate*100) + '%</td><td style="color:' + col + ';font-weight:700">' + Math.round(ix.score*100) + '</td></tr>';
-        }).join('') + '</tbody></table>' : '<div style="color:var(--text3);font-size:12px">No data yet.</div>') +
-      (d.release_groups.length ? '<div style="font-weight:700;font-size:12px;color:var(--text2);margin-bottom:8px">RELIABLE RELEASE GROUPS</div>' +
-        '<div style="display:flex;flex-wrap:wrap;gap:6px">' +
-        d.release_groups.slice(0,20).map(function(g) {
-          var col = g.success_rate >= 0.9 ? 'var(--green)' : g.success_rate >= 0.7 ? 'var(--yellow)' : 'var(--text3)';
-          return '<span class="lbl-badge" style="color:' + col + '">' + esc(g.group) + ' ' + Math.round(g.success_rate*100) + '%</span>';
-        }).join('') + '</div>' : '');
-  } catch(e) {
-    el.innerHTML = '<div style="color:var(--red)">Error: ' + esc(e.message) + '</div>';
-  }
 }
 
 // ── Drag & Drop Priority Reordering ───────────────────────────────────────────
@@ -4679,49 +3116,6 @@ async function onTorrentDrop(e, targetId) {
     toast(sanitizeErrorMsg(e.message), 'error');
   }
   _dragSrcId = null;
-}
-
-// ── Download Profiles ─────────────────────────────────────────────────────────
-
-var _profiles = [];
-var _activeProfile = '';
-
-async function loadDownloadProfiles() {
-  try {
-    var res = await api('GET', '/download-profiles');
-    _profiles = res.profiles || [];
-    _activeProfile = res.active_profile || '';
-    renderDownloadProfiles();
-  } catch(e) { /* silently ignore */ }
-}
-
-function renderDownloadProfiles() {
-  var el = document.getElementById('profiles-list');
-  if (!el) return;
-  if (!_profiles.length) {
-    el.innerHTML = '<div style="color:var(--text3);font-size:12px">No profiles configured. Add one in Settings → Automation.</div>';
-    return;
-  }
-  el.innerHTML = _profiles.map(function(p) {
-    var active = p.name === _activeProfile;
-    return '<div style="display:flex;align-items:center;gap:10px;padding:6px 0">' +
-      '<div style="flex:1;font-size:13px">' + esc(p.name) +
-        (active ? ' <span class="badge badge-completed" style="font-size:10px">Active</span>' : '') +
-        (p.label ? ' <span class="badge" style="font-size:10px">' + esc(p.label) + '</span>' : '') +
-      '</div>' +
-      '<button class="btn btn-ghost btn-sm" onclick="activateProfile(' + JSON.stringify(p.name) + ')">' +
-        (active ? 'Deactivate' : 'Activate') + '</button>' +
-    '</div>';
-  }).join('');
-}
-
-async function activateProfile(name) {
-  var newName = _activeProfile === name ? '' : name;
-  try {
-    await api('POST', '/download-profiles/activate', {name: newName});
-    toast(newName ? 'Profile "' + name + '" activated' : 'Profile deactivated', 'success');
-    await loadDownloadProfiles();
-  } catch(e) { toast(sanitizeErrorMsg(e.message), 'error'); }
 }
 
 // ── Auto-Recovery ─────────────────────────────────────────────────────────────

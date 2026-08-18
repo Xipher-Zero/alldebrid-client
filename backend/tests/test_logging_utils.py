@@ -51,7 +51,7 @@ def test_startup_banner_uses_logger_and_expected_links(caplog):
             auth="disabled",
         )
 
-    assert "AllDebrid Control & Download Center (ACDC)  v1.8.7" in caplog.text
-    assert "https://github.com/Xipher-Zero/alldebrid-client" in caplog.text
+    assert "DebridPulse  v1.8.7" in caplog.text
+    assert "https://github.com/Xipher-Zero/debridpulse" in caplog.text
     assert "buymeacoffee.com" not in caplog.text
     assert "discord.gg" not in caplog.text

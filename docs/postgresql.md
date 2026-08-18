@@ -1,6 +1,6 @@
 # PostgreSQL Configuration
 
-ACDC supports three database options. SQLite is the default and
+DebridPulse supports three database options. SQLite is the default and
 requires no setup. Existing SQLite installations continue to work unchanged.
 
 ## Option 1 — SQLite (Default)
@@ -62,7 +62,7 @@ docker run -d \
 
 # 3. Start the app on the same network
 docker run -d \
-  --name alldebrid-client \
+  --name debridpulse \
   --network alldebrid-net \
   --restart unless-stopped \
   -p 8080:8080 \
@@ -70,7 +70,7 @@ docker run -d \
   -v /path/to/config:/app/config \
   -e DB_TYPE=postgres_internal \
   -e POSTGRES_PASSWORD=your_secure_password \
-  ghcr.io/xipher-zero/alldebrid-client:internal-v0.9.4
+  ghcr.io/xipher-zero/debridpulse:internal-v0.9.4
 ```
 
 Both containers are now on `alldebrid-net` and can reach each other

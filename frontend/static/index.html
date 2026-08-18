@@ -3,10 +3,10 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<title>ACDC</title>
+<title>DebridPulse</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/style.css?v=8">
+<link rel="stylesheet" href="/style.css?v=9">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=4">
 <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png?v=4">
 <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=4">
@@ -15,9 +15,9 @@
 
 <aside id="sidebar">
   <div class="logo">
-    <img class="logo-icon" src="/logo.svg?v=4" alt="AllDebrid Control &amp; Download Center logo">
+    <img class="logo-icon" src="/logo.svg?v=4" alt="DebridPulse logo">
     <div class="logo-text">
-      <div class="logo-name logo-name-full" title="AllDebrid Control &amp; Download Center">AllDebrid Control &amp;<br>Download Center</div>
+      <div class="logo-name logo-name-full" title="DebridPulse">Debrid<span>Pulse</span></div>
       <div class="logo-ver" id="sidebar-version">v…</div>
     </div>
   </div>
@@ -29,9 +29,6 @@
     <div class="nav-item" data-view="torrents" onclick="nav(this)">
       <span class="icon">&#x25BD;&#xFE0E;</span><span class="nav-label">Downloads</span>
       <span class="nav-badge" id="nb-active" style="display:none">0</span>
-    </div>
-    <div class="nav-item" data-view="search" onclick="nav(this)">
-      <span class="icon">&#128269;</span><span class="nav-label">Search</span>
     </div>
     <div class="nav-group">Monitor</div>
     <div class="nav-item" data-view="events" onclick="nav(this)">
@@ -68,10 +65,6 @@
       <div class="dot" id="dot-db"></div>
       <span id="lbl-db">DB: —</span>
     </div>
-    <div class="conn-row" id="flexget-running-row" style="display:none">
-      <div class="dot" id="dot-flexget" style="background:var(--accent);animation:pulse 1s infinite"></div>
-      <span id="lbl-flexget" style="color:var(--accent)">FlexGet: running…</span>
-    </div>
     <div class="conn-row" style="margin-top:6px;padding-top:6px;border-top:1px solid var(--border)">
       <a href="https://alldebrid.com" target="_blank" rel="noopener"
          style="font-size:10px;color:var(--text3);text-decoration:none;display:flex;align-items:center;gap:4px;transition:color .15s"
@@ -93,10 +86,10 @@
   <div id="topbar">
     <button class="mobile-menu-btn" id="mobile-menu-btn" onclick="toggleSidebar()" aria-label="Menu">☰</button>
     <h1 id="page-title">Dashboard</h1>
-    <a id="update-badge" href="https://github.com/Xipher-Zero/alldebrid-client/blob/main/CHANGELOG.md"
-       target="_blank" rel="noopener" aria-label="Open the ACDC changelog"
+    <a id="update-badge" href="https://github.com/Xipher-Zero/debridpulse/blob/main/CHANGELOG.md"
+       target="_blank" rel="noopener" aria-label="Open the DebridPulse changelog"
        style="display:none;align-items:center;gap:6px;background:var(--surface2);border:1px solid var(--accent);border-radius:20px;padding:3px 12px;font-size:11px;color:var(--accent);cursor:pointer;text-decoration:none"
-       title="Open the ACDC changelog">&#128230; <span id="update-badge-version"></span> available</a>
+       title="Open the DebridPulse changelog">&#128230; <span id="update-badge-version"></span> available</a>
     <div id="aria2-speed-badge" style="display:none;align-items:center;gap:6px;background:var(--surface2);border:1px solid var(--border);border-radius:20px;padding:3px 10px;font-size:11px;color:var(--text2);cursor:default" title="Active / max — live speed — limit"><span style="color:var(--green)">&#9660;</span><span id="aria2-badge-active">0</span><span style="color:var(--text3)">/</span><span id="aria2-badge-max">—</span><span style="color:var(--border);margin:0 2px">|</span><span id="aria2-badge-speed" style="color:var(--green)">0 B/s</span><span style="color:var(--border);margin:0 2px">|</span><span style="color:var(--text3)">&#9660;</span><span id="aria2-badge-limit">&#8734;</span></div>
     <div id="topbar-actions"></div>
   </div>
@@ -364,35 +357,6 @@
       </div>
     </div>
     <!-- Changelog -->
-    <div class="view" id="view-saved-searches">
-      <div class="card">
-        <div class="card-header">
-          <span class="card-title">🔍 Saved Searches</span>
-          <button class="btn btn-ghost btn-sm" onclick="showAddSavedSearch()">+ Add</button>
-        </div>
-        <div id="saved-search-form-view" style="display:none;padding:14px 16px;border-bottom:1px solid var(--border)">
-          <div style="font-weight:600;margin-bottom:10px">New Saved Search</div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-            <div class="form-group"><label class="form-label">Name</label><input class="input" id="ss2-name" placeholder="e.g. Anime Releases"/></div>
-            <div class="form-group"><label class="form-label">Search Query</label><input class="input" id="ss2-query" placeholder="e.g. Attack on Titan S04"/></div>
-            <div class="form-group"><label class="form-label">Min Seeders</label><input class="input" type="number" id="ss2-min-seeders" value="1" min="0"/></div>
-            <div class="form-group"><label class="form-label">Regex Filter</label><input class="input" id="ss2-regex" placeholder="e.g. 1080p"/></div>
-            <div class="form-group"><label class="form-label">Run every (min)</label><input class="input" type="number" id="ss2-interval" value="60" min="5"/></div>
-            <div class="form-group"><label class="form-label">Auto-add results</label><label class="toggle"><input type="checkbox" id="ss2-auto-add"/><span class="slider"></span></label></div>
-          </div>
-          <div style="display:flex;gap:8px;margin-top:8px">
-            <button class="btn btn-primary btn-sm" onclick="saveSavedSearch2()">Save</button>
-            <button class="btn btn-ghost btn-sm" onclick="document.getElementById('saved-search-form-view').style.display='none'">Cancel</button>
-          </div>
-        </div>
-        <div id="saved-searches-view-list" style="padding:0 16px 16px">
-          <div style="color:var(--text3);padding:20px 0;font-size:12px">Loading…</div>
-        </div>
-      </div>
-    </div>
-
-
-
     <div class="view" id="view-analytics">
       <div class="card">
         <div class="card-header">
@@ -422,196 +386,6 @@
         </div>
         <div style="padding:18px">
           <div class="changelog-shell" id="changelog-content">Loading…</div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Search -->
-    <div class="view" id="view-search">
-
-      <div id="jackett-search-bar" style="display:flex;flex-direction:column;gap:10px;margin-bottom:16px">
-
-        <!-- Row 1: Query + Search button -->
-        <div style="display:flex;gap:8px;align-items:stretch">
-          <input class="input" id="jackett-query" placeholder="Search by title, keyword, IMDb ID&#8230;"
-            onkeydown="if(event.key==='Enter')jackettSearch()"
-            style="flex:1;font-size:14px;height:40px;padding:0 14px">
-          <button class="btn btn-primary" onclick="jackettSearch()" id="jackett-search-btn"
-            style="height:40px;padding:0 22px;font-size:13px;white-space:nowrap;flex-shrink:0">
-            &#128269; Search
-          </button>
-        </div>
-
-        <!-- Row 2: Filters -->
-        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
-
-          <!-- Category -->
-          <div style="display:flex;flex-direction:column;gap:4px;min-width:120px">
-            <label class="form-label" style="margin:0">Category</label>
-            <select class="input" id="jackett-cat" style="height:34px;padding:0 8px;font-size:12px">
-              <option value="0">All categories</option>
-              <option value="2000">&#127916; Movies</option>
-              <option value="5000">&#128250; TV</option>
-              <option value="3000">&#127925; Music</option>
-              <option value="7000">&#128218; Books</option>
-              <option value="1000">&#127918; Games</option>
-              <option value="4000">&#128187; Software</option>
-            </select>
-          </div>
-
-          <!-- Indexers -->
-          <div style="display:flex;flex-direction:column;gap:4px;min-width:160px">
-            <label class="form-label" style="margin:0">Indexers</label>
-            <div class="idx-picker" id="idx-picker" style="height:34px">
-              <div class="idx-trigger" id="idx-trigger" onclick="idxToggle(event)"
-                style="height:34px;padding:0 8px;font-size:12px">
-                <span class="idx-placeholder" id="idx-placeholder">All Indexers</span>
-                <span class="idx-arrow" style="font-size:9px">&#9660;</span>
-              </div>
-              <div class="idx-dropdown" id="idx-dropdown">
-                <label class="idx-option idx-all-opt">
-                  <input type="checkbox" id="idx-all-cb" checked onchange="idxAllChanged(this)">
-                  <span>All Indexers</span>
-                </label>
-              </div>
-            </div>
-            <select id="jackett-tracker" multiple style="display:none"></select>
-          </div>
-
-          <!-- Search type -->
-          <div style="display:flex;flex-direction:column;gap:4px;min-width:120px">
-            <label class="form-label" style="margin:0">Mode</label>
-            <select class="input" id="jackett-search-type" style="height:34px;padding:0 8px;font-size:12px"
-              onchange="onSearchTypeChange()">
-              <option value="search">&#128269; General</option>
-              <option value="tvsearch">&#128250; TV Series</option>
-              <option value="movie">&#127916; Movie</option>
-              <option value="music">&#127925; Music</option>
-              <option value="book">&#128218; Book</option>
-            </select>
-          </div>
-
-          <!-- Genre chips input (hidden for General mode) -->
-          <div id="adv-genre-wrap" style="display:flex;flex-direction:column;gap:4px;min-width:160px">
-            <label class="form-label" style="margin:0">Genre / Tag</label>
-            <div style="position:relative">
-              <input class="input" id="jackett-genre"
-                placeholder="comedy, horror&#8230; (Enter to add)"
-                list="genre-suggestions"
-                style="height:34px;padding:0 8px;font-size:12px;width:100%"
-                oninput="updateGenreChips()"
-                onkeydown="if(event.key==='Enter'){addGenreChip();event.preventDefault();}">
-              <datalist id="genre-suggestions">
-                <option value="action"><option value="adventure"><option value="animation">
-                <option value="biography"><option value="comedy"><option value="crime">
-                <option value="documentary"><option value="drama"><option value="fantasy">
-                <option value="horror"><option value="mystery"><option value="romance">
-                <option value="sci-fi"><option value="thriller"><option value="western">
-                <option value="rock"><option value="pop"><option value="jazz"><option value="classical">
-                <option value="hip-hop"><option value="electronic"><option value="metal">
-              </datalist>
-            </div>
-            <div id="genre-chips" style="display:flex;flex-wrap:wrap;gap:3px;min-height:0"></div>
-          </div>
-
-          <!-- IMDb ID (movie + tvsearch only) -->
-          <div id="adv-imdbid-wrap" style="display:none;flex-direction:column;gap:4px;min-width:130px">
-            <label class="form-label" style="margin:0">IMDb ID</label>
-            <input class="input" id="jackett-imdbid" placeholder="tt1234567"
-              style="height:34px;padding:0 8px;font-size:12px">
-          </div>
-
-          <!-- Year -->
-          <div id="adv-year-wrap" style="display:none;flex-direction:column;gap:4px;min-width:80px">
-            <label class="form-label" style="margin:0">Year</label>
-            <input class="input" id="jackett-year" placeholder="2024" type="number" min="1900" max="2100"
-              style="height:34px;padding:0 8px;font-size:12px">
-          </div>
-
-          <!-- Season (tvsearch only) -->
-          <div id="adv-season-wrap" style="display:none;flex-direction:column;gap:4px;min-width:70px">
-            <label class="form-label" style="margin:0">Season</label>
-            <input class="input" id="jackett-season" placeholder="1" type="number" min="1"
-              style="height:34px;padding:0 8px;font-size:12px">
-          </div>
-
-          <!-- Episode (tvsearch only) -->
-          <div id="adv-ep-wrap" style="display:none;flex-direction:column;gap:4px;min-width:70px">
-            <label class="form-label" style="margin:0">Episode</label>
-            <input class="input" id="jackett-ep" placeholder="1" type="number" min="1"
-              style="height:34px;padding:0 8px;font-size:12px">
-          </div>
-
-          <!-- Availability + Clear -->
-          <div style="display:flex;gap:6px;align-items:flex-end;margin-left:auto">
-            <div style="display:flex;flex-direction:column;gap:4px">
-              <label class="form-label" style="margin:0">Availability</label>
-              <select class="input" id="jackett-availability" style="height:34px;padding:0 8px;font-size:12px">
-                <option value="all">All torrents</option>
-                <option value="alive">Seeded only</option>
-              </select>
-            </div>
-            <button class="btn btn-ghost btn-sm" onclick="clearSearchAdv()"
-              style="height:34px;padding:0 10px;opacity:.6;white-space:nowrap"
-              title="Clear all filters">&#10005; Reset</button>
-          </div>
-
-        </div>
-      </div>
-
-      <div id="jackett-state" style="text-align:center;padding:40px 0;color:var(--text2);display:none"></div>
-
-      <div class="card" id="jackett-results-wrap" style="display:none;overflow-x:auto;padding:0">
-
-        <!-- Bulk-action toolbar (visible when ≥1 row is checked) -->
-        <div id="jackett-bulk-bar"
-          style="display:none;align-items:center;gap:10px;padding:8px 14px;
-                 border-bottom:1px solid var(--border);background:var(--surface2)">
-          <span id="jackett-sel-count" style="font-size:12px;color:var(--text2)"></span>
-          <button class="btn btn-primary btn-sm" onclick="jackettAddSelected()">
-            &#43; Add Selected
-          </button>
-          <button class="btn btn-ghost btn-sm" onclick="jackettSelectAll()">Select all</button>
-          <button class="btn btn-ghost btn-sm" onclick="jackettClearSelection()">Clear</button>
-        </div>
-
-        <!-- Add All button row -->
-        <div style="display:flex;justify-content:flex-end;padding:6px 14px;border-bottom:1px solid var(--border)">
-          <button class="btn btn-ghost btn-sm" onclick="jackettAddAll()" id="jackett-add-all-btn"
-            style="font-size:12px">&#8644; Add All</button>
-        </div>
-
-        <table class="t-table" style="min-width:700px">
-          <thead>
-            <tr>
-              <th style="width:34px;padding:0 6px">
-                <input type="checkbox" id="jackett-check-all" title="Select all"
-                  onchange="jackettToggleAllCheckboxes(this.checked)"
-                  style="cursor:pointer;accent-color:var(--accent)">
-              </th>
-              <th style="min-width:240px;cursor:pointer" onclick="jackettCycleSort('title')">Title <span id="jackett-sort-title"></span></th>
-              <th style="cursor:pointer" onclick="jackettCycleSort('indexer')">Indexer <span id="jackett-sort-indexer"></span></th>
-              <th style="cursor:pointer" onclick="jackettCycleSort('size')">Size <span id="jackett-sort-size"></span></th>
-              <th style="text-align:center;cursor:pointer" onclick="jackettCycleSort('seeders')">Seeds <span id="jackett-sort-seeders"></span></th>
-              <th style="text-align:center;cursor:pointer" onclick="jackettCycleSort('peers')">Peers <span id="jackett-sort-peers"></span></th>
-              <th style="cursor:pointer" onclick="jackettCycleSort('date')">Date <span id="jackett-sort-date"></span></th>
-              <th style="text-align:center" title="Indexer trust score from Historical Learning (0–100)">Score</th>
-              <th>Status</th>
-              <th style="width:90px"></th>
-            </tr>
-          </thead>
-          <tbody id="jackett-tbody"></tbody>
-        </table>
-        <div id="jackett-result-count"
-          style="padding:8px 14px;font-size:11px;color:var(--text2);border-top:1px solid var(--border)"></div>
-      </div>
-
-      <div id="jackett-not-configured" class="card" style="display:none;text-align:center;color:var(--text2);padding:32px">
-        <div style="font-size:22px;margin-bottom:8px">&#128268;</div>
-        <div>Jackett is not configured or not enabled.</div>
-        <div style="font-size:12px;margin-top:6px">
-          Go to <a href="#" onclick="nav(document.querySelector('[data-view=settings]'));setTimeout(function(){switchSettingsTab('tab-jackett');},200);return false"
-            style="color:var(--accent)">Settings &rarr; Jackett</a> to enable and configure your instance.
         </div>
       </div>
     </div>
@@ -702,7 +476,7 @@
         </div>
         <div class="card-body" style="display:flex;flex-direction:column;gap:10px;padding:16px">
 
-          <a href="https://github.com/Xipher-Zero/alldebrid-client" target="_blank" rel="noreferrer"
+          <a href="https://github.com/Xipher-Zero/debridpulse" target="_blank" rel="noreferrer"
              style="display:flex;align-items:center;gap:14px;padding:14px 16px;border-radius:var(--radius);
                     border:1px solid var(--border);background:var(--surface2);text-decoration:none;
                     color:var(--text);transition:border-color .15s"
@@ -719,18 +493,6 @@
       </div>
     </div>
 
-    <div class="view" id="view-learning">
-      <div class="card">
-        <div class="card-header">
-          <span class="card-title">🧠 Historical Learning</span>
-          <button class="btn btn-ghost btn-sm" onclick="loadLearningStats()">↻ Refresh</button>
-        </div>
-        <div style="padding:14px" id="learning-body">
-          <div style="color:var(--text3)">Click Refresh to load indexer performance data.</div>
-        </div>
-      </div>
-    </div>
-
     <!-- Help -->
     <div class="view" id="view-help">
       <div class="view-header">
@@ -740,10 +502,8 @@
       <div class="stabs" id="help-tabs" style="margin-bottom:0">
         <div class="stab active"  data-htab="quickstart"   onclick="switchHelpTab(this)">&#128640; Quick Start</div>
         <div class="stab"         data-htab="howitworks"   onclick="switchHelpTab(this)">&#128214; How it works</div>
-        <div class="stab"         data-htab="qbit"         onclick="switchHelpTab(this)">&#128279; Sonarr/Radarr</div>
         <div class="stab"         data-htab="aria2"        onclick="switchHelpTab(this)">&#11015;&#65038; aria2</div>
         <div class="stab"         data-htab="integrations" onclick="switchHelpTab(this)">&#128268; Integrations</div>
-        <div class="stab"         data-htab="automation"   onclick="switchHelpTab(this)">&#129504; Automation</div>
         <div class="stab"         data-htab="settings"     onclick="switchHelpTab(this)">&#9881;&#65039; Settings</div>
         <div class="stab"         data-htab="trouble"      onclick="switchHelpTab(this)">&#128295; Troubleshooting</div>
       </div>
@@ -789,7 +549,7 @@
                 <div style="background:var(--accent);color:#000;border-radius:50%;min-width:30px;height:30px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;flex-shrink:0">4</div>
                 <div>
                   <div style="font-weight:600;margin-bottom:3px">Add a torrent</div>
-                  <div style="color:var(--text2);font-size:13px">Paste a magnet link in the <b>Torrents</b> view, use the <b>Search</b> view to find content, drop a <code>.torrent</code> file in the watch folder, or connect Sonarr/Radarr via the qBittorrent API emulation (see the <b>Sonarr/Radarr</b> tab).</div>
+                  <div style="color:var(--text2);font-size:13px">Submit a direct link, paste a magnet link, upload a <code>.torrent</code> file, or drop a <code>.torrent</code>/<code>.magnet</code> file in the watch folder.</div>
                 </div>
               </div>
 
@@ -814,7 +574,7 @@
             <h3 style="margin:0;color:var(--accent);font-size:15px">The download pipeline</h3>
 
             <div style="font-size:13px;color:var(--text2);line-height:1.7">
-              <p style="margin:0 0 10px">ACDC sits between your torrent sources and your disk. It never downloads directly from peers — AllDebrid's cloud does. You get the finished file via an unlocked HTTPS link.</p>
+              <p style="margin:0 0 10px">DebridPulse sits between your download sources and your disk. It never downloads directly from peers — your debrid provider's cloud does. You get the finished file via an unlocked HTTPS link.</p>
 
               <div style="display:flex;flex-direction:column;gap:10px;font-size:12px">
                 <div style="display:flex;gap:10px;align-items:center">
@@ -835,54 +595,11 @@
                 <div style="display:flex;gap:10px;align-items:center">
                   <div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:5px 10px;white-space:nowrap;min-width:130px;text-align:center;font-weight:600;color:var(--green)">aria2 complete</div>
                   <div style="color:var(--text3)">→</div>
-                  <div style="color:var(--text2)">Magnet deleted from AllDebrid, Sonarr/Radarr notified. <b>status: completed</b></div>
+                  <div style="color:var(--text2)">Magnet cleaned up on AllDebrid and the local transfer is marked <b>completed</b>.</div>
                 </div>
               </div>
 
               <p style="margin:14px 0 0"><b>Error auto-recovery:</b> Upload failures (code 5) and "no peers" (code 8) are retried automatically up to <code>upload_fail_retry_count</code> times. Torrents stuck in <code>downloading</code> without files for more than <code>stuck_download_timeout_hours</code> are reset. Use <b>⟳ Recover All</b> to manually trigger a full recovery pass.</p>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- ── Sonarr / Radarr (qBit API) ────────────────────────────────────── -->
-      <div class="help-panel" id="htab-qbit">
-        <div class="card" style="margin-top:0;border-radius:0 0 var(--radius) var(--radius)">
-          <div class="card-body" style="max-width:760px;display:flex;flex-direction:column;gap:20px">
-
-            <h3 style="margin:0;color:var(--accent);font-size:15px">Sonarr &amp; Radarr integration via qBittorrent API emulation</h3>
-
-            <div style="font-size:13px;color:var(--text2);line-height:1.7">
-              <p style="margin:0 0 10px">ACDC emulates the <b>qBittorrent v4.3.2 Web API</b> so Sonarr, Radarr, Lidarr and other *arr apps can use it as a native download client — no webhook configuration needed.</p>
-
-              <b style="color:var(--text1)">Configure in Sonarr / Radarr:</b>
-              <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:14px;margin:10px 0;font-family:'JetBrains Mono',monospace;font-size:12px;line-height:1.8">
-                Settings → Download Clients → + → qBittorrent<br>
-                Host:      <b>your-server-ip</b><br>
-                Port:      <b>8080</b> (or your mapped port)<br>
-                Username:  <i>(leave empty, or match ACDC auth settings)</i><br>
-                Password:  <i>(leave empty, or match ACDC auth settings)</i><br>
-                Category:  <i>(any value — stored but not used for routing)</i><br>
-                ✔ Use SSL: off (unless you have a reverse proxy with TLS)
-              </div>
-
-              <b style="color:var(--text1)">How it works:</b>
-              <ul style="margin:8px 0 0;padding-left:18px">
-                <li>When Sonarr/Radarr grabs a release it POSTs the magnet or .torrent to <code>/api/v2/torrents/add</code>.</li>
-                <li>The emulation layer calls <code>manager.add_magnet_direct()</code> — the same code path as the UI "Add" button.</li>
-                <li>Sonarr/Radarr poll <code>/api/v2/torrents/info</code> to track progress. Completed torrents appear as <code>uploading</code> state (qBit seeding) which triggers the import.</li>
-                <li>After import, Sonarr/Radarr call <code>/api/v2/torrents/delete</code> — this calls <code>manager.delete_torrent()</code> which removes the row from AllDebrid too.</li>
-              </ul>
-
-              <b style="color:var(--text1);display:block;margin-top:12px">Status mapping:</b>
-              <table style="width:100%;border-collapse:collapse;font-size:12px;margin-top:6px">
-                <tr style="background:var(--surface2)"><th style="padding:5px 8px;text-align:left;border:1px solid var(--border)">Our status</th><th style="padding:5px 8px;text-align:left;border:1px solid var(--border)">qBit state</th><th style="padding:5px 8px;text-align:left;border:1px solid var(--border)">*arr sees</th></tr>
-                <tr><td style="padding:5px 8px;border:1px solid var(--border)">pending, uploading, processing, ready</td><td style="padding:5px 8px;border:1px solid var(--border)">stalledDL</td><td style="padding:5px 8px;border:1px solid var(--border)">Waiting for download</td></tr>
-                <tr><td style="padding:5px 8px;border:1px solid var(--border)">downloading, queued</td><td style="padding:5px 8px;border:1px solid var(--border)">downloading</td><td style="padding:5px 8px;border:1px solid var(--border)">Downloading</td></tr>
-                <tr><td style="padding:5px 8px;border:1px solid var(--border)">paused</td><td style="padding:5px 8px;border:1px solid var(--border)">pausedDL</td><td style="padding:5px 8px;border:1px solid var(--border)">Paused</td></tr>
-                <tr><td style="padding:5px 8px;border:1px solid var(--border)">completed</td><td style="padding:5px 8px;border:1px solid var(--border)">uploading</td><td style="padding:5px 8px;border:1px solid var(--border)">Ready to import ✓</td></tr>
-                <tr><td style="padding:5px 8px;border:1px solid var(--border)">error</td><td style="padding:5px 8px;border:1px solid var(--border)">error</td><td style="padding:5px 8px;border:1px solid var(--border)">Failed</td></tr>
-              </table>
             </div>
           </div>
         </div>
@@ -896,7 +613,7 @@
             <h3 style="margin:0;color:var(--accent);font-size:15px">aria2 — the download engine</h3>
 
             <div style="font-size:13px;color:var(--text2);line-height:1.7">
-              <p style="margin:0 0 10px">ACDC uses <b>aria2</b> as the actual HTTP download engine. Two modes are supported:</p>
+              <p style="margin:0 0 10px">DebridPulse uses <b>aria2</b> as the actual HTTP download engine. Two modes are supported:</p>
 
               <b style="color:var(--text1)">Built-in (default)</b>
               <p style="margin:4px 0 10px">aria2 runs inside the container. No external setup needed. Configure options in <b>Settings → Download Client → aria2 Config</b>. The process is managed by the client and restarts automatically.</p>
@@ -926,21 +643,6 @@
             <div style="display:flex;flex-direction:column;gap:16px;font-size:13px;color:var(--text2);line-height:1.7">
 
               <div>
-                <b style="color:var(--text1);display:block;margin-bottom:4px">&#128279; Sonarr / Radarr (via qBittorrent API)</b>
-                See the <b>Sonarr/Radarr</b> tab for full setup instructions. The qBit API emulation is available at <code>/api/v2/</code> and requires no extra configuration in this client.
-              </div>
-
-              <div>
-                <b style="color:var(--text1);display:block;margin-bottom:4px">&#128269; Jackett / Torrent Search</b>
-                Go to <b>Settings → Services → Jackett</b> and enter your Jackett URL and API key. Then use the <b>Search</b> view to find and add torrents directly. Supports adding individual results, selected results, or all results at once with the <b>Add All</b> button.
-              </div>
-
-              <div>
-                <b style="color:var(--text1);display:block;margin-bottom:4px">&#127381; FlexGet</b>
-                Configure a FlexGet URL in <b>Settings → Services → FlexGet</b>. The client can trigger FlexGet runs and receive webhooks from FlexGet to automatically add magnets.
-              </div>
-
-              <div>
                 <b style="color:var(--text1);display:block;margin-bottom:4px">&#128276; Discord Notifications</b>
                 Enter a Discord webhook URL in <b>Settings → Notifications</b>. Fine-grained toggles let you choose exactly which events trigger a notification: completed, error, upload failed, no peers, and periodic statistics reports.
               </div>
@@ -948,11 +650,6 @@
               <div>
                 <b style="color:var(--text1);display:block;margin-bottom:4px">&#128202; Prometheus Metrics</b>
                 A Prometheus-compatible scrape endpoint is available at <code>GET /api/metrics</code>. Metrics include torrent counts by status, active downloads, errors, SSE subscriber count, and total bytes downloaded. Add to your Prometheus config with <code>metrics_path: /api/metrics</code>.
-              </div>
-
-              <div>
-                <b style="color:var(--text1);display:block;margin-bottom:4px">&#128228; Post-Processing Scripts</b>
-                Set <b>On Torrent Complete</b> in <b>Settings → Download Client</b> to a shell command that runs after each completed download. Supports <code>{name}</code>, <code>{path}</code>, <code>{torrent_id}</code>, <code>{status}</code> placeholders. 300 s timeout.
               </div>
 
             </div>
@@ -980,10 +677,9 @@
               <details style="margin-bottom:10px"><summary style="cursor:pointer;font-weight:600;color:var(--text1);font-size:13px">Download Client</summary>
                 <div style="padding:6px 0 0 12px">
                   <b>Max Concurrent Downloads</b> — How many torrents are processed (unlocked + dispatched) simultaneously. Default: 3.<br>
-                  <b>Built-in aria2 Download Folder</b> — Local path used by ACDC and built-in aria2.<br>
+                  <b>Built-in aria2 Download Folder</b> — Local path used by DebridPulse and built-in aria2.<br>
                   <b>External aria2 Download Path</b> — Path to that download location as seen by an external aria2 daemon.<br>
                   <b>Min Free Disk Space (GB)</b> — If less than this is available, the download is aborted with an error (torrent row kept). 0 = disabled.<br>
-                  <b>On Torrent Complete</b> — Shell command run after each completed download. Placeholders: {name}, {path}, {torrent_id}, {status}.<br>
                   <b>Stuck timeout (hours)</b> — Torrents stuck in active states longer than this are reset. 0 = disabled.
                 </div>
               </details>
@@ -1034,20 +730,11 @@
                 </div>
               </details>
 
-              <details><summary style="cursor:pointer;font-weight:600;color:var(--text1)">Sonarr/Radarr can't connect (qBit API)</summary>
-                <div style="color:var(--text2);padding:8px 0 0 12px;line-height:1.7">
-                  1. Make sure you are using <b>qBittorrent</b> as the download client type, not "Other".<br>
-                  2. Use the exact IP/hostname and port of the ACDC container — not <code>localhost</code> unless both run on the same host.<br>
-                  3. Leave username/password empty, or match what you set in <b>Settings → Access Control</b>.<br>
-                  4. Test the connection with the "Test" button in Sonarr/Radarr. It calls <code>/api/v2/app/version</code> — you can also test manually in a browser.
-                </div>
-              </details>
-
               <details><summary style="cursor:pointer;font-weight:600;color:var(--text1)">Downloads start but files are never written to disk</summary>
                 <div style="color:var(--text2);padding:8px 0 0 12px;line-height:1.7">
                   1. Check the <b>Built-in aria2 Download Folder</b> path — it must be accessible inside the container.<br>
                   2. In Unraid: ensure the path mapping in the Docker template is correct (host path → container path).<br>
-                  3. If using an external aria2 instance, set the <b>External aria2 Download Path</b> to the path seen by that daemon (it may differ from the ACDC container path).<br>
+                  3. If using an external aria2 instance, set the <b>External aria2 Download Path</b> to the path seen by that daemon (it may differ from the DebridPulse container path).<br>
                   4. Check the <code>min_free_disk_gb</code> setting — if the disk is full, downloads abort with an error.
                 </div>
               </details>
@@ -1063,7 +750,7 @@
                 <div style="color:var(--text2);padding:8px 0 0 12px;line-height:1.7">
                   The UI uses Server-Sent Events (SSE) for live updates instead of polling. If you see stale data:<br>
                   1. Check the browser console for <code>EventSource</code> errors.<br>
-                  2. If you use a reverse proxy (nginx, Traefik), ensure it does not buffer responses. For nginx add <code>proxy_buffering off;</code> and <code>proxy_read_timeout 3600s;</code> to the ACDC location block.<br>
+                  2. If you use a reverse proxy (nginx, Traefik), ensure it does not buffer responses. For nginx add <code>proxy_buffering off;</code> and <code>proxy_read_timeout 3600s;</code> to the DebridPulse location block.<br>
                   3. The client falls back to 15-second polling automatically if SSE fails.
                 </div>
               </details>
@@ -1079,66 +766,6 @@
         </div>
       </div>
 
-      <!-- ── Automation ────────────────────────────────────────────────── -->
-      <div class="help-panel" id="htab-automation">
-        <div class="card" style="margin-top:0;border-radius:0 0 var(--radius) var(--radius)">
-          <div class="card-body" style="max-width:760px;display:flex;flex-direction:column;gap:24px;padding:20px 24px">
-
-            <div>
-              <h3 style="margin:0 0 10px;color:var(--accent);font-size:15px">&#129504; Rule Engine</h3>
-              <p style="margin:0 0 10px;color:var(--text2);font-size:13px">
-                The Rule Engine automatically applies actions to new torrents before they are uploaded to AllDebrid.
-                Enable it in <b>Settings → Automation → Rule Engine</b>.
-              </p>
-              <p style="margin:0 0 6px;font-size:12px;font-weight:600">Example rules (JSON):</p>
-              <pre style="background:var(--surface2);padding:14px;border-radius:var(--radius);font-size:11px;overflow-x:auto;line-height:1.6;margin:0 0 10px">[
-  {"if": {"label_contains": "anime"},   "then": {"download_path": "/media/anime"}},
-  {"if": {"title_contains": "REMUX"},   "then": {"priority": -10}},
-  {"if": {"size_gb_gt": 80},            "then": {"pause": true}},
-  {"if": {"title_matches": ".*FLUX.*"}, "then": {"priority": 5}},
-  {"if": {"title_contains": "sample"},  "then": {"block": true}},
-  {"if": {"source_is": "jackett"},      "then": {"label": "auto"}}
-]</pre>
-              <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px">
-                <div style="background:var(--surface2);padding:10px;border-radius:var(--radius)">
-                  <div style="font-weight:600;margin-bottom:6px;color:var(--text2)">Conditions</div>
-                  <div><code>title_contains</code> — substring match</div>
-                  <div><code>title_matches</code> — regex (re.search)</div>
-                  <div><code>size_gb_gt / size_gb_lt</code> — size in GB</div>
-                  <div><code>label_contains</code> — label/category</div>
-                  <div><code>source_is</code> — manual, jackett, watch…</div>
-                </div>
-                <div style="background:var(--surface2);padding:10px;border-radius:var(--radius)">
-                  <div style="font-weight:600;margin-bottom:6px;color:var(--text2)">Actions</div>
-                  <div><code>priority</code> — int, added to current</div>
-                  <div><code>pause</code> — true = start paused</div>
-                  <div><code>download_path</code> — override folder</div>
-                  <div><code>label</code> — set/override label</div>
-                  <div><code>block</code> — true = skip upload</div>
-                </div>
-              </div>
-            </div>
-
-            <div>
-              <h3 style="margin:0 0 10px;color:var(--accent);font-size:15px">&#127919; Download Profiles</h3>
-              <p style="margin:0 0 10px;color:var(--text2);font-size:13px">
-                Named presets that bundle download path, priority, and label.
-                Only one profile can be active at a time.
-                Configure in <b>Settings → Automation → Download Profiles</b>.
-              </p>
-              <p style="margin:0 0 6px;font-size:12px;font-weight:600">Example profiles (JSON):</p>
-              <pre style="background:var(--surface2);padding:14px;border-radius:var(--radius);font-size:11px;overflow-x:auto;line-height:1.6;margin:0">[
-  {"name": "Streaming",     "download_path": "/media/stream",   "priority": 10, "label": "stream"},
-  {"name": "Archive",       "download_path": "/media/archive",  "priority": -5, "label": "archive"},
-  {"name": "Anime",         "download_path": "/media/anime",    "priority": 5,  "label": "anime"},
-  {"name": "Low Bandwidth", "download_path": "/media/lowbw",    "priority": -10,"label": "low-bw"},
-  {"name": "High Quality",  "download_path": "/media/remux",    "priority": 0,  "label": "remux"}
-]</pre>
-            </div>
-
-          </div>
-        </div>
-      </div>
       </div><!-- /help-panels-wrap -->
     </div>
 
@@ -1175,7 +802,7 @@
 
 <input id="torrent-file-input" type="file" accept=".torrent,application/x-bittorrent" hidden onchange="uploadTorrentFile(this)">
 
-<script src="/app.js?v=8" defer></script>
+<script src="/app.js?v=9" defer></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <div id="mobile-overlay" onclick="closeSidebar()"></div>
 </body>

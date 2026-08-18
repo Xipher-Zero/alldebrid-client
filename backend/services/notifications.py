@@ -353,7 +353,7 @@ class NotificationService:
         release_url: str = "",
         release_notes: str = "",
     ) -> None:
-        """Notify that a new ACDC version is available."""
+        """Notify that a new DebridPulse version is available."""
         cfg = get_settings()
         if not getattr(cfg, "discord_notify_update", True):
             return
@@ -361,8 +361,8 @@ class NotificationService:
         if not url:
             return False
         desc = (
-            "**ACDC " + latest_version + "** is available.\n"
-            "You are running **" + current_version + "**."
+            f"**{APP_NAME} {latest_version}** is available.\n"
+            f"You are running **{current_version}**."
         )
         fields: List[Dict[str, Any]] = []
         if release_url:

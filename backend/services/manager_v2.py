@@ -569,13 +569,13 @@ class TorrentManager:
         return True
 
     async def control_aria2_gid(self, gid: str, action: str) -> dict:
-        """Apply a user action only to a GID owned by ACDC."""
+        """Apply a user action only to a GID owned by DebridPulse."""
         gid = str(gid or "").strip()
         if action not in {"pause", "resume", "remove"}:
             raise ValueError("Unsupported aria2 action")
         if not is_builtin_mode() and gid not in await self._aria2_owned_gids():
             raise PermissionError(
-                f"aria2 GID {gid} is not owned by ACDC"
+                f"aria2 GID {gid} is not owned by DebridPulse"
             )
         if action == "remove":
             mutated = await self._remove_owned_aria2_gid(gid)
@@ -716,7 +716,7 @@ class TorrentManager:
     async def _handle_torrent(self, path: Path, processed: Path):
         if not get_settings().alldebrid_api_key:
             return
-        # Check whether another process (e.g. a Sonarr/Radarr container) still
+        # Check whether another process still
         # has the file open for writing before we read it.
         # Uses /proc/*/fd which is available on Linux/Docker without lsof.
         if _file_in_use(path):
@@ -842,13 +842,6 @@ class TorrentManager:
             row["_duplicate"] = decision.as_dict()
         if get_settings().discord_notify_added:
             await self.notify().send_added(name, source=source, alldebrid_id=ad_id)
-        # Generic webhook — on_added
-        try:
-            import asyncio as _asyncio
-            from services.webhook_actions import fire_from_config, EVENT_ADDED
-            _asyncio.create_task(fire_from_config(EVENT_ADDED, row))
-        except Exception as exc:
-            logger.debug("Webhook on_added task creation failed: %s", exc)
 
         # Fast-path: if AllDebrid already reports ready (cached torrent) start immediately.
         status_code = int(result.get("statusCode") or result.get("status_code") or 0)
@@ -1355,28 +1348,6 @@ class TorrentManager:
         normalized_hash = result.get("hash", hash_value).lower()
         logger.info("Magnet uploaded %s (ad_id=%s)", sanitize_log_value(name[:80]), ad_id)
 
-        # ── Rule Engine ────────────────────────────────────────────────────
-        rule_actions: dict = {}
-        cfg = get_settings()
-        if getattr(cfg, "rules_enabled", False):
-            try:
-                from services.rules import evaluate as rules_evaluate
-                rule_actions = rules_evaluate({
-                    "name":       name,
-                    "source":     source,
-                    "size_bytes": int(result.get("size") or 0),
-                    "priority":   0,
-                })
-                if rule_actions.get("block"):
-                    logger.info("Rule engine: blocking torrent '%s' (rules_list match)", sanitize_log_value(name[:60]))
-                    try:
-                        await self.ad().delete_magnet(ad_id)
-                    except Exception as exc:
-                        logger.debug("Could not delete blocked magnet %s from AllDebrid: %s", ad_id, exc)
-                    return {"_blocked_by_rule": True, "name": name}
-            except Exception as exc:
-                logger.debug("Rule engine evaluation error: %s", exc)
-        # ──────────────────────────────────────────────────────────────────
         row = await self._upsert(normalized_hash, magnet, name, ad_id, source)
         if decision.action == "warn":
             row["_duplicate"] = decision.as_dict()
@@ -3933,20 +3904,6 @@ class TorrentManager:
                 download_client="aria2",
             )
 
-        # Generic webhook — fire-and-forget, never raises
-        try:
-            from services.webhook_actions import fire_from_config, EVENT_COMPLETE
-            asyncio.create_task(fire_from_config(EVENT_COMPLETE, torrent_dict))
-        except Exception as exc:
-            logger.debug("Webhook on_complete task creation failed: %s", exc)
-
-        # Plex / Jellyfin library scan — fire-and-forget
-        try:
-            from services.media_server import trigger_from_config as _media_trigger
-            asyncio.create_task(_media_trigger())
-        except Exception as exc:
-            logger.debug("Media server trigger task creation failed: %s", exc)
-
         # Only the dedicated built-in daemon may have its result history purged.
         if is_builtin_mode():
             try:
@@ -4209,57 +4166,6 @@ class TorrentManager:
 
     async def _mark_finished(self, torrent_id: int, name: str = ""):
         await self._log_event(torrent_id, "info", "Finished")
-        # Notify Sonarr + Radarr after completion
-        try:
-            from services.integrations import notify_sonarr, notify_radarr
-            await asyncio.gather(
-                notify_sonarr(name),
-                notify_radarr(name),
-                return_exceptions=True,
-            )
-        except Exception as exc:
-            logger.warning("Integration notify failed: %s", exc)
-
-        # Post-processing script (on_torrent_complete)
-        cfg = get_settings()
-        script_template = str(getattr(cfg, "on_torrent_complete", "") or "").strip()
-        if script_template:
-            try:
-                async with get_db() as _s_db:
-                    _row = await (await _s_db.execute(
-                        "SELECT local_path FROM torrents WHERE id=?", (torrent_id,)
-                    )).fetchone()
-                local_path = str((_row["local_path"] if _row else "") or "")
-                cmd = (script_template
-                       .replace("{name}", name.replace('"', '\\"'))
-                       .replace("{path}", local_path.replace('"', '\\"'))
-                       .replace("{torrent_id}", str(torrent_id))
-                       .replace("{status}", "completed"))
-                # Security note: cmd originates from cfg.on_torrent_complete which is
-                # administrator-configured only (not user input). We log a sanitized
-                # representation and use shell=True intentionally to support pipes and
-                # shell features in the post-processing script.
-                logger.info("Running post-processing script for torrent %s", torrent_id)
-                logger.debug("Post-processing cmd (truncated): %s", sanitize_log_value(cmd[:120]))
-                proc = await asyncio.create_subprocess_shell(
-                    cmd,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=300)
-                if proc.returncode != 0:
-                    logger.warning(
-                        "Post-processing script exited %d for torrent %s: %s",
-                        proc.returncode, torrent_id,
-                        (stderr or b"").decode("utf-8", errors="replace")[:200],
-                    )
-                else:
-                    logger.info("Post-processing script completed for torrent %s", torrent_id)
-            except asyncio.TimeoutError:
-                logger.warning("Post-processing script timed out (>300s) for torrent %s", torrent_id)
-            except Exception as exc:
-                logger.warning("Post-processing script failed for torrent %s: %s", torrent_id, exc)
-
         # Push live update to SSE subscribers
         try:
             from api.routes import _sse_broadcast
@@ -4341,10 +4247,10 @@ class TorrentManager:
             # Threshold crossed — activate guard.
             # We do NOT pause currently active aria2 downloads: they are already
             # consuming the space, interrupting them creates half-finished files
-            # and blocks finalization (Sonarr/Radarr import, webhooks, cleanup).
+            # and blocks normal finalization and cleanup.
             # Instead we only block NEW dispatches via _dispatch_pending_aria2_queue.
-            # Automations (Sonarr, Radarr, webhooks, post-processing) continue to
-            # run for torrents that complete while the guard is active.
+            # Completion bookkeeping continues for transfers that finish while
+            # the guard is active.
             self._disk_guard_active = True
             logger.warning(
                 "disk_guard: ACTIVATED — %.2f GB free < %.2f GB required on %s; "

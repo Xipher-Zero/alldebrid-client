@@ -1,0 +1,28 @@
+DebridPulse — Multi-provider Debrid Download Manager
+
+Copyright (C) 2026 Chris Moore
+
+DebridPulse is free software distributed under the GNU General Public License,
+version 2 or (at your option) any later version. See LICENSE for the complete
+license terms.
+
+Upstream provenance
+-------------------
+
+Portions of this work are derived from kroeberd/alldebrid-client release
+v1.9.9, commit c0f7a5bfeba4f259fb2acc62ac6eed27e8ac4d5c.
+
+Copyright (c) 2026 kroeberd
+
+The upstream work was distributed under the MIT License. Its complete license
+text is preserved at LICENSES/MIT.txt.
+
+Third-party software
+--------------------
+
+Python runtime dependencies are listed in docs/DEPENDENCY_LICENSES.md and
+licenses/python-runtime.json. Container images also include Debian packages;
+their package-specific notices remain installed under /usr/share/doc and their
+common license texts under /usr/share/common-licenses. See SOURCE_OFFER.md for
+corresponding-source information. Browser-loaded CDN resources and their
+licenses are also inventoried in docs/DEPENDENCY_LICENSES.md.

@@ -164,6 +164,8 @@ class GlobalPauseControlTests(unittest.IsolatedAsyncioTestCase):
     async def test_individual_pause_holds_dispatched_and_pending_children(self):
         manager = TorrentManager()
         manager.download_client_name = lambda: "aria2"
+        manager.is_paused = lambda: False
+        manager._dispatch_pending_aria2_queue = AsyncMock()
         fake_aria2 = types.SimpleNamespace(pause=AsyncMock())
         manager.aria2 = lambda: fake_aria2
         manager._log_event = AsyncMock()
@@ -197,10 +199,13 @@ class GlobalPauseControlTests(unittest.IsolatedAsyncioTestCase):
             "status IN ('pending','queued','downloading')",
             file_update,
         )
+        manager._dispatch_pending_aria2_queue.assert_awaited_once_with()
 
     async def test_individual_resume_restores_dispatchable_child_states(self):
         manager = TorrentManager()
         manager.download_client_name = lambda: "aria2"
+        manager.is_paused = lambda: False
+        manager._dispatch_pending_aria2_queue = AsyncMock()
         fake_aria2 = types.SimpleNamespace(resume=AsyncMock())
         manager.aria2 = lambda: fake_aria2
         manager._log_event = AsyncMock()
@@ -232,6 +237,35 @@ class GlobalPauseControlTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn("WHEN download_id IS NULL THEN 'pending'", file_update)
         self.assertIn("ELSE 'queued'", file_update)
+        manager._dispatch_pending_aria2_queue.assert_awaited_once_with()
+
+    async def test_resume_during_global_pause_does_not_fill_pending_queue(self):
+        manager = TorrentManager()
+        manager.download_client_name = lambda: "aria2"
+        manager.is_paused = lambda: True
+        manager._dispatch_pending_aria2_queue = AsyncMock()
+        manager.aria2 = lambda: types.SimpleNamespace(resume=AsyncMock())
+        manager._log_event = AsyncMock()
+
+        class Cursor:
+            async def fetchall(self):
+                return []
+
+        class FakeDb:
+            async def execute(self, sql, params=()):
+                return Cursor()
+
+            async def commit(self):
+                return None
+
+        @asynccontextmanager
+        async def fake_get_db():
+            yield FakeDb()
+
+        with patch("services.manager_v2.get_db", fake_get_db):
+            await manager.resume_torrent(53)
+
+        manager._dispatch_pending_aria2_queue.assert_not_awaited()
 
 
 class ProviderHistoryRetentionTests(unittest.IsolatedAsyncioTestCase):
@@ -1739,6 +1773,22 @@ class ManagerDedupeTests(unittest.IsolatedAsyncioTestCase):
             aria2_max_active_downloads=0, max_concurrent_downloads=5,
         )):
             self.assertEqual(mgr._aria2_slot_limit(), 5)
+
+    def test_paused_aria2_jobs_do_not_consume_download_slots(self):
+        jobs = [
+            types.SimpleNamespace(gid="active", status="active"),
+            types.SimpleNamespace(gid="waiting", status="waiting"),
+            types.SimpleNamespace(gid="paused-1", status="paused"),
+            types.SimpleNamespace(gid="paused-2", status="paused"),
+            types.SimpleNamespace(gid="complete", status="complete"),
+        ]
+
+        occupants = TorrentManager._aria2_slot_occupants(jobs)
+
+        self.assertEqual(
+            [job.gid for job in occupants],
+            ["active", "waiting"],
+        )
 
     def test_aria2_job_options_reuse_deterministic_target_path(self):
         mgr = TorrentManager()

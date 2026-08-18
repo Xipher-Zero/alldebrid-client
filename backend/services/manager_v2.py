@@ -2682,6 +2682,18 @@ class TorrentManager:
             value = int(cfg.max_concurrent_downloads or 1)
         return max(1, value)
 
+    @staticmethod
+    def _aria2_slot_occupants(downloads):
+        """Return jobs currently occupying the controlled aria2 queue.
+
+        Paused jobs remain registered with aria2 so they can resume from their
+        control files, but they must not reserve a DebridPulse transfer slot.
+        """
+        return [
+            download for download in downloads
+            if download.status in {"active", "waiting"}
+        ]
+
     def _aria2_state_windows(self) -> tuple[int, int]:
         cfg = get_settings()
         waiting = int(getattr(cfg, "aria2_waiting_window", 100) or 100)
@@ -2720,12 +2732,13 @@ class TorrentManager:
         The single authoritative gate between our DB and aria2.
 
         Invariant: at any point, at most aria2_max_active_downloads ADC-owned
-        files may have status active/waiting/paused in aria2 at the same time.
+        files may have status active/waiting in aria2 at the same time. Paused
+        jobs remain resumable but do not reserve transfer capacity.
         Foreign jobs in an external daemon are neither counted nor changed.
 
         Steps:
         1. Fetch current aria2 state once.
-        2. Count in-flight entries (active + waiting + paused).
+        2. Count slot occupants (active + waiting; paused is parked).
         3. If over the limit (e.g. settings were reduced): remove the
            excess entries from aria2 and reset those download_files to
            pending so they are re-queued in order on the next cycle.
@@ -2755,10 +2768,7 @@ class TorrentManager:
                 if str(dl.gid) in owned_gids
             ]
             limit = self._aria2_slot_limit()
-            in_flight = [
-                dl for dl in owned_downloads
-                if dl.status in {"active", "waiting", "paused"}
-            ]
+            in_flight = self._aria2_slot_occupants(owned_downloads)
 
             # ── Step 3: trim excess if limit was lowered ─────────────────────
             if len(in_flight) > limit:
@@ -3880,6 +3890,11 @@ class TorrentManager:
                 )
                 await db.commit()
         await self._log_event(torrent_id, "info", "Paused aria2 transfer queue")
+        if not self.is_paused():
+            # Individual pause should release capacity immediately instead of
+            # waiting for the next scheduler poll. Global Pause keeps dispatch
+            # blocked through the application-level paused setting.
+            await self._dispatch_pending_aria2_queue()
 
     async def resume_torrent(self, torrent_id: int):
         if self.download_client_name() != "aria2":
@@ -3916,6 +3931,11 @@ class TorrentManager:
                 )
                 await db.commit()
         await self._log_event(torrent_id, "info", "Resumed aria2 transfer queue")
+        if not self.is_paused():
+            # Resuming several GIDs can temporarily put more active/waiting
+            # jobs in aria2 than DebridPulse permits. Rebalance immediately:
+            # excess jobs return to pending and resume when capacity opens.
+            await self._dispatch_pending_aria2_queue()
 
     async def pause_all_downloads(self) -> dict:
         """Pause every active DebridPulse-owned aria2 transfer.

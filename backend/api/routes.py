@@ -392,6 +392,13 @@ async def aria2_runtime_status():
         diagnostics = {"error": str(exc)}
     return {**status, "diagnostics": diagnostics, **speed_stat}
 
+
+@router.get("/aria2/global-stat")
+async def aria2_global_stat():
+    """Return the lightweight live counters used by the topbar indicator."""
+    return {"ok": True, **await manager.aria2().get_global_stat()}
+
+
 @router.post("/aria2/runtime/start")
 async def aria2_runtime_start():
     status = await aria2_runtime.start()
@@ -930,7 +937,25 @@ async def pause_torrent(torrent_id: int):
 async def resume_torrent(torrent_id: int):
     try:
         await manager.resume_torrent(torrent_id)
-        return {"ok": True}
+        globally_paused = bool(get_settings().paused)
+        if globally_paused:
+            async with get_db() as db:
+                remaining_paused = await db.fetchone(
+                    "SELECT 1 AS paused FROM torrents WHERE status='paused' LIMIT 1"
+                )
+            if not remaining_paused:
+                cfg = get_settings().model_copy(update={"paused": False})
+                save_settings(cfg)
+                apply_settings(cfg)
+                globally_paused = False
+                try:
+                    await manager._dispatch_pending_aria2_queue()
+                except Exception as exc:
+                    logger.debug(
+                        "aria2 dispatch after final individual resume skipped: %s",
+                        sanitize_exception(exc),
+                    )
+        return {"ok": True, "paused": globally_paused}
     except Exception as e:
         raise HTTPException(400, _sanitize_error(e))
 

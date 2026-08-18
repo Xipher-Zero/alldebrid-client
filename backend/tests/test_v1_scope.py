@@ -149,6 +149,8 @@ def test_global_pause_control_exposes_mixed_selective_pause_state():
     assert 'onclick="pauseProcessing()">Pause All</button>' in frontend
     assert 'onclick="resumeProcessing()">Resume All</button>' in frontend
     assert "pausedTransferCount = Math.max(0, Number(bs.paused) || 0)" in frontend
+    assert "settingsData.paused = result.paused" in frontend
+    assert "if (!result.paused) pausedTransferCount = 0" in frontend
     assert index.index('id="topbar-actions"') < index.index('id="aria2-speed-badge"')
     assert "flex: 0 0 190px" in styles
 
@@ -176,6 +178,26 @@ def test_global_pause_control_exposes_mixed_selective_pause_state():
     )[1].split("async def sync_download_clients", 1)[0]
     assert "if self.is_paused()" not in sync_handler.split("all_downloads =", 1)[0]
     assert "or self.is_paused()" in dispatch_handler.split("return", 1)[0]
+
+
+def test_topbar_uses_live_aria2_speed_with_human_download_units():
+    frontend = (REPO_ROOT / "frontend/static/app.js").read_text()
+
+    assert frontend.count("function fmtSpeed(bps)") == 1
+    assert "return '0 KB/s'" in frontend
+    assert "return '<1 KB/s'" in frontend
+    assert "+' KB/s'" in frontend
+    assert "+' MB/s'" in frontend
+    assert "+' GB/s'" in frontend
+
+    runtime_handler = frontend.split("async function loadAria2Runtime()", 1)[1].split(
+        "async function aria2RuntimeAction", 1
+    )[0]
+    assert "active: Number(data.active) || 0" in runtime_handler
+    assert "liveBps: Number(data.download_speed) || 0" in runtime_handler
+    assert "api('GET', '/aria2/global-stat', null, 3000)" in frontend
+    assert "}, 1000);" in frontend
+    assert "_aria2TopbarStatBusy" in frontend
 
 
 def test_watch_folder_ingestion_is_not_shipped_in_v1():

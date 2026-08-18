@@ -161,7 +161,12 @@ function fmtSize(b) {
   return b.toFixed(1)+' '+u[i];
 }
 function fmtSpeed(bps) {
-  return bps > 0 ? fmtSize(bps) + '/s' : '—';
+  const speed = Number(bps);
+  if (!Number.isFinite(speed) || speed <= 0) return '0 KB/s';
+  if (speed < 1024) return '<1 KB/s';
+  if (speed < 1048576) return (speed/1024).toFixed(1)+' KB/s';
+  if (speed < 1073741824) return (speed/1048576).toFixed(1)+' MB/s';
+  return (speed/1073741824).toFixed(2)+' GB/s';
 }
 function fmtEta(secs) {
   if (!secs || secs <= 0) return '';
@@ -609,15 +614,6 @@ function setStatsPeriod(el) {
   el.classList.add('active');
   loadDetailedStats(el.dataset.period);
 }
-function fmtSpeed(bps) {
-  if (!bps||bps<0) return '0 B/s';
-  if (bps<1024) return bps+' B/s';
-  if (bps<1048576) return (bps/1024).toFixed(1)+' KB/s';
-  if (bps<1073741824) return (bps/1048576).toFixed(1)+' MB/s';
-  return (bps/1073741824).toFixed(2)+' GB/s';
-}
-
-
 async function loadRecent() {
   try {
     const {items} = await api('GET', '/torrents?limit=4');
@@ -895,7 +891,12 @@ async function pauseT(id) {
 
 async function resumeT(id) {
   try {
-    await api('POST',`/torrents/${id}/resume`);
+    const result = await api('POST',`/torrents/${id}/resume`);
+    if (typeof result.paused === 'boolean') {
+      settingsData.paused = result.paused;
+      if (!result.paused) pausedTransferCount = 0;
+      renderTopbarActions();
+    }
     toast('aria2 queue resumed','success');
     loadTorrents(); loadStats(); loadRecent();
   } catch(e) { toast(sanitizeErrorMsg(e.message),'error'); }
@@ -998,6 +999,9 @@ document.addEventListener('DOMContentLoaded', () => {
       loadAria2Runtime().catch(()=>{});
     }
   }, 5000);
+  setInterval(function() {
+    loadAria2TopbarStat().catch(()=>{});
+  }, 1000);
   const isLight = localStorage.getItem('theme') === 'light';
   document.body.classList.toggle('light', isLight);
   updateThemeToggle(isLight);
@@ -2353,6 +2357,10 @@ async function loadAria2Runtime() {
           _aria2BadgeState.maxDl    = parseInt(settingsData.aria2_max_active_downloads)||3;
         }
         badge.style.display = 'flex';
+        updateAria2TopbarBadge({
+          active: Number(data.active) || 0,
+          liveBps: Number(data.download_speed) || 0,
+        });
         loadAria2SpeedLimit().catch(function(){});
       }
     }
@@ -3249,6 +3257,23 @@ function updateAria2Badge(activeCount) {
 
 // Topbar badge: live active count, speed limit, max concurrent
 var _aria2BadgeState = {active: 0, limitBps: 0, maxDl: 3, liveBps: 0};
+var _aria2TopbarStatBusy = false;
+
+async function loadAria2TopbarStat() {
+  if (_aria2TopbarStatBusy || !settingsData ||
+      (settingsData.aria2_mode || 'builtin') !== 'builtin') return;
+  _aria2TopbarStatBusy = true;
+  try {
+    const data = await api('GET', '/aria2/global-stat', null, 3000);
+    updateAria2TopbarBadge({
+      active: Number(data.active) || 0,
+      liveBps: Number(data.download_speed) || 0,
+    });
+  } finally {
+    _aria2TopbarStatBusy = false;
+  }
+}
+
 function updateAria2TopbarBadge(patch) {
   Object.assign(_aria2BadgeState, patch);
   var s = _aria2BadgeState;

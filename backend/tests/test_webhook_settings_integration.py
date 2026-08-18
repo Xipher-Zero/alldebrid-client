@@ -215,6 +215,63 @@ class TorrentListingRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(params[-2:], [250, 25])
 
 
+class ProcessingPauseRouteTests(unittest.IsolatedAsyncioTestCase):
+    async def test_final_individual_resume_clears_global_pause_and_dispatches(self):
+        cfg = routes.AppSettings(paused=True)
+        db = _FakeDb()
+        db.fetchone = AsyncMock(return_value=None)
+        saved = []
+
+        with patch.object(routes.manager, "resume_torrent", AsyncMock()) as resume, \
+             patch.object(routes.manager, "_dispatch_pending_aria2_queue", AsyncMock()) as dispatch, \
+             patch("api.routes.get_db", return_value=_fake_db_context(db)), \
+             patch("api.routes.get_settings", return_value=cfg), \
+             patch("api.routes.save_settings", side_effect=saved.append), \
+             patch("api.routes.apply_settings") as apply:
+            result = await routes.resume_torrent(71)
+
+        resume.assert_awaited_once_with(71)
+        dispatch.assert_awaited_once_with()
+        self.assertEqual(result, {"ok": True, "paused": False})
+        self.assertFalse(saved[0].paused)
+        apply.assert_called_once_with(saved[0])
+
+    async def test_individual_resume_keeps_global_pause_if_another_item_is_paused(self):
+        cfg = routes.AppSettings(paused=True)
+        db = _FakeDb()
+        db.fetchone = AsyncMock(return_value={"paused": 1})
+
+        with patch.object(routes.manager, "resume_torrent", AsyncMock()), \
+             patch.object(routes.manager, "_dispatch_pending_aria2_queue", AsyncMock()) as dispatch, \
+             patch("api.routes.get_db", return_value=_fake_db_context(db)), \
+             patch("api.routes.get_settings", return_value=cfg), \
+             patch("api.routes.save_settings") as save, \
+             patch("api.routes.apply_settings") as apply:
+            result = await routes.resume_torrent(72)
+
+        self.assertEqual(result, {"ok": True, "paused": True})
+        dispatch.assert_not_awaited()
+        save.assert_not_called()
+        apply.assert_not_called()
+
+
+class Aria2LiveStatRouteTests(unittest.IsolatedAsyncioTestCase):
+    async def test_global_stat_route_returns_live_rpc_counters(self):
+        stat = {
+            "download_speed": 42_000_000,
+            "upload_speed": 0,
+            "active": 2,
+            "waiting": 1,
+        }
+        fake_aria2 = SimpleNamespace(get_global_stat=AsyncMock(return_value=stat))
+
+        with patch.object(routes.manager, "aria2", return_value=fake_aria2):
+            result = await routes.aria2_global_stat()
+
+        self.assertEqual(result, {"ok": True, **stat})
+        fake_aria2.get_global_stat.assert_awaited_once_with()
+
+
 class DatabaseMaintenanceRouteTests(unittest.IsolatedAsyncioTestCase):
     async def test_database_wipe_requires_feature_toggle(self):
         cfg = SimpleNamespace(db_wipe_enabled=False, paused=True, db_backup_before_wipe=True)

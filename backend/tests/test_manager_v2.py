@@ -239,7 +239,7 @@ class GlobalPauseControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("ELSE 'queued'", file_update)
         manager._dispatch_pending_aria2_queue.assert_awaited_once_with()
 
-    async def test_resume_during_global_pause_does_not_fill_pending_queue(self):
+    async def test_resume_during_global_pause_dispatches_only_selected_parent(self):
         manager = TorrentManager()
         manager.download_client_name = lambda: "aria2"
         manager.is_paused = lambda: True
@@ -265,7 +265,79 @@ class GlobalPauseControlTests(unittest.IsolatedAsyncioTestCase):
         with patch("services.manager_v2.get_db", fake_get_db):
             await manager.resume_torrent(53)
 
-        manager._dispatch_pending_aria2_queue.assert_not_awaited()
+        manager._dispatch_pending_aria2_queue.assert_awaited_once_with(
+            torrent_id=53,
+            allow_while_paused=True,
+        )
+
+    async def test_manual_resume_dispatch_filter_cannot_start_other_paused_work(self):
+        manager = TorrentManager()
+        manager.download_client_name = lambda: "aria2"
+        manager.is_paused = lambda: True
+        manager._aria2_slot_limit = lambda: 3
+        manager._aria2_get_all = AsyncMock(return_value=[])
+        statements = []
+
+        class Cursor:
+            async def fetchall(self):
+                return []
+
+        class FakeDb:
+            async def execute(self, sql, params=()):
+                statements.append((sql, params))
+                return Cursor()
+
+        @asynccontextmanager
+        async def fake_get_db():
+            yield FakeDb()
+
+        with patch("services.manager_v2.get_db", fake_get_db), \
+             patch("services.manager_v2.is_builtin_mode", return_value=True):
+            await manager._dispatch_pending_aria2_queue(
+                torrent_id=82,
+                allow_while_paused=True,
+            )
+
+        pending_sql, pending_params = next(
+            (sql, params)
+            for sql, params in statements
+            if "f.status='pending'" in sql
+        )
+        self.assertIn("AND f.torrent_id=?", pending_sql)
+        self.assertEqual(pending_params, (82, 3))
+
+    async def test_global_pause_scheduler_continues_only_resumed_parents(self):
+        manager = TorrentManager()
+        manager.download_client_name = lambda: "aria2"
+        manager.is_paused = lambda: True
+        manager._aria2_slot_limit = lambda: 3
+        manager._aria2_get_all = AsyncMock(return_value=[])
+        statements = []
+
+        class Cursor:
+            async def fetchall(self):
+                return []
+
+        class FakeDb:
+            async def execute(self, sql, params=()):
+                statements.append((sql, params))
+                return Cursor()
+
+        @asynccontextmanager
+        async def fake_get_db():
+            yield FakeDb()
+
+        with patch("services.manager_v2.get_db", fake_get_db), \
+             patch("services.manager_v2.is_builtin_mode", return_value=True):
+            await manager._dispatch_pending_aria2_queue()
+
+        pending_sql, pending_params = next(
+            (sql, params)
+            for sql, params in statements
+            if "f.status='pending'" in sql
+        )
+        self.assertIn("AND t.status IN ('queued','downloading')", pending_sql)
+        self.assertEqual(pending_params, (3,))
 
     async def test_individual_pause_waits_for_in_progress_state_reconciliation(self):
         manager = TorrentManager()

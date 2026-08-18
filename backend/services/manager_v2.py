@@ -2732,7 +2732,13 @@ class TorrentManager:
         waiting, stopped = self._aria2_state_windows()
         return await self.aria2().get_memory_diagnostics(waiting_limit=waiting, stopped_limit=stopped)
 
-    async def _dispatch_pending_aria2_queue(self, all_downloads=None):
+    async def _dispatch_pending_aria2_queue(
+        self,
+        all_downloads=None,
+        *,
+        torrent_id: Optional[int] = None,
+        allow_while_paused: bool = False,
+    ):
         """
         The single authoritative gate between our DB and aria2.
 
@@ -2749,7 +2755,18 @@ class TorrentManager:
            pending so they are re-queued in order on the next cycle.
         4. Fill available slots from pending download_files, oldest first.
         """
-        if self.download_client_name() != "aria2" or self.is_paused():
+        # Global Pause parks every parent as ``paused``. An item-level Resume
+        # changes only that parent back to queued/downloading, making it an
+        # explicit running exception. The selected parent must be able to fill
+        # DB-pending children now and on later scheduler passes; otherwise a
+        # multi-link job stalls after its first slot-sized batch.
+        globally_paused = self.is_paused()
+        targeted_manual_resume = allow_while_paused and torrent_id is not None
+        if self.download_client_name() != "aria2":
+            return
+        if globally_paused and torrent_id is not None and not targeted_manual_resume:
+            return
+        if globally_paused and allow_while_paused and torrent_id is None:
             return
         # Disk-space guard: block ALL new dispatches while active.
         # This is the authoritative gate for aria2 dispatching — it runs on
@@ -2810,10 +2827,22 @@ class TorrentManager:
             if available_slots <= 0:
                 return
 
+            torrent_filter = ""
+            pending_params = []
+            if torrent_id is not None:
+                torrent_filter = " AND f.torrent_id=?"
+                pending_params.append(int(torrent_id))
+            elif globally_paused:
+                # Only parents explicitly resumed after Pause All have one of
+                # these states. Parents still governed by the global pause are
+                # persisted as ``paused`` and cannot enter this queue.
+                torrent_filter = " AND t.status IN ('queued','downloading')"
+            pending_params.append(available_slots)
+
             async with get_db() as db:
                 pending_rows = await (
                     await db.execute(
-                        """SELECT f.id AS file_id, f.torrent_id, f.filename,
+                        f"""SELECT f.id AS file_id, f.torrent_id, f.filename,
                                   f.source_url, f.download_url, f.local_path,
                                   t.name AS torrent_name, t.source AS transfer_source
                            FROM download_files f
@@ -2822,9 +2851,10 @@ class TorrentManager:
                              AND f.blocked=0
                              AND f.status='pending'
                              AND t.status NOT IN ('completed','deleted','error')
+                             {torrent_filter}
                            ORDER BY t.priority DESC, t.id ASC
                            LIMIT ?""",
-                        (available_slots,),
+                        tuple(pending_params),
                     )
                 ).fetchall()
 
@@ -3945,10 +3975,16 @@ class TorrentManager:
                 )
                 await db.commit()
         await self._log_event(torrent_id, "info", "Resumed aria2 transfer queue")
-        if not self.is_paused():
-            # Resuming several GIDs can temporarily put more active/waiting
-            # jobs in aria2 than DebridPulse permits. Rebalance immediately:
-            # excess jobs return to pending and resume when capacity opens.
+        # Resuming several GIDs can temporarily put more active/waiting jobs
+        # in aria2 than DebridPulse permits. Rebalance immediately. During a
+        # global pause, this targeted pass may start only the manually resumed
+        # parent, including children previously parked without an aria2 GID.
+        if self.is_paused():
+            await self._dispatch_pending_aria2_queue(
+                torrent_id=torrent_id,
+                allow_while_paused=True,
+            )
+        else:
             await self._dispatch_pending_aria2_queue()
 
     async def pause_all_downloads(self) -> dict:

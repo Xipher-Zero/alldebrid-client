@@ -152,7 +152,11 @@ def test_global_pause_control_exposes_mixed_selective_pause_state():
     assert "settingsData.paused = result.paused" in frontend
     assert "if (!result.paused) pausedTransferCount = 0" in frontend
     assert index.index('id="topbar-actions"') < index.index('id="aria2-speed-badge"')
-    assert "flex: 0 0 190px" in styles
+    assert "#aria2-speed-badge" in styles
+    assert "white-space: nowrap" in styles
+    assert "flex: 0 0 230px" in styles
+    assert "width: 64px" in styles
+    assert "font-variant-numeric: tabular-nums" in styles
 
     pause_handler = frontend.split("async function pauseProcessing()", 1)[1].split(
         "async function resumeProcessing()", 1
@@ -177,7 +181,9 @@ def test_global_pause_control_exposes_mixed_selective_pause_state():
         "async def _dispatch_pending_aria2_queue", 1
     )[1].split("async def sync_download_clients", 1)[0]
     assert "if self.is_paused()" not in sync_handler.split("all_downloads =", 1)[0]
-    assert "or self.is_paused()" in dispatch_handler.split("return", 1)[0]
+    assert "globally_paused = self.is_paused()" in dispatch_handler
+    assert "targeted_manual_resume" in dispatch_handler
+    assert "AND t.status IN ('queued','downloading')" in dispatch_handler
 
 
 def test_topbar_uses_live_aria2_speed_with_human_download_units():
@@ -191,6 +197,8 @@ def test_topbar_uses_live_aria2_speed_with_human_download_units():
     assert "+' KB/s'" in frontend
     assert "+' MB/s'" in frontend
     assert "+' GB/s'" in frontend
+    assert "speed < 104857600" in frontend
+    assert "(speed/1048576).toFixed(2)+' MB/s'" in frontend
 
     runtime_handler = frontend.split("async function loadAria2Runtime()", 1)[1].split(
         "async function aria2RuntimeAction", 1

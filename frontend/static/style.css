@@ -277,11 +277,25 @@ nav { flex: 1; padding: 10px 0; overflow-y: auto; }
 }
 #aria2-speed-badge {
   box-sizing: border-box;
-  flex: 0 0 190px;
-  width: 190px;
+  flex: 0 0 230px;
+  width: 230px;
+  min-width: 230px;
   justify-content: center;
   position: relative;
   overflow: visible;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+#aria2-badge-speed {
+  display: inline-block;
+  width: 64px;
+  text-align: right;
+  white-space: nowrap;
+}
+#aria2-badge-limit {
+  display: inline-block;
+  width: 64px;
+  text-align: right;
 }
 .aria2-cap-control { position: relative; display: inline-flex; align-items: center; }
 .aria2-cap-toggle {
@@ -973,7 +987,7 @@ textarea.input { resize: vertical; }
   #topbar h1 { font-size: 15px; }
   #topbar-actions { gap: 4px; }
   #topbar-actions .btn { padding: 6px 9px; font-size: 11px; }
-  #aria2-speed-badge { flex-basis: 170px; width: 170px; }
+  #aria2-speed-badge { flex-basis: 230px; width: 230px; min-width: 230px; }
 
   /* Dashboard hero */
   .dash-hero { grid-template-columns: 1fr 1fr !important; gap: 8px !important; }

@@ -165,7 +165,7 @@ function fmtSpeed(bps) {
   if (!Number.isFinite(speed) || speed <= 0) return '0 KB/s';
   if (speed < 1024) return '<1 KB/s';
   if (speed < 1048576) return (speed/1024).toFixed(1)+' KB/s';
-  if (speed < 1073741824) return (speed/1048576).toFixed(1)+' MB/s';
+  if (speed < 104857600) return (speed/1048576).toFixed(2)+' MB/s';
   return (speed/1073741824).toFixed(2)+' GB/s';
 }
 function fmtEta(secs) {

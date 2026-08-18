@@ -44,16 +44,6 @@ def _stats_report_window_hours(cfg) -> int:
     return max(1, _coerce_int_setting(getattr(cfg, "stats_report_window_hours", 24), 24))
 
 
-async def watch_folder_loop():
-    await _jitter_sleep(get_settings().watch_interval_seconds)
-    while True:
-        try:
-            await manager.scan_watch_folder()
-        except Exception as e:
-            logger.error(f"Watch folder error: {e}")
-        await asyncio.sleep(get_settings().watch_interval_seconds)
-
-
 async def sync_status_loop():
     """
     Regular AllDebrid poll: syncs active (non-terminal) torrents every poll_interval_seconds.
@@ -364,7 +354,6 @@ async def disk_guard_loop():
 
 
 async def start_scheduler():
-    _tasks.append(asyncio.create_task(watch_folder_loop()))
     _tasks.append(asyncio.create_task(sync_status_loop()))
     _tasks.append(asyncio.create_task(full_sync_loop()))
     _tasks.append(asyncio.create_task(sync_download_clients_loop()))

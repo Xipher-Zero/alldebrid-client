@@ -20,6 +20,9 @@ REMOVED_SETTINGS = {
     "on_torrent_complete",
     "download_profiles",
     "priority_aging_interval_minutes",
+    "watch_folder",
+    "processed_folder",
+    "watch_interval_seconds",
 }
 
 REMOVED_ROUTE_MARKERS = {
@@ -139,7 +142,8 @@ def test_global_pause_control_is_explicitly_labeled_pause_all():
     frontend = (REPO_ROOT / "frontend/static/app.js").read_text()
     routes = (REPO_ROOT / "backend/api/routes.py").read_text()
 
-    assert "${paused ? 'Resume' : 'Pause All'}" in frontend
+    assert "${paused ? 'Resume All' : 'Pause All'}" in frontend
+    assert "${paused ? 'Resume' : 'Pause All'}" not in frontend
     assert "${paused ? 'Resume' : 'Pause'}" not in frontend
 
     pause_handler = frontend.split("async function pauseProcessing()", 1)[1].split(
@@ -166,6 +170,28 @@ def test_global_pause_control_is_explicitly_labeled_pause_all():
     )[1].split("async def sync_download_clients", 1)[0]
     assert "if self.is_paused()" not in sync_handler.split("all_downloads =", 1)[0]
     assert "or self.is_paused()" in dispatch_handler.split("return", 1)[0]
+
+
+def test_watch_folder_ingestion_is_not_shipped_in_v1():
+    frontend = "\n".join(
+        (REPO_ROOT / path).read_text()
+        for path in ("frontend/static/index.html", "frontend/static/app.js")
+    )
+    scheduler = (REPO_ROOT / "backend/core/scheduler.py").read_text()
+    manager = (REPO_ROOT / "backend/services/manager_v2.py").read_text()
+
+    for marker in (
+        'id="s-watch_folder"',
+        'id="s-processed_folder"',
+        'id="s-watch_interval_seconds"',
+        "Watch Folder Scan",
+    ):
+        assert marker not in frontend
+
+    assert "watch_folder_loop" not in scheduler
+    assert "scan_watch_folder" not in manager
+    assert "_handle_magnet_file" not in manager
+    assert "_handle_torrent" not in manager
 
 
 def test_dashboard_kpi_strip_omits_duplicate_database_tile_and_stays_centered():

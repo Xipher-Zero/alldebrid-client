@@ -544,7 +544,7 @@
                 <div style="background:var(--accent);color:#000;border-radius:50%;min-width:30px;height:30px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;flex-shrink:0">4</div>
                 <div>
                   <div style="font-weight:600;margin-bottom:3px">Add a torrent</div>
-                  <div style="color:var(--text2);font-size:13px">Submit a direct link, paste a magnet link, upload a <code>.torrent</code> file, or drop a <code>.torrent</code>/<code>.magnet</code> file in the watch folder.</div>
+                  <div style="color:var(--text2);font-size:13px">Submit a direct link, paste a magnet link, or upload a <code>.torrent</code> file from the Dashboard.</div>
                 </div>
               </div>
 
@@ -594,7 +594,7 @@
                 </div>
               </div>
 
-              <p style="margin:14px 0 0"><b>Error auto-recovery:</b> Upload failures (code 5) and "no peers" (code 8) are retried automatically up to <code>upload_fail_retry_count</code> times. Torrents stuck in <code>downloading</code> without files for more than <code>stuck_download_timeout_hours</code> are reset. Use <b>⟳ Recover All</b> to manually trigger a full recovery pass.</p>
+              <p style="margin:14px 0 0"><b>Error auto-recovery:</b> Upload failures (code 5) and "no peers" (code 8) are retried automatically up to <code>upload_fail_retry_count</code> times. Stalled downloads are reset after <code>stuck_download_timeout_hours</code> so they can be dispatched again. Use <b>⟳ Recover All</b> to manually trigger a full recovery pass.</p>
             </div>
           </div>
         </div>
@@ -665,7 +665,6 @@
                 <div style="padding:6px 0 0 12px">
                   <b>AllDebrid API Key</b> — Required. Get at alldebrid.com/apikeys.<br>
                   <b>Access Control</b> — Optional HTTP Basic Auth. Set both username and password to enable. Leave either empty to disable. Exempt paths: /api/stats, /api/version, /api/avatar (for health checks).<br>
-                  <b>Watch Folder</b> — Drop .torrent or .magnet files here for automatic import.<br>
                 </div>
               </details>
 
@@ -675,7 +674,7 @@
                   <b>Built-in aria2 Download Folder</b> — Local path used by DebridPulse and built-in aria2.<br>
                   <b>External aria2 Download Path</b> — Path to that download location as seen by an external aria2 daemon.<br>
                   <b>Min Free Disk Space (GB)</b> — If less than this is available, the download is aborted with an error (torrent row kept). 0 = disabled.<br>
-                  <b>Stuck timeout (hours)</b> — Torrents stuck in active states longer than this are reset. 0 = disabled.
+                  <b>Stalled download timeout (hours)</b> — Downloads left queued or downloading without an update longer than this are reset for retry. 0 = disabled.
                 </div>
               </details>
 
@@ -719,7 +718,7 @@
               <details open><summary style="cursor:pointer;font-weight:600;color:var(--text1)">Torrents are not downloading / stuck at "processing"</summary>
                 <div style="color:var(--text2);padding:8px 0 0 12px;line-height:1.7">
                   1. Check the event log for the torrent (click the row → Events).<br>
-                  2. Click <b>⟳ Recover All</b> in the Torrents view — this resets stuck torrents and re-dispatches all ready AllDebrid magnets.<br>
+                  2. Click <b>⟳ Recover All</b> in the Downloads view — this resets stalled transfers and re-dispatches ready AllDebrid downloads.<br>
                   3. Open <code>/api/torrents/diagnose</code> to see exact status counts and a sample of non-terminal torrents with file counts.<br>
                   4. Verify the AllDebrid API key is valid: Settings → AllDebrid → Test.
                 </div>
@@ -770,11 +769,12 @@
       <div id="settings-form"></div>
       <div class="save-bar">
         <span class="save-hint">Settings are applied immediately after saving.</span>
-        <button class="btn btn-ghost" onclick="testDiscord()">🔔 Test Discord</button>
-        <button class="btn btn-ghost" onclick="testAD()">🔑 Test AllDebrid</button>
-        <button class="btn btn-ghost" onclick="testAria2()">⬇️ Test aria2</button>
-
-        <button class="btn btn-ghost" id="btn-test-postgres" style="display:none" onclick="testPostgres()">🗄️ Test DB</button>
+        <div class="settings-context-actions">
+          <button class="btn btn-ghost" data-settings-test-tab="tab-general" onclick="testAD()">🔑 Test AllDebrid</button>
+          <button class="btn btn-ghost" data-settings-test-tab="tab-download" onclick="testAria2()" hidden>⬇️ Test Aria2</button>
+          <button class="btn btn-ghost" data-settings-test-tab="tab-notifications" onclick="testDiscord()" hidden>🔔 Test Discord</button>
+          <button class="btn btn-ghost" id="btn-test-postgres" data-settings-test-tab="tab-database" onclick="testPostgres()" hidden>🗄️ Test DB</button>
+        </div>
         <button class="btn btn-primary" onclick="saveSettings()">💾 Save Settings</button>
       </div>
     </div>

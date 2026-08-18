@@ -95,8 +95,8 @@ def _source_label(source: str) -> str:
     """Maps internal source identifiers to readable labels."""
     return {
         "manual":             "Manual (UI)",
-        "watch_file":         "Watch folder (.magnet)",
-        "watch_torrent":      "Watch folder (.torrent)",
+        "manual_file":        "Torrent file (UI)",
+        "direct_link":        "Direct link (UI)",
         "alldebrid_existing": "AllDebrid import",
         "api":                "API",
     }.get(source, source)

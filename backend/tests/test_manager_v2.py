@@ -1049,7 +1049,7 @@ class NotificationTests(unittest.IsolatedAsyncioTestCase):
                 webhook_url="https://main.discord.invalid/hook",
                 added_webhook_url="",
             )
-            await svc.send_added("My Torrent", source="watch_file")
+            await svc.send_added("My Torrent", source="manual_file")
 
         self.assertEqual(sent_to, ["https://main.discord.invalid/hook"])
 
@@ -1064,13 +1064,12 @@ class NotificationTests(unittest.IsolatedAsyncioTestCase):
 
         with patch.object(NotificationService, "_send", fake_send):
             svc = NotificationService("https://hook.invalid/x")
-            await svc.send_added("Test Torrent", source="watch_torrent", alldebrid_id="ad-42")
+            await svc.send_added("Test Torrent", source="manual_file", alldebrid_id="ad-42")
 
         field_names = [f["name"] for f in captured_fields]
         self.assertIn("Source", field_names)
         source_field = next(f for f in captured_fields if f["name"] == "Source")
-        # notifications.py maps "watch_torrent" to a human-readable label
-        self.assertIn("watch", source_field["value"].lower())
+        self.assertIn("torrent file", source_field["value"].lower())
 
     async def test_deduplication_suppresses_duplicate_within_window(self):
         """Same message within deduplication window is suppressed."""

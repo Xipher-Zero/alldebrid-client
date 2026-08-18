@@ -832,6 +832,8 @@ body.light .aria2-err-banner { background: rgba(239,68,68,.07); }
   gap: 10px;
 }
 .save-hint { font-size: 12px; color: var(--text2); flex: 1; }
+.settings-context-actions { display: flex; align-items: center; gap: 10px; }
+.settings-context-actions [hidden] { display: none; }
 .beta-banner { background: rgba(var(--accent-rgb),.08); border: 1px solid rgba(var(--accent-rgb),.2);
   border-radius: var(--radius-sm); padding: 8px 14px; font-size: 12px; color: var(--accent2);
   margin-bottom: 18px; display: flex; align-items: center; gap: 8px; }
@@ -974,6 +976,7 @@ textarea.input { resize: vertical; }
     box-shadow: none;
   }
   .save-bar .btn { font-size: 11px; padding: 6px 10px; }
+  .settings-context-actions { flex-wrap: wrap; gap: 6px; }
   #settings-form {
     padding: 10px 14px 0 10px;
   }

@@ -358,35 +358,6 @@ async def _retry_async(
 MAX_CONCURRENT_AD_UPLOADS = 5
 
 
-def _file_in_use(path: Path) -> bool:
-    """
-    Returns True if any process currently has the file open (write or read).
-    Works by scanning /proc/*/fd symlinks — available on Linux without lsof.
-    Returns False if /proc is unavailable (non-Linux) or on any error.
-    """
-    try:
-        target = str(path.resolve())
-        proc_fd = Path("/proc")
-        if not proc_fd.exists():
-            return False
-        for pid_dir in proc_fd.iterdir():
-            if not pid_dir.name.isdigit():
-                continue
-            fd_dir = pid_dir / "fd"
-            try:
-                for fd in fd_dir.iterdir():
-                    try:
-                        if str(fd.resolve()) == target:
-                            return True
-                    except OSError:
-                        continue
-            except (PermissionError, FileNotFoundError):
-                continue
-    except Exception as _e:
-        logger.debug("Torrent file check failed: %s", _e)
-    return False
-
-
 class TorrentManager:
     def __init__(self):
         self._ad: Optional[AllDebridService] = None
@@ -394,8 +365,6 @@ class TorrentManager:
         self._sem: Optional[asyncio.Semaphore] = None
         self._upload_sem: asyncio.Semaphore = asyncio.Semaphore(MAX_CONCURRENT_AD_UPLOADS)
         self._active: Set[int] = set()
-        self._processing_files: Set[str] = set()
-        self._failed_files: Set[str] = set()
         self._direct_link_tasks: Set[asyncio.Task] = set()
         self._direct_link_task_ids: Set[int] = set()
         self._aria2_dispatch_lock = asyncio.Lock()
@@ -635,119 +604,6 @@ class TorrentManager:
         cfg = get_settings()
         client = str(getattr(cfg, "download_client", "aria2") or "aria2").strip().lower()
         return client if client in ("aria2", "symlink") else "aria2"
-
-    def _watch_error_dir(self, watch: Path) -> Path:
-        return watch / "error"
-
-    def _move_watch_file_to_error(self, file_path: Path, watch: Path) -> Optional[Path]:
-        try:
-            error_dir = self._watch_error_dir(watch)
-            error_dir.mkdir(parents=True, exist_ok=True)
-            destination = error_dir / file_path.name
-            if destination.exists():
-                stem = file_path.stem
-                suffix = file_path.suffix
-                counter = 1
-                while True:
-                    candidate = error_dir / f"{stem}_{counter}{suffix}"
-                    if not candidate.exists():
-                        destination = candidate
-                        break
-                    counter += 1
-            shutil.move(str(file_path), str(destination))
-            return destination
-        except Exception as move_exc:
-            logger.error("Unable to move failed watch file [%s] to error folder: %s", file_path.name, move_exc)
-            return None
-
-    async def scan_watch_folder(self):
-        if self.is_paused():
-            return
-        cfg = get_settings()
-        watch = Path(cfg.watch_folder)
-        processed = Path(cfg.processed_folder)
-        error_dir = self._watch_error_dir(watch)
-        try:
-            watch.mkdir(parents=True, exist_ok=True)
-            processed.mkdir(parents=True, exist_ok=True)
-            error_dir.mkdir(parents=True, exist_ok=True)
-        except Exception as exc:
-            logger.error("Watch folder inaccessible: %s", exc)
-            return
-
-        for file_path in list(watch.iterdir()):
-            if file_path.is_dir():
-                if file_path.resolve() == error_dir.resolve():
-                    continue
-                continue
-            key = str(file_path.resolve())
-            if key in self._processing_files:
-                continue
-            suffix = file_path.suffix.lower()
-            if suffix not in {".torrent", ".magnet", ".txt"}:
-                continue
-            # Retry previously failed files on every cycle — the error may be transient
-            # (e.g. API key not yet configured, network blip). Remove from failed set
-            # so it gets a fresh attempt.
-            self._failed_files.discard(key)
-            self._processing_files.add(key)
-            try:
-                if suffix == ".torrent":
-                    await self._handle_torrent(file_path, processed)
-                else:
-                    await self._handle_magnet_file(file_path, processed)
-            except Exception as exc:
-                logger.error("Watch [%s]: %s", file_path.name, exc)
-                self._failed_files.add(key)
-                moved_to = self._move_watch_file_to_error(file_path, watch)
-                # Write to DB events so the error shows in the UI
-                async with get_db() as db:
-                    await db.execute(
-                        "INSERT INTO events (torrent_id, level, message) VALUES (NULL, 'error', ?)",
-                        (
-                            f"Watch folder error [{file_path.name}]: {exc}"
-                            + (f" -> moved to {moved_to}" if moved_to else ""),
-                        ),
-                    )
-                    await db.commit()
-            finally:
-                self._processing_files.discard(key)
-
-    async def _handle_torrent(self, path: Path, processed: Path):
-        if not get_settings().alldebrid_api_key:
-            return
-        # Check whether another process still
-        # has the file open for writing before we read it.
-        # Uses /proc/*/fd which is available on Linux/Docker without lsof.
-        if _file_in_use(path):
-            logger.debug("Watch [%s]: file still open by another process, will retry next cycle", path.name)
-            return
-        content = path.read_bytes()
-        if not content:
-            raise ValueError("Empty torrent file")
-        row = await self.add_torrent_file_direct(content, path.name, source="watch_torrent")
-        ad_id = str(row.get("alldebrid_id") or "")
-        name = str(row.get("name") or path.stem)
-        logger.info("Watch torrent processed %s (ad_id=%s)", name, ad_id or "duplicate")
-        if get_settings().discord_notify_added and not row.get("_duplicate"):
-            await self.notify().send_added(name, source="watch_torrent", alldebrid_id=ad_id)
-        shutil.move(str(path), str(processed / path.name))
-
-    async def _handle_magnet_file(self, path: Path, processed: Path):
-        # Check whether another process still has the file open for writing.
-        if _file_in_use(path):
-            logger.debug("Watch [%s]: file still open by another process, will retry next cycle", path.name)
-            return
-        content = path.read_text(errors="ignore")
-        magnets = [line.strip() for line in content.splitlines() if line.strip().startswith("magnet:")]
-        if not magnets:
-            self._failed_files.add(str(path.resolve()))
-            return
-        for magnet in magnets:
-            hash_value = extract_hash(magnet)
-            if hash_value:
-                await self._add_magnet(magnet, hash_value, "watch_file")
-        shutil.move(str(path), str(processed / path.name))
 
     async def add_magnet_direct(self, magnet: str, source: str = "manual") -> dict:
         if self.is_paused():
@@ -4791,7 +4647,7 @@ class TorrentManager:
         except Exception as exc:
             error = str(exc)
             if any(keyword in error for keyword in ("DISCONTINUED", "discontinued", "deprecated", "migrate")):
-                raise Exception("AllDebrid has disabled 'list all magnets' for your account. Add magnets manually via the UI or watch folder.")
+                raise Exception("AllDebrid has disabled 'list all magnets' for your account. Add magnets manually through the DebridPulse UI.")
             raise
 
         if not all_magnets:

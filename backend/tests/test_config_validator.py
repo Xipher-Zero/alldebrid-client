@@ -10,6 +10,16 @@ def make_cfg(**kwargs) -> AppSettings:
 
 class TestValidateAndSanitise:
 
+    def test_removed_watch_folder_keys_are_ignored_for_config_compatibility(self):
+        cfg = make_cfg(
+            watch_folder="/legacy/watch",
+            processed_folder="/legacy/processed",
+            watch_interval_seconds=5,
+        )
+        assert not hasattr(cfg, "watch_folder")
+        assert not hasattr(cfg, "processed_folder")
+        assert not hasattr(cfg, "watch_interval_seconds")
+
     def test_clean_config_no_changes(self):
         cfg = make_cfg()
         result = validate_and_sanitise(cfg)

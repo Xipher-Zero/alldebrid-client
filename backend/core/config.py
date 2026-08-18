@@ -30,9 +30,7 @@ class AppSettings(BaseModel):
     postgres_ssl: bool = False
     postgres_application_name: str = "debridpulse"
 
-    # Folders
-    watch_folder: str = "/app/data/watch"
-    processed_folder: str = "/app/data/processed"
+    # Download control
     download_folder: str = "/download"
     max_concurrent_downloads: int = 3
     max_speed_mbps: int = 0
@@ -119,14 +117,13 @@ class AppSettings(BaseModel):
 
     # Polling
     poll_interval_seconds: int = 30
-    watch_interval_seconds: int = 10
     paused: bool = False
 
     # Rate limiting — AllDebrid API calls per minute (0 = unlimited)
     alldebrid_rate_limit_per_minute: int = 60
 
-    # Auto-restart stuck downloads
-    # Torrents stuck in queued/downloading for longer than this are reset (0 = disabled)
+    # Auto-recover stalled downloads
+    # Transfers stuck in queued/downloading for longer than this are reset (0 = disabled)
     stuck_download_timeout_hours: int = 6
     # Full AllDebrid reconciliation interval (minutes) — syncs ALL torrents incl. error/queued
     full_sync_interval_minutes: int = 5

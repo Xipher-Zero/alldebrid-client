@@ -15,7 +15,7 @@ function renderTopbarActions() {
   const paused = !!settingsData.paused;
   el.innerHTML = `
     <button class="btn ${paused ? 'btn-primary' : 'btn-ghost'}" onclick="${paused ? 'resumeProcessing()' : 'pauseProcessing()'}">
-      ${paused ? 'Resume' : 'Pause All'}
+      ${paused ? 'Resume All' : 'Pause All'}
     </button>
   `;
 }
@@ -112,8 +112,6 @@ function sourceLabel(source) {
     direct_link: 'Direct link',
     manual: 'Magnet link',
     manual_file: 'Torrent file',
-    watch_file: 'Watch folder (.magnet)',
-    watch_torrent: 'Watch folder (.torrent)',
     alldebrid_existing: 'AllDebrid import',
     import_existing: 'AllDebrid import',
     api: 'API'
@@ -140,16 +138,6 @@ function toast(msg, type = 'info') {
   setTimeout(() => el.remove(), 3400);
 }
 
-
-function syncMaxDlFields(val) {
-  // Keep both max_concurrent_downloads and aria2_max_active_downloads in sync.
-  // They represent the same setting — how many files download simultaneously.
-  var n = parseInt(val) || 3;
-  var a = document.getElementById('s-max_concurrent_downloads');
-  var b = document.getElementById('s-aria2_max_active_downloads');
-  if (a && a !== document.activeElement) a.value = n;
-  if (b && b !== document.activeElement) b.value = n;
-}
 
 function toggleSymlinkSettings(val) {
   var el = document.getElementById('symlink-settings');
@@ -1152,13 +1140,6 @@ async function loadSettings() {
   if (avatarUrl && !avatarUrl.includes('github') && !avatarUrl.includes('_DEFAULT')) {
     showAvatarPreview(avatarUrl, 'Custom avatar', 0);
   }
-  // Initial state: show/hide Test-PostgreSQL button and pg-settings based on DB type
-  const dbTypeEl = document.getElementById('s-db_type');
-  if (dbTypeEl) {
-    const isPg = dbTypeEl.value === 'postgres';
-    const pgBtn = document.getElementById('btn-test-postgres');
-    if (pgBtn) pgBtn.style.display = isPg ? '' : 'none';
-  }
 }
 
 function renderSettings() {
@@ -1215,27 +1196,6 @@ function renderSettings() {
       </div>
     </div>
 
-        
-      <div class="scard">
-      <div class="scard-header">📁 Folders</div>
-      <div class="scard-body">
-        <div class="form-group">
-          <label class="form-label">Watch Folder</label>
-          <input class="input" id="s-watch_folder" value="${s.watch_folder||''}"/>
-          <span class="form-hint">Drop .torrent or .magnet files here</span>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Processed Folder</label>
-          <input class="input" id="s-processed_folder" value="${s.processed_folder||''}"/>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Max Concurrent Downloads</label>
-          <input class="input" type="number" id="s-max_concurrent_downloads" value="${s.max_concurrent_downloads??3}" min="1" max="20" onchange="syncMaxDlFields(this.value)"/>
-          <span class="form-hint">How many torrents are processed in parallel (unlocked + dispatched to aria2). Default: 3. Higher values increase throughput but also RAM and bandwidth usage. Separate from the aria2 <em>max active downloads</em> setting below.</span>
-        </div>
-      </div>
-    </div>
-
       <div class="scard">
         <div class="scard-header">💾 Disk Space Guard</div>
         <p class="form-hint" style="padding:4px 14px 6px;margin:0;font-size:11px;color:var(--text3)">
@@ -1262,18 +1222,6 @@ function renderSettings() {
         </div>
       </div>
 
-      <div class="scard">
-        <div class="scard-header">⚠️ Auto-Restart Stuck Downloads</div>
-      <p class="form-hint" style="padding:4px 14px 6px;margin:0;font-size:11px;color:var(--text3)">Torrents stuck in a non-terminal state longer than this will be automatically retried. 0 = disabled.</p>
-        <div class="scard-body">
-          <div class="form-group">
-            <label class="form-label">Stuck timeout (hours)</label>
-            <input class="input" type="number" id="s-stuck_download_timeout_hours" value="${s.stuck_download_timeout_hours??6}" min="0" max="168"/>
-            <span class="form-hint">Torrents stuck in queued/downloading for longer than this are automatically reset. Set to 0 to disable.</span>
-          </div>
-        </div>
-      </div>
-      
       <div class="scard">
         <div class="scard-header">🚦 AllDebrid Rate Limit</div>
       <p class="form-hint" style="padding:4px 14px 6px;margin:0;font-size:11px;color:var(--text3)">Controls AllDebrid API call rate, background sync interval, and automatic retry settings.</p>
@@ -1483,7 +1431,7 @@ function renderSettings() {
         </div>
         <div class="form-group">
           <label class="form-label">aria2 Simultaneous Downloads</label>
-          <input class="input" type="number" id="s-aria2_max_active_downloads" value="${s.aria2_max_active_downloads??s.max_concurrent_downloads??3}" min="1" max="50" onchange="syncMaxDlFields(this.value)"/>
+          <input class="input" type="number" id="s-aria2_max_active_downloads" value="${s.aria2_max_active_downloads??s.max_concurrent_downloads??3}" min="1" max="50"/>
           <span class="form-hint">Only this many files are handed to aria2 at once. Remaining files stay pending until a slot becomes free.</span>
         </div>
         <div class="form-group">
@@ -1588,6 +1536,17 @@ function renderSettings() {
             <div class="td">Queue the job in aria2 first and resume it manually from the API/UI workflow.</div>
           </div>
           <label class="toggle"><input type="checkbox" id="s-aria2_start_paused" ${s.aria2_start_paused?'checked':''}><div class="ttrack"></div></label>
+        </div>
+      </div>
+    </div>
+    <div class="scard">
+      <div class="scard-header">⚠️ Auto-Recover Stalled Downloads</div>
+      <p class="form-hint" style="padding:4px 14px 6px;margin:0;font-size:11px;color:var(--text3)">Downloads that remain queued or downloading without a state update beyond this threshold are reset so DebridPulse can retry them, regardless of transfer source.</p>
+      <div class="scard-body">
+        <div class="form-group">
+          <label class="form-label">Stalled download timeout (hours)</label>
+          <input class="input" type="number" id="s-stuck_download_timeout_hours" value="${s.stuck_download_timeout_hours??6}" min="0" max="168"/>
+          <span class="form-hint">Set to 0 to disable timed recovery. Downloads with no transfer records may still be repaired immediately.</span>
         </div>
       </div>
     </div>
@@ -1835,16 +1794,12 @@ function renderSettings() {
 
       <div class="scard">
       <div class="scard-header">⏱ Polling Intervals</div>
-      <p class="form-hint" style="padding:4px 14px 6px;margin:0;font-size:11px;color:var(--text3)">How often AllDebrid and your watch folder are checked for new activity.</p>
+      <p class="form-hint" style="padding:4px 14px 6px;margin:0;font-size:11px;color:var(--text3)">How often AllDebrid is checked for new activity.</p>
       <div class="scard-body">
         <div class="form-group">
           <label class="form-label">AllDebrid Poll Interval (seconds)</label>
             <input class="input" type="number" id="s-poll_interval_seconds" value="${s.poll_interval_seconds??30}" min="10"/>
           <span class="form-hint">How often to ask AllDebrid for torrent status. Default: 30 s. Minimum: 10 s. Lower = faster detection but more API calls.</span>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Watch Folder Scan (seconds)</label>
-            <input class="input" type="number" id="s-watch_interval_seconds" value="${s.watch_interval_seconds??10}" min="5"/>
         </div>
       </div>
     </div>
@@ -1889,7 +1844,7 @@ function renderSettings() {
         <div class="form-group">
           <label class="form-label">Database Type</label>
           <select class="input" id="s-db_type"
-            onchange="document.getElementById('pg-settings').style.display=(this.value==='postgres'||this.value==='postgres_internal')?'block':'none'"
+            onchange="document.getElementById('pg-settings').style.display=(this.value==='postgres'||this.value==='postgres_internal')?'block':'none';updateSettingsFooterActions('tab-database')"
             ${s._db_type_locked?'disabled':''}>
             <option value="sqlite" ${(s.db_type||'sqlite')==='sqlite'?'selected':''}>SQLite (default)</option>
             <option value="postgres" ${s.db_type==='postgres'?'selected':''}>PostgreSQL (external)</option>
@@ -2010,12 +1965,15 @@ function getFormSettings() {
     const parsed = parseInt(reportHoursRaw, 10);
     return Number.isNaN(parsed) ? Number(settingsData.stats_report_window_hours ?? 24) : parsed;
   })();
+  const maxConcurrentDownloads = n(
+    'aria2_max_active_downloads',
+    Number(settingsData.max_concurrent_downloads ?? 3),
+  );
   return {
     ...settingsData,
     alldebrid_api_key: t('alldebrid_api_key'),
     alldebrid_agent:   t('alldebrid_agent')||'DebridPulse',
-    watch_folder: t('watch_folder'), processed_folder: t('processed_folder'),
-    download_folder: t('download_folder'), max_concurrent_downloads: n('max_concurrent_downloads', 3),
+    download_folder: t('download_folder'), max_concurrent_downloads: maxConcurrentDownloads,
     max_speed_mbps: (settingsData && settingsData.max_speed_mbps != null)
                    ? settingsData.max_speed_mbps : 0,
     download_client: t('download_client') || (settingsData && settingsData.download_client) || 'aria2',
@@ -2028,7 +1986,7 @@ function getFormSettings() {
     aria2_builtin_log_max_mb: n('aria2_builtin_log_max_mb', 25),
     aria2_builtin_log_backups: n('aria2_builtin_log_backups', 3),
     aria2_operation_timeout_seconds: n('aria2_operation_timeout_seconds', 15),
-    aria2_max_active_downloads: n('aria2_max_active_downloads', n('max_concurrent_downloads', 3)),
+    aria2_max_active_downloads: maxConcurrentDownloads,
     aria2_start_paused: c('aria2_start_paused'),
     aria2_poll_interval_seconds: n('aria2_poll_interval_seconds', 5),
     aria2_purge_interval_minutes: n('aria2_purge_interval_minutes', 15),
@@ -2069,7 +2027,6 @@ function getFormSettings() {
     db_wipe_enabled: c('db_wipe_enabled'), db_backup_before_wipe: c('db_backup_before_wipe'),
     blocked_extensions: l('blocked_extensions'), blocked_keywords: l('blocked_keywords'),
     min_file_size_mb: n('min_file_size_mb'), poll_interval_seconds: n('poll_interval_seconds', 30),
-    watch_interval_seconds: n('watch_interval_seconds', 10),
     filters_enabled: c('filters_enabled'),
     aria2_deep_sync_interval_minutes: n('aria2_deep_sync_interval_minutes'),
     aria2_error_retry_count:           n('aria2_error_retry_count'),
@@ -2174,6 +2131,7 @@ function switchSettingsTab(id) {
   if (!requestedTab) id = 'tab-general';
   document.querySelectorAll('#settings-tabs .stab').forEach(t => t.classList.toggle('active', t.dataset.tab === id));
   document.querySelectorAll('#settings-form .stab-panel').forEach(p => p.classList.toggle('active', p.id === id));
+  updateSettingsFooterActions(id);
   if (aria2DownloadsTimer) {
     clearInterval(aria2DownloadsTimer);
     aria2DownloadsTimer = null;
@@ -2191,6 +2149,17 @@ function switchSettingsTab(id) {
       if (panel && panel.classList.contains('active')) loadAria2Downloads().catch(()=>{});
     }, 5000);
   }
+}
+
+function updateSettingsFooterActions(activeTab) {
+  document.querySelectorAll('[data-settings-test-tab]').forEach(button => {
+    let visible = button.dataset.settingsTestTab === activeTab;
+    if (button.id === 'btn-test-postgres') {
+      const dbType = document.getElementById('s-db_type')?.value || settingsData.db_type || 'sqlite';
+      visible = visible && (dbType === 'postgres' || dbType === 'postgres_internal');
+    }
+    button.hidden = !visible;
+  });
 }
 
 async function testAria2() {
@@ -3170,9 +3139,7 @@ async function loadAria2SpeedLimit() {
       settingsData.aria2_max_download_limit   = bps;
     }
     // ── Sync Settings-page inputs (Downloads → Settings, bidirectional) ──
-    var inMcd = document.getElementById('s-max_concurrent_downloads');
     var inMad = document.getElementById('s-aria2_max_active_downloads');
-    if (inMcd) inMcd.value = maxDl;
     if (inMad) inMad.value = maxDl;
 
     // ── Sync speed preset in Downloads panel ─────────────────────────────
@@ -3289,8 +3256,6 @@ async function applyAria2MaxDlPreset(val) {
       settingsData.max_concurrent_downloads   = n;
     }
     // Sync Settings-page inputs so a subsequent Save Settings does not clobber.
-    var maxDlInput = document.getElementById('s-max_concurrent_downloads');
-    if (maxDlInput) maxDlInput.value = n;
     var maxDlInput2 = document.getElementById('s-aria2_max_active_downloads');
     if (maxDlInput2) maxDlInput2.value = n;
     if (st) { st.style.color='var(--green)'; st.textContent=n+' active'; }

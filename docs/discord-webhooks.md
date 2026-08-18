@@ -51,7 +51,7 @@ Hinweis:
 
 ### Torrent Added
 - Torrent-Name
-- Quelle (manual, watch_file, watch_torrent, alldebrid_existing)
+- Quelle (manual, manual_file, direct_link, alldebrid_existing)
 - AllDebrid ID
 - Zeitstempel
 

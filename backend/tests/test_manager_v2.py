@@ -106,6 +106,94 @@ class ManagerV2Tests(unittest.TestCase):
         self.assertEqual(s["local_status"], "uploading")
 
 
+class ProviderHistoryRetentionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_missing_provider_object_is_retained_as_visible_error(self):
+        statements = []
+
+        class FakeDb:
+            async def execute(self, sql, params=()):
+                statements.append((sql, params))
+
+            async def commit(self):
+                return None
+
+        @asynccontextmanager
+        async def fake_get_db():
+            yield FakeDb()
+
+        manager = TorrentManager()
+        with patch("services.manager_v2.get_db", fake_get_db):
+            await manager._set_provider_missing(
+                42,
+                "Magnet no longer exists on AllDebrid",
+            )
+
+        update_sql, update_params = statements[0]
+        self.assertIn("status='error'", update_sql)
+        self.assertIn("provider_status='missing'", update_sql)
+        self.assertNotIn("status='deleted'", update_sql)
+        self.assertEqual(
+            update_params,
+            ("Magnet no longer exists on AllDebrid", 42),
+        )
+
+    async def test_provider_failure_cleanup_retains_local_error_history(self):
+        statements = []
+        failed_row = {
+            "id": 67,
+            "name": "Unavailable Torrent",
+            "alldebrid_id": "ad-67",
+            "error_message": "No peers after 30 minutes",
+            "provider_status_code": 8,
+        }
+
+        class FakeCursor:
+            async def fetchall(self):
+                return [failed_row]
+
+        class FakeDb:
+            async def execute(self, sql, params=()):
+                statements.append((sql, params))
+                return FakeCursor()
+
+            async def commit(self):
+                return None
+
+        @asynccontextmanager
+        async def fake_get_db():
+            yield FakeDb()
+
+        manager = TorrentManager()
+        delete_magnet = AsyncMock()
+        manager.ad = lambda: types.SimpleNamespace(delete_magnet=delete_magnet)
+        manager._notify_provider_error = AsyncMock()
+
+        with patch("services.manager_v2.get_db", fake_get_db):
+            await manager.cleanup_no_peer_errors()
+
+        select_sql = statements[0][0]
+        update_sql = next(sql for sql, _ in statements if "UPDATE torrents" in sql)
+        self.assertIn("provider_status = 'error'", select_sql)
+        self.assertIn("status='error'", update_sql)
+        self.assertIn("provider_status='failed'", update_sql)
+        self.assertNotIn("status='deleted'", update_sql)
+        delete_magnet.assert_awaited_once_with("ad-67")
+
+    def test_automatic_provider_paths_do_not_use_deleted_state(self):
+        source = (
+            Path(__file__).resolve().parents[1]
+            / "services"
+            / "manager_v2.py"
+        ).read_text()
+
+        self.assertNotIn("_set_deleted", source)
+        self.assertEqual(
+            source.count("UPDATE torrents SET status='deleted'"),
+            1,
+            "Only explicit user deletion may write the deleted state",
+        )
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # aria2 Robustheit
 # ═════════════════════════════════════════════════════════════════════════════

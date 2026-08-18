@@ -1424,7 +1424,8 @@ class TorrentManager:
             rows = await db.fetchall(
                 """SELECT id, name, alldebrid_id, status, provider_status, provider_status_code, polling_failures, magnet, source
                    FROM torrents
-                   WHERE alldebrid_id IS NOT NULL AND alldebrid_id != ''"""
+                   WHERE alldebrid_id IS NOT NULL AND alldebrid_id != ''
+                     AND COALESCE(provider_status, '') NOT IN ('failed', 'missing')"""
             )
 
         updated = 0
@@ -1444,14 +1445,14 @@ class TorrentManager:
                     if individual:
                         magnet = individual[0]
                     else:
-                        logger.info("full_alldebrid_sync: magnet %s confirmed gone → deleted", row["alldebrid_id"])
-                        await self._set_deleted(row["id"], "Magnet no longer exists on AllDebrid")
+                        logger.info("full_alldebrid_sync: magnet %s confirmed missing on provider", row["alldebrid_id"])
+                        await self._set_provider_missing(row["id"], "Magnet no longer exists on AllDebrid")
                         updated += 1
                         continue
                 except Exception as exc:
                     if "MAGNET_INVALID_ID" in str(exc):
-                        logger.info("full_alldebrid_sync: magnet %s invalid → deleted", row["alldebrid_id"])
-                        await self._set_deleted(row["id"], "Magnet no longer exists on AllDebrid")
+                        logger.info("full_alldebrid_sync: magnet %s invalid on provider", row["alldebrid_id"])
+                        await self._set_provider_missing(row["id"], "Magnet no longer exists on AllDebrid")
                         updated += 1
                     else:
                         logger.debug("full_alldebrid_sync: individual check failed for %s: %s", row["alldebrid_id"], exc)
@@ -1515,6 +1516,7 @@ class TorrentManager:
                     """SELECT id, name, alldebrid_id, status, provider_status, provider_status_code, polling_failures, magnet, source
                        FROM torrents
                        WHERE alldebrid_id IS NOT NULL AND alldebrid_id != ''
+                         AND COALESCE(provider_status, '') NOT IN ('failed', 'missing')
                          AND status NOT IN ('completed', 'deleted', 'queued', 'downloading', 'paused')
                        ORDER BY priority DESC, id ASC"""
                 )
@@ -1553,21 +1555,21 @@ class TorrentManager:
                         magnet = individual[0] if individual else None
                     except Exception as exc_ind:
                         if "MAGNET_INVALID_ID" in str(exc_ind):
-                            await self._set_deleted(row["id"], "Magnet no longer exists on AllDebrid")
+                            await self._set_provider_missing(row["id"], "Magnet no longer exists on AllDebrid")
                         else:
                             logger.error("Individual poll failed for %s: %s", ad_id, exc_ind)
                             await self._increment_poll_failure(row["id"], row["name"], str(exc_ind))
                         continue
 
                     if magnet is None:
-                        await self._set_deleted(row["id"], "Magnet no longer exists on AllDebrid")
+                        await self._set_provider_missing(row["id"], "Magnet no longer exists on AllDebrid")
                         continue
 
                 normalized = normalize_provider_state(magnet)
                 await self._apply_provider_update(row, magnet, normalized)
             except Exception as exc:
                 if "MAGNET_INVALID_ID" in str(exc):
-                    await self._set_deleted(row["id"], "Magnet no longer exists on AllDebrid")
+                    await self._set_provider_missing(row["id"], "Magnet no longer exists on AllDebrid")
                 else:
                     logger.error("Status poll failed for %s: %s", row["alldebrid_id"], exc)
                     await self._increment_poll_failure(row["id"], row["name"], str(exc))
@@ -1953,21 +1955,25 @@ class TorrentManager:
 
     async def cleanup_no_peer_errors(self):
         """
-        Finds torrents in 'error' status with known fatal error patterns and
-        removes them from AllDebrid + marks as deleted + sends Discord webhook.
+        Finds torrents in 'error' status with a confirmed provider-side fatal
+        error and removes the failed provider object while retaining the local
+        transfer and event history.
 
         Handles:
           - "No peer after 30 minutes" (provider_status_code=8 or LIKE '%no peer%')
           - "Download took more than 3 days" (AllDebrid timeout)
           - Any other provider timeout/abort patterns
 
-        Also handles torrents WITHOUT an alldebrid_id (cleaned up locally only).
+        Local polling/transport timeouts are deliberately excluded: only rows
+        whose provider_status is already 'error' are eligible. A client-side
+        timeout must never authorize deletion of an upstream magnet.
         """
         async with get_db() as db:
             rows = await (await db.execute(
                 """SELECT id, name, alldebrid_id, error_message, provider_status_code
                    FROM torrents
                    WHERE status = 'error'
+                     AND provider_status = 'error'
                      AND (
                        provider_status_code = 8
                        OR provider_status_code = 7
@@ -1982,30 +1988,38 @@ class TorrentManager:
         if not rows:
             return
 
-        cfg = get_settings()
         logger.info("cleanup_no_peer_errors: found %d torrent(s) to clean up", len(rows))
 
         for row in rows:
             ad_id = str(row["alldebrid_id"] or "").strip()
             name  = row["name"] or f"torrent {row['id']}"
+            removed_from_provider = False
 
             if ad_id and ad_id.lower() not in ("none", "null", ""):
                 try:
                     logger.info("no-peer cleanup: removing %s (%s) from AllDebrid", row["id"], name)
                     await self.ad().delete_magnet(ad_id)
+                    removed_from_provider = True
                 except Exception as exc:
                     logger.warning("no-peer cleanup: could not delete magnet %s: %s", ad_id, exc)
-                event_msg = "No peers after 30 minutes — removed from AllDebrid and cleaned up"
+                event_msg = (
+                    "Provider download failed — failed magnet removed from AllDebrid; local history retained"
+                    if removed_from_provider
+                    else "Provider download failed — AllDebrid cleanup failed; local history retained"
+                )
             else:
                 logger.info(
                     "no-peer cleanup: torrent %s (%s) has no AllDebrid ID — "
-                    "marking deleted locally only", row["id"], name
+                    "retaining failed local record", row["id"], name
                 )
-                event_msg = "No peers after 30 minutes — no AllDebrid ID, cleaned up locally"
+                event_msg = "Provider download failed — no AllDebrid ID remains; local history retained"
 
             async with get_db() as db:
                 await db.execute(
-                    "UPDATE torrents SET status='deleted', updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                    """UPDATE torrents
+                       SET status='error', provider_status='failed',
+                           updated_at=CURRENT_TIMESTAMP
+                       WHERE id=?""",
                     (row["id"],)
                 )
                 await db.execute(
@@ -2017,11 +2031,14 @@ class TorrentManager:
             # Discord webhook notification
             await self._notify_provider_error(
                 name,
-                reason="No peers found after 30 minutes — torrent removed",
-                context=(f"AllDebrid ID {ad_id} deleted" if ad_id and ad_id.lower() not in ("none","null","")
-                         else "No AllDebrid ID available — cleaned up locally only"),
+                reason=str(row["error_message"] or "Provider download failed"),
+                context=(f"Failed AllDebrid ID {ad_id} removed; DebridPulse history retained"
+                         if removed_from_provider
+                         else (f"Failed AllDebrid ID {ad_id} retained after cleanup error; DebridPulse history retained"
+                               if ad_id and ad_id.lower() not in ("none", "null", "")
+                               else "No AllDebrid ID available; DebridPulse history retained")),
                 alldebrid_id=str(ad_id or ""),
-                status_code=8,
+                status_code=row["provider_status_code"],
             )
 
     async def cleanup_alldebrid_orphans(self) -> int:
@@ -4638,11 +4655,38 @@ class TorrentManager:
                 await self.notify().send_extract_failed(name, reason=err_msg)
 
 
-    async def _set_deleted(self, torrent_id: int, message: str):
+    async def _set_provider_missing(self, torrent_id: int, message: str):
+        """Retain a transfer whose provider object disappeared unexpectedly.
+
+        ``deleted`` is reserved for an explicit user deletion. Provider-side
+        removal is a visible terminal error so the transfer remains in the
+        Downloads log with its original identity and event history.
+        """
         async with get_db() as db:
-            await db.execute("UPDATE torrents SET status='deleted', updated_at=CURRENT_TIMESTAMP WHERE id=?", (torrent_id,))
-            await db.execute("INSERT INTO events (torrent_id, level, message) VALUES (?, ?, ?)", (torrent_id, "warn", message))
+            await db.execute(
+                """UPDATE torrents
+                   SET status='error', provider_status='missing',
+                       provider_status_code=NULL, error_message=?,
+                       updated_at=CURRENT_TIMESTAMP
+                   WHERE id=? AND status NOT IN ('completed', 'deleted')""",
+                (message, torrent_id),
+            )
+            await db.execute(
+                "INSERT INTO events (torrent_id, level, message) VALUES (?, ?, ?)",
+                (torrent_id, "error", message),
+            )
             await db.commit()
+
+        try:
+            from api.routes import _sse_broadcast
+            await _sse_broadcast("torrent_updated", {
+                "id": torrent_id,
+                "status": "error",
+                "provider_status": "missing",
+            })
+            await _sse_broadcast("stats_changed", {})
+        except Exception:
+            pass
 
     async def import_existing_magnets(self) -> List[dict]:
         if self.is_paused():

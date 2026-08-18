@@ -98,3 +98,63 @@ def test_frontend_and_runtime_lock_have_no_legacy_surface():
     requirements = (REPO_ROOT / "backend/requirements.txt").read_text().casefold()
     assert "bencode2==0.3.33" in requirements
     assert "bencodepy" not in requirements
+
+
+def test_operator_tab_title_uses_short_active_identity_and_queue_average():
+    frontend = (REPO_ROOT / "frontend/static/app.js").read_text()
+    routes = (REPO_ROOT / "backend/api/routes.py").read_text()
+
+    assert "document.title = 'DebridPulse';" in frontend
+    assert "document.title = `DP | (${active} Active) ${progress}%`;" in frontend
+    assert "document.title = `DebridPulse | (${active} Active)" not in frontend
+
+    assert "AVG(COALESCE(progress, 0)) AS average_progress" in routes
+    assert "AS weighted_progress" not in routes
+    assert "WHERE status='downloading'" in routes
+
+
+def test_dashboard_recent_activity_exposes_pause_resume_but_not_remove():
+    frontend = (REPO_ROOT / "frontend/static/app.js").read_text()
+    index = (REPO_ROOT / "frontend/static/index.html").read_text()
+
+    recent_renderer = frontend.split("async function loadRecent()", 1)[1].split(
+        "function openTorrentFilePicker()", 1
+    )[0]
+    recent_markup = index.split('id="dash-activity-card"', 1)[1].split(
+        "</table>", 1
+    )[0]
+
+    assert "pauseT(${t.id})" in recent_renderer
+    assert "resumeT(${t.id})" in recent_renderer
+    assert "Pause this download" in recent_renderer
+    assert "Resume this download" in recent_renderer
+    assert "deleteT(" not in recent_renderer
+    assert "Remove" not in recent_markup
+    assert 'colspan="6"' in recent_markup
+
+    assert frontend.count("loadTorrents(); loadStats(); loadRecent();") == 2
+
+
+def test_global_pause_control_is_explicitly_labeled_pause_all():
+    frontend = (REPO_ROOT / "frontend/static/app.js").read_text()
+
+    assert "${paused ? 'Resume' : 'Pause All'}" in frontend
+    assert "${paused ? 'Resume' : 'Pause'}" not in frontend
+
+
+def test_dashboard_kpi_strip_omits_duplicate_database_tile_and_stays_centered():
+    index = (REPO_ROOT / "frontend/static/index.html").read_text()
+    frontend = (REPO_ROOT / "frontend/static/app.js").read_text()
+    styles = (REPO_ROOT / "frontend/static/style.css").read_text()
+
+    dashboard_strip = index.split(
+        '<div class="dash-kpi-strip dash-kpi-strip--dashboard">', 1
+    )[1].split('</div>\n\n      <div id="debug-status"', 1)[0]
+
+    assert dashboard_strip.count('class="dash-kpi"') == 6
+    assert 'id="i-db-type"' not in dashboard_strip
+    assert '<div class="dash-kpi-lbl">Database</div>' not in dashboard_strip
+    assert "getElementById('i-db-type')" not in frontend
+    assert "setDot('db'" in frontend
+    assert ".dash-kpi-strip--dashboard" in styles
+    assert "width: 85.7142857%;" in styles

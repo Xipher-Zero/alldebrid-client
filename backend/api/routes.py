@@ -1049,34 +1049,21 @@ async def get_stats():
         operator_row = await db.fetchone(
             """SELECT
                        COUNT(*) AS active_count,
-                       COALESCE(SUM(size_bytes), 0) AS total_bytes,
-                       COALESCE(SUM(size_bytes * COALESCE(progress, 0)), 0)
-                           AS weighted_progress,
-                       COALESCE(SUM(
-                           CASE
-                               WHEN size_bytes IS NULL OR size_bytes <= 0
-                                    OR progress IS NULL
-                               THEN 1 ELSE 0
-                           END
-                       ), 0) AS unknown_totals
+                       AVG(COALESCE(progress, 0)) AS average_progress
                FROM torrents
                WHERE status='downloading'"""
         ) or {}
         operator_active = int(operator_row.get("active_count") or 0)
         operator_progress = None
-        operator_total = int(operator_row.get("total_bytes") or 0)
-        operator_unknown = int(operator_row.get("unknown_totals") or 0)
 
-        # Parent torrent progress is already byte-weighted from aria2 file
-        # completed/total lengths. Weighting each parent by its total size
-        # therefore produces the byte-weighted aggregate across active jobs.
-        # If any active job lacks a meaningful total, omit the percentage
-        # rather than presenting a misleading partial aggregate.
-        if operator_active > 0 and operator_unknown == 0 and operator_total > 0:
-            weighted = float(operator_row.get("weighted_progress") or 0)
+        # Use the same DebridPulse parent progress displayed for each item on
+        # the dashboard, averaged equally across actively downloading queue
+        # entries. This is queue progress, not aria2's byte-weighted aggregate.
+        if operator_active > 0:
+            average = float(operator_row.get("average_progress") or 0)
             operator_progress = max(
                 0,
-                min(100, round(weighted / operator_total)),
+                min(100, round(average)),
             )
         error_count     = _c(await db.fetchone("SELECT COUNT(*) as c FROM torrents WHERE status='error'"))
         completed_count = _c(await db.fetchone("SELECT COUNT(*) as c FROM torrents WHERE status='completed'"))

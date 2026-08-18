@@ -146,7 +146,7 @@
       </div>
 
       <!-- ── KPI Strip ─────────────────────────────────────────────────────── -->
-      <div class="dash-kpi-strip">
+      <div class="dash-kpi-strip dash-kpi-strip--dashboard">
         <div class="dash-kpi">
           <div class="dash-kpi-val" id="i-queue-health">—</div>
           <div class="dash-kpi-lbl">Queue Health</div>
@@ -181,12 +181,6 @@
           <div class="dash-kpi-val" id="i-avg-size">—</div>
           <div class="dash-kpi-lbl">Avg Size</div>
           <div class="dash-kpi-sub">per completed</div>
-        </div>
-        <div class="dash-kpi-sep"></div>
-        <div class="dash-kpi">
-          <div class="dash-kpi-val" id="i-db-type" style="font-size:12px">—</div>
-          <div class="dash-kpi-lbl">Database</div>
-          <div class="dash-kpi-sub">active backend</div>
         </div>
       </div>
 
@@ -242,7 +236,7 @@
           </div>
         </div>
         <div class="dash-activity-table-wrap">
-        <table class="t-table" style="min-width:520px">
+        <table class="t-table" style="min-width:620px">
           <thead>
             <tr>
               <th style="width:40%">Name</th>
@@ -250,9 +244,10 @@
               <th>Progress</th>
               <th class="sz">Size</th>
               <th class="sz">Added</th>
+              <th style="width:1%;white-space:nowrap">Action</th>
             </tr>
           </thead>
-          <tbody id="dash-tbody"><tr><td colspan="5" class="empty">Loading…</td></tr></tbody>
+          <tbody id="dash-tbody"><tr><td colspan="6" class="empty">Loading…</td></tr></tbody>
         </table>
         </div>
       </div>

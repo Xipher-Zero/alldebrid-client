@@ -15,7 +15,7 @@ function renderTopbarActions() {
   const paused = !!settingsData.paused;
   el.innerHTML = `
     <button class="btn ${paused ? 'btn-primary' : 'btn-ghost'}" onclick="${paused ? 'resumeProcessing()' : 'pauseProcessing()'}">
-      ${paused ? 'Resume' : 'Pause'}
+      ${paused ? 'Resume' : 'Pause All'}
     </button>
   `;
 }
@@ -207,8 +207,10 @@ function badge(s) {
     queued:'🕓 Queued',paused:'⏸ Paused',downloading:'⬇ Downloading',ready:'✓ Ready',completed:'✅ Done',
     downloading_with_errors:'⬇ Downloading',
     completed_with_errors:'⚠ Completed with errors',
-    error:'❌ Error',missing:'❌ Missing file',deleted:'🗑 Deleted',imported:'📋 Imported',partial:'⚠ Partial'};
-  const cls = s === 'missing'
+    error:'❌ Error',missing:'❌ Missing file',provider_failed:'❌ Provider download failed',
+    provider_missing:'❌ Removed from provider',failed:'❌ Provider download failed',
+    deleted:'🗑 Deleted',imported:'📋 Imported',partial:'⚠ Partial'};
+  const cls = s === 'missing' || s === 'provider_failed' || s === 'provider_missing' || s === 'failed'
     ? 'error'
     : s === 'completed_with_errors' || s === 'downloading_with_errors'
       ? 'partial'
@@ -235,7 +237,22 @@ function transferDisplayStatus(t) {
   if (t && t.source === 'direct_link' && t.status === 'error' && t.provider_status === 'missing') {
     return 'missing';
   }
+  if (t && t.status === 'error' && t.provider_status === 'missing') {
+    return 'provider_missing';
+  }
+  if (t && t.status === 'error' && ['error', 'failed'].includes(t.provider_status)) {
+    return 'provider_failed';
+  }
   return (t && t.status) || '';
+}
+function providerDisplayStatus(t) {
+  if (t && t.source !== 'direct_link' && t.provider_status === 'missing') {
+    return 'provider_missing';
+  }
+  if (t && t.provider_status === 'failed') {
+    return 'provider_failed';
+  }
+  return (t && t.provider_status) || '';
 }
 function progress(pct, status) {
   const done   = status === 'completed';
@@ -373,18 +390,18 @@ function updateOperatorTitle(stats) {
 
   const rawProgress = stats?.operator_active_progress_pct;
   if (rawProgress === null || rawProgress === undefined || rawProgress === '') {
-    document.title = `DebridPulse | (${active} Active)`;
+    document.title = `DP | (${active} Active)`;
     return;
   }
 
   const value = Number(rawProgress);
   if (!Number.isFinite(value)) {
-    document.title = `DebridPulse | (${active} Active)`;
+    document.title = `DP | (${active} Active)`;
     return;
   }
 
   const progress = Math.min(100, Math.max(0, Math.round(value)));
-  document.title = `DebridPulse | (${active} Active) ${progress}%`;
+  document.title = `DP | (${active} Active) ${progress}%`;
 }
 
 async function loadStats() {
@@ -431,13 +448,7 @@ async function loadStats() {
       // Topbar aria2 badge: active download count (if aria2 badge visible)
       updateAria2TopbarBadge({active: s.active_downloads||0});
       // ── DB info + dot ──────────────────────────────────────────────────
-      const dbEl = document.getElementById('i-db-type');
-      if (dbEl && s.db_type) {
-        const dbLabels = {sqlite:'SQLite', postgres:'PostgreSQL', sqlite_fallback:'⚠️ SQLite (fallback)'};
-        dbEl.textContent = dbLabels[s.db_type] || s.db_type;
-        dbEl.style.color = s.db_type === 'sqlite_fallback' ? 'var(--accent)' : '';
-        dbEl.title       = s.db_type === 'sqlite_fallback' ? 'PostgreSQL unreachable — running on SQLite fallback.' : '';
-      }
+      // Database status remains in the persistent lower-left status rail.
       setDot('db',
         s.db_type === 'sqlite_fallback' ? 'error' : 'ok',
         s.db_type === 'sqlite_fallback' ? 'DB: SQLite (fallback)'
@@ -598,7 +609,7 @@ async function loadRecent() {
     const {items} = await api('GET', '/torrents?limit=4');
     const tb = document.getElementById('dash-tbody');
     if (!items.length) {
-      tb.innerHTML = '<tr><td colspan="5"><div class="empty"><div class="empty-icon">⬇️</div>No transfers yet. Add a magnet, torrent file, or debrid link to start.</div></td></tr>';
+      tb.innerHTML = '<tr><td colspan="6"><div class="empty"><div class="empty-icon">⬇️</div>No transfers yet. Add a magnet, torrent file, or debrid link to start.</div></td></tr>';
       return;
     }
     // Update activity count
@@ -618,6 +629,12 @@ async function loadRecent() {
         <td>${progress(t.progress,t.status)}</td>
         <td class="sz">${fmtSize(t.size_bytes)}</td>
         <td class="sz">${fmtDate(t.created_at)}</td>
+        <td onclick="event.stopPropagation()">
+          <div class="actions">
+            ${t.status==='downloading' || t.status==='queued' ? `<button class="btn btn-blue btn-sm" onclick="event.stopPropagation();pauseT(${t.id})" title="Pause this download">⏸ Pause</button>` : ''}
+            ${t.status==='paused' ? `<button class="btn btn-blue btn-sm" onclick="event.stopPropagation();resumeT(${t.id})" title="Resume this download">▶ Resume</button>` : ''}
+          </div>
+        </td>
       </tr>`;
     }).join('');
   } catch(e) { console.error(e); }
@@ -858,7 +875,7 @@ async function pauseT(id) {
   try {
     await api('POST',`/torrents/${id}/pause`);
     toast('aria2 queue paused','warn');
-    loadTorrents(); loadStats();
+    loadTorrents(); loadStats(); loadRecent();
   } catch(e) { toast(sanitizeErrorMsg(e.message),'error'); }
 }
 
@@ -866,7 +883,7 @@ async function resumeT(id) {
   try {
     await api('POST',`/torrents/${id}/resume`);
     toast('aria2 queue resumed','success');
-    loadTorrents(); loadStats();
+    loadTorrents(); loadStats(); loadRecent();
   } catch(e) { toast(sanitizeErrorMsg(e.message),'error'); }
 }
 
@@ -878,7 +895,7 @@ async function showDetail(id) {
     document.getElementById('modal-body').innerHTML = `
       <div class="detail-grid">
         <div><div class="dk">Status</div><div class="dv">${badge(transferDisplayStatus(t))}</div></div>
-        <div><div class="dk">Provider</div><div class="dv">${t.provider_status ? badge(t.provider_status) : '—'}</div></div>
+        <div><div class="dk">Provider</div><div class="dv">${t.provider_status ? badge(providerDisplayStatus(t)) : '—'}</div></div>
         <div><div class="dk">Progress</div><div class="dv">${(t.progress||0).toFixed(1)}%</div></div>
         <div><div class="dk">Size</div><div class="dv">${fmtSize(t.size_bytes)}</div></div>
         <div><div class="dk">Source</div><div class="dv">${sourceLabel(t.source)}</div></div>

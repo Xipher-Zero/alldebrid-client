@@ -138,13 +138,19 @@ def test_dashboard_recent_activity_exposes_pause_resume_but_not_remove():
     assert frontend.count("loadTorrents(); loadStats(); loadRecent();") == 2
 
 
-def test_global_pause_control_is_explicitly_labeled_pause_all():
+def test_global_pause_control_exposes_mixed_selective_pause_state():
     frontend = (REPO_ROOT / "frontend/static/app.js").read_text()
+    index = (REPO_ROOT / "frontend/static/index.html").read_text()
+    styles = (REPO_ROOT / "frontend/static/style.css").read_text()
     routes = (REPO_ROOT / "backend/api/routes.py").read_text()
 
-    assert "${paused ? 'Resume All' : 'Pause All'}" in frontend
-    assert "${paused ? 'Resume' : 'Pause All'}" not in frontend
-    assert "${paused ? 'Resume' : 'Pause'}" not in frontend
+    assert "Resume Paused (${selectivelyPaused})" in frontend
+    assert 'onclick="resumePausedDownloads()"' in frontend
+    assert 'onclick="pauseProcessing()">Pause All</button>' in frontend
+    assert 'onclick="resumeProcessing()">Resume All</button>' in frontend
+    assert "pausedTransferCount = Math.max(0, Number(bs.paused) || 0)" in frontend
+    assert index.index('id="topbar-actions"') < index.index('id="aria2-speed-badge"')
+    assert "flex: 0 0 190px" in styles
 
     pause_handler = frontend.split("async function pauseProcessing()", 1)[1].split(
         "async function resumeProcessing()", 1

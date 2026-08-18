@@ -8,15 +8,24 @@ let torrentPageSize = 25;
 let torrentTotal = 0;
 let settingsData = {};
 let aria2DownloadsTimer = null;
+let pausedTransferCount = 0;
 
 function renderTopbarActions() {
   const el = document.getElementById('topbar-actions');
   if (!el) return;
-  const paused = !!settingsData.paused;
+  const globallyPaused = !!settingsData.paused;
+  const selectivelyPaused = Math.max(0, Number(pausedTransferCount) || 0);
+  if (globallyPaused) {
+    el.innerHTML = `
+      <button class="btn btn-primary" onclick="resumeProcessing()">Resume All</button>
+    `;
+    return;
+  }
   el.innerHTML = `
-    <button class="btn ${paused ? 'btn-primary' : 'btn-ghost'}" onclick="${paused ? 'resumeProcessing()' : 'pauseProcessing()'}">
-      ${paused ? 'Resume All' : 'Pause All'}
-    </button>
+    ${selectivelyPaused > 0 ? `
+      <button class="btn btn-primary" onclick="resumePausedDownloads()">Resume Paused (${selectivelyPaused})</button>
+    ` : ''}
+    <button class="btn btn-ghost" onclick="pauseProcessing()">Pause All</button>
   `;
 }
 
@@ -354,8 +363,22 @@ async function resumeProcessing() {
   try {
     await api('POST', '/processing/resume');
     settingsData.paused = false;
+    pausedTransferCount = 0;
     renderTopbarActions();
     toast('Processing resumed','success');
+    loadStats();
+    loadRecent();
+    if (document.getElementById('view-torrents').classList.contains('active')) loadTorrents();
+  } catch(e) { toast(sanitizeErrorMsg(e.message),'error'); }
+}
+
+async function resumePausedDownloads() {
+  try {
+    await api('POST', '/processing/resume');
+    settingsData.paused = false;
+    pausedTransferCount = 0;
+    renderTopbarActions();
+    toast('Paused downloads resumed','success');
     loadStats();
     loadRecent();
     if (document.getElementById('view-torrents').classList.contains('active')) loadTorrents();
@@ -404,10 +427,11 @@ async function loadStats() {
       const versionEl = document.getElementById('sidebar-version');
       if (versionEl) versionEl.textContent = s.version ? `v${s.version}` : 'v—';
       if (settingsData) settingsData.paused = !!s.paused;
+      const bs = s.by_status || {};
+      pausedTransferCount = Math.max(0, Number(bs.paused) || 0);
       renderTopbarActions();
       setDot('api', 'ok', 'AllDebrid: online');
       // ── stat cards ─────────────────────────────────────────────────────
-      const bs = s.by_status || {};
       const total = Object.values(bs).reduce((a,b)=>a+b,0);
       const completed = s.completed_count ?? bs.completed ?? 0;
       const queuePct = pct(completed, total || 0);

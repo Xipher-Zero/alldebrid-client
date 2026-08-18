@@ -482,6 +482,13 @@ class TorrentManager:
         cfg = get_settings()
         options = {str(k): str(v) for k, v in dict(base or {}).items()}
         options.update({
+            # DebridPulse owns the deterministic target path for each file.
+            # Never let aria2 create file.1.ext after a transfer is removed
+            # from the application and later submitted again.  An existing
+            # partial with its control file may still resume; otherwise aria2
+            # replaces the prior file at the requested path.
+            "allow-overwrite": "true",
+            "auto-file-renaming": "false",
             "split": str(max(1, int(getattr(cfg, "aria2_split", 1) or 1))),
             "min-split-size": str(
                 getattr(cfg, "aria2_min_split_size", "10M") or "10M"
@@ -818,14 +825,21 @@ class TorrentManager:
 
     @staticmethod
     def _unique_direct_link_path(
-        root: Path, filename: str, reserved: Set[str]
+        root: Path,
+        filename: str,
+        reserved: Set[str],
+        *,
+        reuse_existing: bool = False,
     ) -> Path:
-        """Choose a non-conflicting output filename without changing its extension."""
+        """Choose a direct-link target without overwriting unrelated content."""
         candidate = root / safe_name(filename)
         stem = candidate.stem or "download"
         suffix = candidate.suffix
         counter = 2
-        while str(candidate).lower() in reserved or candidate.exists():
+        while (
+            str(candidate).lower() in reserved
+            or (candidate.exists() and not reuse_existing)
+        ):
             candidate = root / f"{stem} ({counter}){suffix}"
             counter += 1
         reserved.add(str(candidate).lower())
@@ -842,6 +856,7 @@ class TorrentManager:
             normalized = normalize_direct_links(links)
             cfg = get_settings()
             output_root = Path(cfg.download_folder)
+            reusable_source_urls: Set[str] = set()
 
             async with get_db() as db:
                 current = await db.fetchone(
@@ -849,6 +864,21 @@ class TorrentManager:
                 )
                 if not current or current["status"] in {"completed", "deleted"}:
                     return
+                if normalized:
+                    placeholders = ",".join("?" for _ in normalized)
+                    previous_rows = await db.fetchall(
+                        f"""SELECT DISTINCT f.source_url
+                              FROM download_files f
+                              JOIN torrents t ON t.id=f.torrent_id
+                             WHERE t.source=? AND t.status='deleted'
+                               AND f.source_url IN ({placeholders})""",
+                        (DIRECT_LINK_SOURCE, *normalized),
+                    )
+                    reusable_source_urls = {
+                        str(row["source_url"] or "").strip()
+                        for row in previous_rows
+                        if str(row["source_url"] or "").strip()
+                    }
                 await db.execute(
                     "DELETE FROM download_files WHERE torrent_id=?", (torrent_id,)
                 )
@@ -988,7 +1018,12 @@ class TorrentManager:
                     total_size += int(result["size_bytes"] or 0)
                     resolved_names.append(result["filename"])
                     local_path = self._unique_direct_link_path(
-                        output_root, result["filename"], reserved_paths
+                        output_root,
+                        result["filename"],
+                        reserved_paths,
+                        reuse_existing=(
+                            result["source_url"] in reusable_source_urls
+                        ),
                     )
                     async with get_db() as db:
                         await db.execute(
@@ -3815,63 +3850,71 @@ class TorrentManager:
     async def pause_torrent(self, torrent_id: int):
         if self.download_client_name() != "aria2":
             raise ValueError("Pause is only supported for the aria2 download client")
-        async with get_db() as db:
-            rows = await (
+        # Serialize item control with slot dispatch so a pending child cannot
+        # acquire an aria2 GID while its parent is being paused.
+        async with self._aria2_dispatch_lock:
+            async with get_db() as db:
+                rows = await (
+                    await db.execute(
+                        """SELECT download_id FROM download_files
+                           WHERE torrent_id=? AND download_client='aria2'
+                             AND blocked=0 AND download_id IS NOT NULL
+                             AND status IN ('queued','downloading')""",
+                        (torrent_id,),
+                    )
+                ).fetchall()
+            for row in rows:
+                await self.aria2().pause(row["download_id"])
+            async with get_db() as db:
                 await db.execute(
-                    """SELECT download_id FROM download_files
-                       WHERE torrent_id=? AND download_client='aria2'
-                         AND blocked=0 AND download_id IS NOT NULL
-                         AND status IN ('queued','downloading')""",
+                    """UPDATE download_files
+                       SET status='paused', updated_at=CURRENT_TIMESTAMP
+                       WHERE torrent_id=? AND download_client='aria2' AND blocked=0
+                         AND status IN ('pending','queued','downloading')""",
                     (torrent_id,),
                 )
-            ).fetchall()
-        for row in rows:
-            await self.aria2().pause(row["download_id"])
-        async with get_db() as db:
-            await db.execute(
-                """UPDATE download_files
-                   SET status='paused', updated_at=CURRENT_TIMESTAMP
-                   WHERE torrent_id=? AND download_client='aria2' AND blocked=0
-                     AND status IN ('queued','downloading')""",
-                (torrent_id,),
-            )
-            await db.execute(
-                """UPDATE torrents SET status='paused', updated_at=CURRENT_TIMESTAMP
-                   WHERE id=? AND status IN ('queued','downloading')""",
-                (torrent_id,),
-            )
-            await db.commit()
+                await db.execute(
+                    """UPDATE torrents SET status='paused', updated_at=CURRENT_TIMESTAMP
+                       WHERE id=? AND status IN ('queued','downloading')""",
+                    (torrent_id,),
+                )
+                await db.commit()
         await self._log_event(torrent_id, "info", "Paused aria2 transfer queue")
 
     async def resume_torrent(self, torrent_id: int):
         if self.download_client_name() != "aria2":
             raise ValueError("Resume is only supported for the aria2 download client")
-        async with get_db() as db:
-            rows = await (
+        async with self._aria2_dispatch_lock:
+            async with get_db() as db:
+                rows = await (
+                    await db.execute(
+                        """SELECT download_id FROM download_files
+                           WHERE torrent_id=? AND download_client='aria2'
+                             AND blocked=0 AND download_id IS NOT NULL
+                             AND status='paused'""",
+                        (torrent_id,),
+                    )
+                ).fetchall()
+            for row in rows:
+                await self.aria2().resume(row["download_id"])
+            async with get_db() as db:
                 await db.execute(
-                    """SELECT download_id FROM download_files
-                       WHERE torrent_id=? AND download_client='aria2'
-                         AND blocked=0 AND download_id IS NOT NULL
+                    """UPDATE download_files
+                       SET status=CASE
+                             WHEN download_id IS NULL THEN 'pending'
+                             ELSE 'queued'
+                           END,
+                           updated_at=CURRENT_TIMESTAMP
+                       WHERE torrent_id=? AND download_client='aria2' AND blocked=0
                          AND status='paused'""",
                     (torrent_id,),
                 )
-            ).fetchall()
-        for row in rows:
-            await self.aria2().resume(row["download_id"])
-        async with get_db() as db:
-            await db.execute(
-                """UPDATE download_files
-                   SET status='queued', updated_at=CURRENT_TIMESTAMP
-                   WHERE torrent_id=? AND download_client='aria2' AND blocked=0
-                     AND status='paused'""",
-                (torrent_id,),
-            )
-            await db.execute(
-                """UPDATE torrents SET status='queued', updated_at=CURRENT_TIMESTAMP
-                   WHERE id=? AND status='paused'""",
-                (torrent_id,),
-            )
-            await db.commit()
+                await db.execute(
+                    """UPDATE torrents SET status='queued', updated_at=CURRENT_TIMESTAMP
+                       WHERE id=? AND status='paused'""",
+                    (torrent_id,),
+                )
+                await db.commit()
         await self._log_event(torrent_id, "info", "Resumed aria2 transfer queue")
 
     async def pause_all_downloads(self) -> dict:
@@ -3892,8 +3935,7 @@ class TorrentManager:
                    JOIN download_files f ON f.torrent_id=t.id
                    WHERE t.status IN ('queued','downloading')
                      AND f.download_client='aria2' AND f.blocked=0
-                     AND f.download_id IS NOT NULL
-                     AND f.status IN ('queued','downloading')
+                     AND f.status IN ('pending','queued','downloading')
                    ORDER BY t.id"""
             )
         paused = 0
@@ -3922,7 +3964,7 @@ class TorrentManager:
                    JOIN download_files f ON f.torrent_id=t.id
                    WHERE t.status='paused'
                      AND f.download_client='aria2' AND f.blocked=0
-                     AND f.download_id IS NOT NULL AND f.status='paused'
+                     AND f.status='paused'
                    ORDER BY t.id"""
             )
         resumed = 0

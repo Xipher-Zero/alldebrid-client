@@ -3,6 +3,7 @@
 import asyncio
 import struct
 import sys
+import tempfile
 import types
 import unittest
 from contextlib import asynccontextmanager
@@ -128,6 +129,26 @@ class DirectLinkInputTests(unittest.TestCase):
 
     def test_schema_migrates_original_source_url(self):
         self.assertIn(("source_url", "TEXT"), _SCHEMA_COLUMNS_FILES)
+
+    def test_removed_source_can_reuse_its_original_target_path(self):
+        manager = TorrentManager()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            existing = root / "archive.zip"
+            existing.write_bytes(b"previous download")
+
+            protected = manager._unique_direct_link_path(
+                root, "archive.zip", set()
+            )
+            reusable = manager._unique_direct_link_path(
+                root,
+                "archive.zip",
+                set(),
+                reuse_existing=True,
+            )
+
+        self.assertEqual(protected.name, "archive (2).zip")
+        self.assertEqual(reusable.name, "archive.zip")
 
 
 class DelayedAllDebridTests(unittest.IsolatedAsyncioTestCase):

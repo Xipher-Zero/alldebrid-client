@@ -132,7 +132,8 @@ class GlobalPauseControlTests(unittest.IsolatedAsyncioTestCase):
         )
         query = fake_db.fetchall.await_args.args[0]
         self.assertIn("t.status IN ('queued','downloading')", query)
-        self.assertIn("f.status IN ('queued','downloading')", query)
+        self.assertIn("f.status IN ('pending','queued','downloading')", query)
+        self.assertNotIn("f.download_id IS NOT NULL", query)
 
     async def test_resume_all_only_targets_paused_owned_parents(self):
         manager = TorrentManager()
@@ -158,6 +159,79 @@ class GlobalPauseControlTests(unittest.IsolatedAsyncioTestCase):
         query = fake_db.fetchall.await_args.args[0]
         self.assertIn("t.status='paused'", query)
         self.assertIn("f.status='paused'", query)
+        self.assertNotIn("f.download_id IS NOT NULL", query)
+
+    async def test_individual_pause_holds_dispatched_and_pending_children(self):
+        manager = TorrentManager()
+        manager.download_client_name = lambda: "aria2"
+        fake_aria2 = types.SimpleNamespace(pause=AsyncMock())
+        manager.aria2 = lambda: fake_aria2
+        manager._log_event = AsyncMock()
+        statements = []
+
+        class Cursor:
+            async def fetchall(self):
+                return [{"download_id": "gid-1"}]
+
+        class FakeDb:
+            async def execute(self, sql, params=()):
+                statements.append((sql, params))
+                return Cursor()
+
+            async def commit(self):
+                return None
+
+        @asynccontextmanager
+        async def fake_get_db():
+            yield FakeDb()
+
+        with patch("services.manager_v2.get_db", fake_get_db):
+            await manager.pause_torrent(51)
+
+        fake_aria2.pause.assert_awaited_once_with("gid-1")
+        file_update = next(
+            sql for sql, _ in statements
+            if "UPDATE download_files" in sql
+        )
+        self.assertIn(
+            "status IN ('pending','queued','downloading')",
+            file_update,
+        )
+
+    async def test_individual_resume_restores_dispatchable_child_states(self):
+        manager = TorrentManager()
+        manager.download_client_name = lambda: "aria2"
+        fake_aria2 = types.SimpleNamespace(resume=AsyncMock())
+        manager.aria2 = lambda: fake_aria2
+        manager._log_event = AsyncMock()
+        statements = []
+
+        class Cursor:
+            async def fetchall(self):
+                return [{"download_id": "gid-2"}]
+
+        class FakeDb:
+            async def execute(self, sql, params=()):
+                statements.append((sql, params))
+                return Cursor()
+
+            async def commit(self):
+                return None
+
+        @asynccontextmanager
+        async def fake_get_db():
+            yield FakeDb()
+
+        with patch("services.manager_v2.get_db", fake_get_db):
+            await manager.resume_torrent(52)
+
+        fake_aria2.resume.assert_awaited_once_with("gid-2")
+        file_update = next(
+            sql for sql, _ in statements
+            if "UPDATE download_files" in sql
+        )
+        self.assertIn("WHEN download_id IS NULL THEN 'pending'", file_update)
+        self.assertIn("ELSE 'queued'", file_update)
 
 
 class ProviderHistoryRetentionTests(unittest.IsolatedAsyncioTestCase):
@@ -1665,6 +1739,28 @@ class ManagerDedupeTests(unittest.IsolatedAsyncioTestCase):
             aria2_max_active_downloads=0, max_concurrent_downloads=5,
         )):
             self.assertEqual(mgr._aria2_slot_limit(), 5)
+
+    def test_aria2_job_options_reuse_deterministic_target_path(self):
+        mgr = TorrentManager()
+        cfg = types.SimpleNamespace(
+            aria2_split=8,
+            aria2_min_split_size="10M",
+            aria2_max_connection_per_server=8,
+            aria2_continue_downloads=True,
+        )
+        with patch("services.manager_v2.get_settings", return_value=cfg):
+            options = mgr._aria2_job_options({
+                "dir": "/downloads/show",
+                "out": "episode.mkv",
+                "auto-file-renaming": "true",
+                "allow-overwrite": "false",
+            })
+
+        self.assertEqual(options["dir"], "/downloads/show")
+        self.assertEqual(options["out"], "episode.mkv")
+        self.assertEqual(options["auto-file-renaming"], "false")
+        self.assertEqual(options["allow-overwrite"], "true")
+        self.assertEqual(options["continue"], "true")
 
     def test_builtin_aria2_uses_fixed_internal_rpc_secret(self):
         from services.aria2_runtime import BUILTIN_ARIA2_SECRET, effective_rpc_config

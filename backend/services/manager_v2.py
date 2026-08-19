@@ -2048,9 +2048,14 @@ class TorrentManager:
         current_status = row["status"]
         current_progress = float(row.get("progress") or 0.0)
         current_size_bytes = int(row.get("size_bytes") or 0)
+        current_provider_code = row.get("provider_status_code")
         provider_state_changed = (
             provider_status != (row["provider_status"] or "")
-            or status_code != int(row["provider_status_code"] or -1)
+            or status_code != int(
+                current_provider_code
+                if current_provider_code is not None
+                else -1
+            )
         )
         local_delivery_active = (
             current_status in {"queued", "downloading", "paused"}
@@ -2154,7 +2159,13 @@ class TorrentManager:
             self._schedule_ready_parent_download(
                 row["id"], str(row["alldebrid_id"]), str(name)
             )
-        elif provider_status == "ready" and current_status not in (TorrentStatus.DOWNLOADING, TorrentStatus.QUEUED, TorrentStatus.COMPLETED, TorrentStatus.DELETED):
+        elif provider_status == "ready" and current_status not in (
+            TorrentStatus.DOWNLOADING,
+            TorrentStatus.QUEUED,
+            TorrentStatus.PAUSED,
+            TorrentStatus.COMPLETED,
+            TorrentStatus.DELETED,
+        ):
             # AllDebrid reports the torrent as ready — start the download.
             logger.info(
                 "sync: torrent %s (id=%s) is ready on AllDebrid → starting download",

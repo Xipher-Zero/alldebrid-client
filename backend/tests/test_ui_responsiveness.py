@@ -414,3 +414,16 @@ def test_pass3_frontend_queue_requests_search_and_filter_scope():
     )[0]
     assert "#view-torrents .filter-tabs .ftab" in filter_fn
     assert "document.querySelectorAll('.ftab')" not in filter_fn
+
+
+def test_pass3_provider_noop_handles_zero_status_code_and_paused_delivery():
+    manager = (REPO_ROOT / "backend/services/manager_v2.py").read_text()
+    provider = manager.split(
+        "async def _apply_provider_update", 1
+    )[1].split(
+        "async def _increment_poll_failure", 1
+    )[0]
+
+    assert 'current_provider_code = row.get("provider_status_code")' in provider
+    assert "if current_provider_code is not None" in provider
+    assert "TorrentStatus.PAUSED" in provider

@@ -32,7 +32,8 @@ jobs:
 
       - name: Restore full changelog and insert v1.0.2 clarification
         run: |
-          git show 67be9289e9117475ad590522d9229b42cd6ad132:CHANGELOG.md > CHANGELOG.md
+          git show 67be9289e9117475ad590522d9229b42cd6ad132:CHANGELOG.md > /tmp/changelog-before
+          cp /tmp/changelog-before CHANGELOG.md
           python - <<'PY'
           from pathlib import Path
           p = Path('CHANGELOG.md')
@@ -46,20 +47,26 @@ jobs:
           p.write_text(text.replace(marker, marker + addition, 1), encoding='utf-8')
           PY
 
-      - name: Validate repair scope
+      - name: Validate repair scope and exact restored history
         run: |
-          git diff --check
           test "$(git diff --name-only | tr -d '\r')" = "CHANGELOG.md"
-          old_lines="$(git show 67be9289e9117475ad590522d9229b42cd6ad132:CHANGELOG.md | wc -l)"
-          new_lines="$(wc -l < CHANGELOG.md)"
-          echo "old_lines=$old_lines new_lines=$new_lines"
-          test "$new_lines" -eq $((old_lines + 1))
+          python - <<'PY'
+          from pathlib import Path
+          old = Path('/tmp/changelog-before').read_text(encoding='utf-8')
+          new = Path('CHANGELOG.md').read_text(encoding='utf-8')
+          addition = '- Preserved local aria2 transfer status, progress, and size while AllDebrid is already in the ready state so provider reconciliation cannot overwrite live local telemetry.\n'
+          if new.count(addition) != 1:
+              raise SystemExit(f'expected one clarification, found {new.count(addition)}')
+          if new.replace(addition, '', 1) != old:
+              raise SystemExit('restored changelog differs from prior full history beyond the intended clarification')
+          print('CHANGELOG RESTORE CONTRACT: PASS')
+          PY
 
       - name: Commit changelog repair to work branch
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add CHANGELOG.md
-          git diff --cached --check
+          test "$(git diff --cached --name-only | tr -d '\r')" = "CHANGELOG.md"
           git commit -m "fix: restore full v1.0.2 changelog history"
           git push origin HEAD:work/v1.0.2-ui-responsiveness

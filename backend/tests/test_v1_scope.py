@@ -150,7 +150,7 @@ def test_global_pause_control_exposes_mixed_selective_pause_state():
     assert 'onclick="resumeProcessing()">Resume All</button>' in frontend
     assert "pausedTransferCount = Math.max(0, Number(bs.paused) || 0)" in frontend
     assert "settingsData.paused = result.paused" in frontend
-    assert "if (!result.paused) pausedTransferCount = 0" in frontend
+    assert "pausedTransferCount = Math.max(0, pausedTransferCount - 1)" in frontend
     assert index.index('id="topbar-actions"') < index.index('id="aria2-speed-badge"')
     assert "#aria2-speed-badge" in styles
     assert "white-space: nowrap" in styles
@@ -172,6 +172,7 @@ def test_global_pause_control_exposes_mixed_selective_pause_state():
     )[0]
     assert "await manager.pause_all_downloads()" in pause_route
     assert "await manager.resume_all_downloads()" in resume_route
+    assert "await manager.advance_aria2_queue()" in resume_route
 
     manager = (REPO_ROOT / "backend/services/manager_v2.py").read_text()
     sync_handler = manager.split("async def sync_aria2_downloads(self):", 1)[1].split(
@@ -181,9 +182,13 @@ def test_global_pause_control_exposes_mixed_selective_pause_state():
         "async def _dispatch_pending_aria2_queue", 1
     )[1].split("async def sync_download_clients", 1)[0]
     assert "if self.is_paused()" not in sync_handler.split("all_downloads =", 1)[0]
-    assert "globally_paused = self.is_paused()" in dispatch_handler
-    assert "targeted_manual_resume" in dispatch_handler
-    assert "AND t.status IN ('queued','downloading')" in dispatch_handler
+    assert 'self.download_client_name() != "aria2" or self.is_paused()' in dispatch_handler
+    assert "async def _schedule_ready_aria2_parents" in dispatch_handler
+    assert "status='ready'" in dispatch_handler
+    assert "provider_status='ready'" in dispatch_handler
+    assert "async def _advance_aria2_queue_locked" in dispatch_handler
+    assert "targeted_manual_resume" not in dispatch_handler
+    assert "allow_while_paused" not in dispatch_handler
 
 
 def test_topbar_uses_live_aria2_speed_with_human_download_units():
@@ -192,13 +197,16 @@ def test_topbar_uses_live_aria2_speed_with_human_download_units():
     styles = (REPO_ROOT / "frontend/static/style.css").read_text()
 
     assert frontend.count("function fmtSpeed(bps)") == 1
+    assert frontend.count("function fmtSpeedCap(bps)") == 1
+    assert "fmtTransferRate(speed, 100)" in frontend
+    assert "fmtTransferRate(speed, 1000)" in frontend
+    assert "Number(value.toFixed(2)) >= rollover" in frontend
     assert "return '0 KB/s'" in frontend
     assert "return '<1 KB/s'" in frontend
-    assert "+' KB/s'" in frontend
-    assert "+' MB/s'" in frontend
-    assert "+' GB/s'" in frontend
-    assert "speed < 104857600" in frontend
-    assert "(speed/1048576).toFixed(2)+' MB/s'" in frontend
+    assert "return 'Unlimited'" in frontend
+    assert "const units = ['KB', 'MB', 'GB', 'TB']" in frontend
+    assert "elLimit.textContent  = fmtSpeedCap(s.limitBps)" in frontend
+    assert '<span id="aria2-badge-limit">Unlimited</span>' in index
 
     runtime_handler = frontend.split("async function loadAria2Runtime()", 1)[1].split(
         "async function aria2RuntimeAction", 1

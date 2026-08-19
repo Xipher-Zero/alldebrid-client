@@ -367,6 +367,8 @@ class TorrentManager:
         self._active: Set[int] = set()
         self._direct_link_tasks: Set[asyncio.Task] = set()
         self._direct_link_task_ids: Set[int] = set()
+        self._ready_parent_tasks: Set[asyncio.Task] = set()
+        self._ready_parent_task_ids: Set[int] = set()
         self._aria2_state_lock = asyncio.Lock()
         self._aria2_dispatch_lock = asyncio.Lock()
         self._aria2_ownership_lock = asyncio.Lock()
@@ -716,7 +718,7 @@ class TorrentManager:
             )
             torrent_id = row.get("id")
             if torrent_id:
-                asyncio.create_task(self._start_download(int(torrent_id), ad_id, name))
+                self._schedule_ready_parent_download(int(torrent_id), ad_id, name)
 
         return row
 
@@ -1048,25 +1050,39 @@ class TorrentManager:
             )
 
             if succeeded:
+                queue_status = "paused" if self.is_paused() else "queued"
                 error_message = (
                     f"{failed} of {len(normalized)} links could not be generated"
                     if failed
                     else None
                 )
                 event_level = "warn" if failed else "info"
+                queue_action = (
+                    "parked by Pause All"
+                    if queue_status == "paused"
+                    else "queued for aria2"
+                )
                 event_message = (
                     f"Generated {succeeded} of {len(normalized)} AllDebrid links; "
-                    "queued for aria2"
+                    f"{queue_action}"
                 )
                 async with get_db() as db:
+                    if queue_status == "paused":
+                        await db.execute(
+                            """UPDATE download_files
+                               SET status='paused', updated_at=CURRENT_TIMESTAMP
+                               WHERE torrent_id=? AND status='pending'""",
+                            (torrent_id,),
+                        )
                     await db.execute(
                         """UPDATE torrents
-                           SET name=?, status='queued', provider_status='ready',
+                           SET name=?, status=?, provider_status='ready',
                                size_bytes=?, progress=0, error_message=?,
                                updated_at=CURRENT_TIMESTAMP
                            WHERE id=?""",
                         (
                             final_name,
+                            queue_status,
                             total_size,
                             error_message,
                             torrent_id,
@@ -1078,9 +1094,9 @@ class TorrentManager:
                     )
                     await db.commit()
                 await self._broadcast_direct_link_update(
-                    torrent_id, "queued", final_name, 0.0
+                    torrent_id, queue_status, final_name, 0.0
                 )
-                await self._dispatch_pending_aria2_queue()
+                await self.advance_aria2_queue()
             else:
                 all_missing = failed > 0 and missing == failed
                 message = (
@@ -1256,7 +1272,7 @@ class TorrentManager:
             )
             torrent_id = row.get("id")
             if torrent_id:
-                asyncio.create_task(self._start_download(int(torrent_id), ad_id, name))
+                self._schedule_ready_parent_download(int(torrent_id), ad_id, name)
 
         return row
 
@@ -1373,7 +1389,7 @@ class TorrentManager:
                     )
                     await db.commit()
                 name = magnet.get("filename") or magnet.get("name") or row["name"]
-                asyncio.create_task(self._start_download(row["id"], ad_id, str(name)))
+                self._schedule_ready_parent_download(row["id"], ad_id, str(name))
                 updated += 1
             elif provider_status == "ready" and local_status in ("queued", "downloading", "paused"):
                 # Already in progress locally — do not restart. Just keep provider_status in sync.
@@ -1755,6 +1771,8 @@ class TorrentManager:
         except Exception as exc:
             logger.warning("deep_sync: straggler check failed: %s", exc)
 
+        await self._advance_aria2_queue_locked()
+
 
     async def cleanup_stuck_downloads(self):
         """
@@ -2079,7 +2097,9 @@ class TorrentManager:
                         (row["id"],),
                     )
                     await _db.commit()
-            asyncio.create_task(self._start_download(row["id"], str(row["alldebrid_id"]), str(name)))
+            self._schedule_ready_parent_download(
+                row["id"], str(row["alldebrid_id"]), str(name)
+            )
         elif provider_status == "ready" and current_status not in (TorrentStatus.DOWNLOADING, TorrentStatus.QUEUED, TorrentStatus.COMPLETED, TorrentStatus.DELETED):
             # AllDebrid reports the torrent as ready — start the download.
             logger.info(
@@ -2092,7 +2112,9 @@ class TorrentManager:
                     (row["id"],),
                 )
                 await _db.commit()
-            asyncio.create_task(self._start_download(row["id"], str(row["alldebrid_id"]), str(name)))
+            self._schedule_ready_parent_download(
+                row["id"], str(row["alldebrid_id"]), str(name)
+            )
 
         elif provider_status == "expired":
             # AllDebrid statusCode 3: "Expired — files removed from cache".
@@ -2242,6 +2264,47 @@ class TorrentManager:
                 provider="AllDebrid",
             )
 
+    def _schedule_ready_parent_download(
+        self, torrent_id: int, ad_id: str, name: str
+    ) -> bool:
+        """Claim and schedule one provider-ready parent exactly once.
+
+        Every path that discovers ready provider work uses this helper. The
+        synchronous claim closes the gap between ``create_task`` and
+        ``_start_download`` adding the parent to ``_active``.
+        """
+        torrent_id = int(torrent_id)
+        if (
+            self.is_paused()
+            or self._disk_guard_active
+            or torrent_id in self._active
+            or torrent_id in self._ready_parent_task_ids
+        ):
+            return False
+
+        self._ready_parent_task_ids.add(torrent_id)
+        task = asyncio.create_task(
+            self._start_download(torrent_id, str(ad_id), str(name or ""))
+        )
+        self._ready_parent_tasks.add(task)
+
+        def _finished(done: asyncio.Task) -> None:
+            self._ready_parent_tasks.discard(done)
+            self._ready_parent_task_ids.discard(torrent_id)
+            try:
+                done.result()
+            except asyncio.CancelledError:
+                pass
+            except Exception as exc:
+                logger.error(
+                    "Ready-parent task failed for transfer %s: %s",
+                    torrent_id,
+                    sanitize_exception(exc, max_length=300),
+                )
+
+        task.add_done_callback(_finished)
+        return True
+
     async def _start_download(self, torrent_id: int, ad_id: str, name: str):
         if self.is_paused() or torrent_id in self._active:
             return
@@ -2299,6 +2362,11 @@ class TorrentManager:
             # reflects reality. While waiting, status stays as-is (ready/error/etc.) so
             # the poll loop can still see and re-evaluate it if needed.
             async with self.sem():
+                # Pause All may have been pressed while this task waited for a
+                # preparation slot. Do not cross that boundary and create new
+                # queue work behind the user's global pause.
+                if self.is_paused():
+                    return
                 # Now we have a slot — mark as downloading so aria2 sync and AllDebrid
                 # poll don't interfere while _download() runs.
                 try:
@@ -2573,6 +2641,20 @@ class TorrentManager:
         else:
             final_status = "error"
 
+        # A preparation task can finish after Pause All was pressed. Persist
+        # those newly materialized children as paused so the database and UI
+        # cannot claim they are runnable while the global gate is active.
+        if final_status == "queued" and self.is_paused():
+            final_status = "paused"
+            async with get_db() as db:
+                await db.execute(
+                    """UPDATE download_files
+                       SET status='paused', updated_at=CURRENT_TIMESTAMP
+                       WHERE torrent_id=? AND blocked=0 AND status='pending'""",
+                    (torrent_id,),
+                )
+                await db.commit()
+
         async with get_db() as db:
             await db.execute(
                 "UPDATE torrents SET status=?, local_path=?, size_bytes=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
@@ -2618,7 +2700,7 @@ class TorrentManager:
                 "info",
                 "Prepared for slot-based aria2 delivery",
             )
-            await self._dispatch_pending_aria2_queue()
+            await self.advance_aria2_queue()
         else:
             await self._notify_provider_error(
                 name,
@@ -2732,13 +2814,7 @@ class TorrentManager:
         waiting, stopped = self._aria2_state_windows()
         return await self.aria2().get_memory_diagnostics(waiting_limit=waiting, stopped_limit=stopped)
 
-    async def _dispatch_pending_aria2_queue(
-        self,
-        all_downloads=None,
-        *,
-        torrent_id: Optional[int] = None,
-        allow_while_paused: bool = False,
-    ):
+    async def _dispatch_pending_aria2_queue(self, all_downloads=None):
         """
         The single authoritative gate between our DB and aria2.
 
@@ -2755,18 +2831,10 @@ class TorrentManager:
            pending so they are re-queued in order on the next cycle.
         4. Fill available slots from pending download_files, oldest first.
         """
-        # Global Pause parks every parent as ``paused``. An item-level Resume
-        # changes only that parent back to queued/downloading, making it an
-        # explicit running exception. The selected parent must be able to fill
-        # DB-pending children now and on later scheduler passes; otherwise a
-        # multi-link job stalls after its first slot-sized batch.
-        globally_paused = self.is_paused()
-        targeted_manual_resume = allow_while_paused and torrent_id is not None
-        if self.download_client_name() != "aria2":
-            return
-        if globally_paused and torrent_id is not None and not targeted_manual_resume:
-            return
-        if globally_paused and allow_while_paused and torrent_id is None:
+        # Global Pause is a strict queue-wide gate. Item-level Resume exits
+        # global pause before it reaches the manager, leaving any other paused
+        # parents as selective pauses instead of creating hidden exceptions.
+        if self.download_client_name() != "aria2" or self.is_paused():
             return
         # Disk-space guard: block ALL new dispatches while active.
         # This is the authoritative gate for aria2 dispatching — it runs on
@@ -2827,22 +2895,10 @@ class TorrentManager:
             if available_slots <= 0:
                 return
 
-            torrent_filter = ""
-            pending_params = []
-            if torrent_id is not None:
-                torrent_filter = " AND f.torrent_id=?"
-                pending_params.append(int(torrent_id))
-            elif globally_paused:
-                # Only parents explicitly resumed after Pause All have one of
-                # these states. Parents still governed by the global pause are
-                # persisted as ``paused`` and cannot enter this queue.
-                torrent_filter = " AND t.status IN ('queued','downloading')"
-            pending_params.append(available_slots)
-
             async with get_db() as db:
                 pending_rows = await (
                     await db.execute(
-                        f"""SELECT f.id AS file_id, f.torrent_id, f.filename,
+                        """SELECT f.id AS file_id, f.torrent_id, f.filename,
                                   f.source_url, f.download_url, f.local_path,
                                   t.name AS torrent_name, t.source AS transfer_source
                            FROM download_files f
@@ -2851,10 +2907,9 @@ class TorrentManager:
                              AND f.blocked=0
                              AND f.status='pending'
                              AND t.status NOT IN ('completed','deleted','error')
-                             {torrent_filter}
                            ORDER BY t.priority DESC, t.id ASC
                            LIMIT ?""",
-                        tuple(pending_params),
+                        (available_slots,),
                     )
                 ).fetchall()
 
@@ -2983,12 +3038,69 @@ class TorrentManager:
                     await self._update_file_state(row["file_id"], "error", row["local_path"], reason=str(exc))
                     await self._finalize_aria2_torrent(row["torrent_id"])
 
+    async def _schedule_ready_aria2_parents(self) -> int:
+        """Materialize the next provider-ready parents into the local file queue.
+
+        ``ready`` is a real queue stage but has no download_files yet, so the
+        aria2 dispatcher cannot see it. Scheduling it here keeps provider-ready
+        and file-pending advancement in the same control path.
+        """
+        if (
+            self.download_client_name() != "aria2"
+            or self.is_paused()
+            or self._disk_guard_active
+        ):
+            return 0
+
+        limit = max(1, int(get_settings().max_concurrent_downloads or 1))
+        async with get_db() as db:
+            rows = await db.fetchall(
+                """SELECT id, alldebrid_id, name
+                   FROM torrents
+                   WHERE status='ready'
+                     AND provider_status='ready'
+                     AND alldebrid_id IS NOT NULL
+                     AND alldebrid_id != ''
+                   ORDER BY priority DESC, id ASC
+                   LIMIT ?""",
+                (limit,),
+            )
+
+        scheduled = 0
+        for row in rows:
+            torrent_id = int(row["id"])
+            if torrent_id in self._active:
+                continue
+            if self._schedule_ready_parent_download(
+                torrent_id,
+                str(row["alldebrid_id"]),
+                str(row["name"] or ""),
+            ):
+                scheduled += 1
+        return scheduled
+
+    async def _advance_aria2_queue_locked(self) -> int:
+        """Advance both local file slots and provider-ready parent work."""
+        if (
+            self.download_client_name() != "aria2"
+            or self.is_paused()
+            or self._disk_guard_active
+        ):
+            return 0
+        await self._dispatch_pending_aria2_queue()
+        return await self._schedule_ready_aria2_parents()
+
+    async def advance_aria2_queue(self) -> int:
+        """Public serialized queue kick used by controls and preparation tasks."""
+        async with self._aria2_state_lock:
+            return await self._advance_aria2_queue_locked()
+
     async def sync_download_clients(self):
         async with self._aria2_state_lock:
             if self.download_client_name() == "aria2":
                 await self.sync_aria2_downloads()
-                # Enforce slot limit and clean up orphaned finished entries
-                await self._dispatch_pending_aria2_queue()
+                # Enforce slots and materialize provider-ready successors.
+                await self._advance_aria2_queue_locked()
                 await self._cleanup_aria2_orphans()
 
     async def _cleanup_aria2_orphans(self):
@@ -3182,8 +3294,10 @@ class TorrentManager:
                 torrent_id, "aria2 entry lost during sync — reset for re-download"
             )
             if t["alldebrid_id"]:
-                asyncio.create_task(
-                    self._start_download(torrent_id, str(t["alldebrid_id"]), str(t["name"] or ""))
+                self._schedule_ready_parent_download(
+                    torrent_id,
+                    str(t["alldebrid_id"]),
+                    str(t["name"] or ""),
                 )
 
         # Finalize torrents where aria2 reported complete or error
@@ -3232,10 +3346,9 @@ class TorrentManager:
         except Exception as exc:
             logger.warning("sync_aria2: straggler check failed: %s", exc)
 
-        # Publish aggregate collection progress before the next dispatch.
+        # Publish aggregate collection progress. The serialized caller advances
+        # the queue once after reconciliation, avoiding two competing kicks.
         await self._update_aria2_parent_progress(all_downloads)
-
-        await self._dispatch_pending_aria2_queue()
 
     async def _reset_torrent_for_redownload(self, torrent_id: int, reason: str):
         """Clear download_files and mark torrent as downloading so the sync loop
@@ -3426,11 +3539,13 @@ class TorrentManager:
                     "SELECT alldebrid_id, name FROM torrents WHERE id=?", (torrent_id,)
                 )).fetchone()
             if t and t["alldebrid_id"]:
-                asyncio.create_task(
-                    self._start_download(torrent_id, str(t["alldebrid_id"]), str(t["name"] or ""))
+                self._schedule_ready_parent_download(
+                    torrent_id,
+                    str(t["alldebrid_id"]),
+                    str(t["name"] or ""),
                 )
 
-        await self._dispatch_pending_aria2_queue()
+        await self.advance_aria2_queue()
         recovered = await self.recover_direct_link_collections()
         if recovered:
             logger.info(
@@ -3930,11 +4045,9 @@ class TorrentManager:
                 )
                 await db.commit()
         await self._log_event(torrent_id, "info", "Paused aria2 transfer queue")
-        if not self.is_paused():
-            # Individual pause should release capacity immediately instead of
-            # waiting for the next scheduler poll. Global Pause keeps dispatch
-            # blocked through the application-level paused setting.
-            await self._dispatch_pending_aria2_queue()
+        # Individual pause releases capacity and must advance both pending
+        # files and provider-ready parents immediately.
+        await self._advance_aria2_queue_locked()
 
     async def resume_torrent(self, torrent_id: int):
         async with self._aria2_state_lock:
@@ -3975,17 +4088,9 @@ class TorrentManager:
                 )
                 await db.commit()
         await self._log_event(torrent_id, "info", "Resumed aria2 transfer queue")
-        # Resuming several GIDs can temporarily put more active/waiting jobs
-        # in aria2 than DebridPulse permits. Rebalance immediately. During a
-        # global pause, this targeted pass may start only the manually resumed
-        # parent, including children previously parked without an aria2 GID.
-        if self.is_paused():
-            await self._dispatch_pending_aria2_queue(
-                torrent_id=torrent_id,
-                allow_while_paused=True,
-            )
-        else:
-            await self._dispatch_pending_aria2_queue()
+        # Rebalance resumed GIDs and materialize the next ready parent through
+        # the same authoritative queue path used by pause and polling.
+        await self._advance_aria2_queue_locked()
 
     async def pause_all_downloads(self) -> dict:
         """Pause every active DebridPulse-owned aria2 transfer.
@@ -4966,13 +5071,15 @@ class TorrentManager:
                         await self._reset_torrent_for_redownload(
                             torrent_id, "Partial/missing aria2 state on import — reset for re-download"
                         )
-                        asyncio.create_task(self._start_download(torrent_id, ad_id, item["name"]))
+                        self._schedule_ready_parent_download(
+                            torrent_id, ad_id, item["name"]
+                        )
                     else:
                         # All files accounted for — let _finalize decide if we're done
                         await self._finalize_aria2_torrent(torrent_id)
                     continue  # handled above
 
-            asyncio.create_task(self._start_download(torrent_id, ad_id, item["name"]))
+            self._schedule_ready_parent_download(torrent_id, ad_id, item["name"])
         return results
 
     async def delete_torrent(self, torrent_id: int, delete_from_ad: bool = True):

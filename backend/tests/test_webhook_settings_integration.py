@@ -140,7 +140,7 @@ class SettingsSaveTests(unittest.IsolatedAsyncioTestCase):
              patch("api.routes.apply_settings", side_effect=fake_apply), \
              patch.object(routes.manager, "aria2", return_value=fake_aria2), \
              patch.object(routes.manager, "reset_services", MagicMock()) as reset_services, \
-             patch.object(routes.manager, "_dispatch_pending_aria2_queue", AsyncMock()) as dispatch:
+             patch.object(routes.manager, "advance_aria2_queue", AsyncMock()) as advance:
             result = await routes.aria2_set_global_options({"max_concurrent_downloads": 2})
 
         self.assertEqual(result["applied"]["max-concurrent-downloads"], "2")
@@ -148,7 +148,7 @@ class SettingsSaveTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(saved["cfg"].aria2_max_active_downloads, 2)
         self.assertEqual(saved["applied"].max_concurrent_downloads, 2)
         reset_services.assert_called_once()
-        dispatch.assert_awaited_once()
+        advance.assert_awaited_once()
 
 
 class _FakeDb:
@@ -216,41 +216,52 @@ class TorrentListingRouteTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ProcessingPauseRouteTests(unittest.IsolatedAsyncioTestCase):
-    async def test_final_individual_resume_clears_global_pause_and_dispatches(self):
+    async def test_individual_resume_exits_global_pause_and_advances_queue(self):
         cfg = routes.AppSettings(paused=True)
-        db = _FakeDb()
-        db.fetchone = AsyncMock(return_value=None)
         saved = []
 
         with patch.object(routes.manager, "resume_torrent", AsyncMock()) as resume, \
-             patch.object(routes.manager, "_dispatch_pending_aria2_queue", AsyncMock()) as dispatch, \
-             patch("api.routes.get_db", return_value=_fake_db_context(db)), \
+             patch.object(routes.manager, "advance_aria2_queue", AsyncMock()) as advance, \
              patch("api.routes.get_settings", return_value=cfg), \
              patch("api.routes.save_settings", side_effect=saved.append), \
              patch("api.routes.apply_settings") as apply:
             result = await routes.resume_torrent(71)
 
         resume.assert_awaited_once_with(71)
-        dispatch.assert_awaited_once_with()
+        advance.assert_awaited_once_with()
         self.assertEqual(result, {"ok": True, "paused": False})
         self.assertFalse(saved[0].paused)
         apply.assert_called_once_with(saved[0])
 
-    async def test_individual_resume_keeps_global_pause_if_another_item_is_paused(self):
+    async def test_individual_resume_leaves_other_items_selectively_paused(self):
         cfg = routes.AppSettings(paused=True)
-        db = _FakeDb()
-        db.fetchone = AsyncMock(return_value={"paused": 1})
 
-        with patch.object(routes.manager, "resume_torrent", AsyncMock()), \
-             patch.object(routes.manager, "_dispatch_pending_aria2_queue", AsyncMock()) as dispatch, \
-             patch("api.routes.get_db", return_value=_fake_db_context(db)), \
+        with patch.object(routes.manager, "resume_torrent", AsyncMock()) as resume, \
+             patch.object(routes.manager, "advance_aria2_queue", AsyncMock()) as advance, \
              patch("api.routes.get_settings", return_value=cfg), \
              patch("api.routes.save_settings") as save, \
              patch("api.routes.apply_settings") as apply:
             result = await routes.resume_torrent(72)
 
-        self.assertEqual(result, {"ok": True, "paused": True})
-        dispatch.assert_not_awaited()
+        self.assertEqual(result, {"ok": True, "paused": False})
+        resume.assert_awaited_once_with(72)
+        advance.assert_awaited_once_with()
+        self.assertFalse(save.call_args.args[0].paused)
+        apply.assert_called_once_with(save.call_args.args[0])
+
+    async def test_individual_resume_does_not_reapply_unpaused_settings(self):
+        cfg = routes.AppSettings(paused=False)
+
+        with patch.object(routes.manager, "resume_torrent", AsyncMock()) as resume, \
+             patch.object(routes.manager, "advance_aria2_queue", AsyncMock()) as advance, \
+             patch("api.routes.get_settings", return_value=cfg), \
+             patch("api.routes.save_settings") as save, \
+             patch("api.routes.apply_settings") as apply:
+            result = await routes.resume_torrent(73)
+
+        self.assertEqual(result, {"ok": True, "paused": False})
+        resume.assert_awaited_once_with(73)
+        advance.assert_not_awaited()
         save.assert_not_called()
         apply.assert_not_called()
 

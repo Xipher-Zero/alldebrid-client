@@ -160,13 +160,27 @@ function fmtSize(b) {
   while (b >= 1024 && i < u.length-1) {b/=1024; i++;}
   return b.toFixed(1)+' '+u[i];
 }
+function fmtTransferRate(bps, rollover) {
+  const speed = Number(bps);
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let value = speed / 1024;
+  let unit = 0;
+  while (Number(value.toFixed(2)) >= rollover && unit < units.length - 1) {
+    value /= 1024;
+    unit++;
+  }
+  return value.toFixed(2)+' '+units[unit]+'/s';
+}
 function fmtSpeed(bps) {
   const speed = Number(bps);
   if (!Number.isFinite(speed) || speed <= 0) return '0 KB/s';
   if (speed < 1024) return '<1 KB/s';
-  if (speed < 1048576) return (speed/1024).toFixed(1)+' KB/s';
-  if (speed < 104857600) return (speed/1048576).toFixed(2)+' MB/s';
-  return (speed/1073741824).toFixed(2)+' GB/s';
+  return fmtTransferRate(speed, 100);
+}
+function fmtSpeedCap(bps) {
+  const speed = Number(bps);
+  if (!Number.isFinite(speed) || speed <= 0) return 'Unlimited';
+  return fmtTransferRate(speed, 1000);
 }
 function fmtEta(secs) {
   if (!secs || secs <= 0) return '';
@@ -894,7 +908,7 @@ async function resumeT(id) {
     const result = await api('POST',`/torrents/${id}/resume`);
     if (typeof result.paused === 'boolean') {
       settingsData.paused = result.paused;
-      if (!result.paused) pausedTransferCount = 0;
+      if (!result.paused) pausedTransferCount = Math.max(0, pausedTransferCount - 1);
       renderTopbarActions();
     }
     toast('aria2 queue resumed','success');
@@ -3198,7 +3212,7 @@ async function loadAria2SpeedLimit() {
         if (ci) { ci.style.display = ''; ci.value = Math.round(bps / 1024); }
         if (cb)   cb.style.display = '';
       }
-      if (st) st.textContent = bps > 0 ? '(' + fmtSpeed(bps) + ')' : '(unlimited)';
+      if (st) st.textContent = '(' + fmtSpeedCap(bps) + ')';
     }
 
     // ── Sync Max DL preset in Downloads panel ─────────────────────────────
@@ -3244,7 +3258,7 @@ async function _setAria2Speed(bps) {
     // Keep settingsData in sync so subsequent PUT /settings calls don't
     // overwrite this value with the stale cached number.
     if (settingsData) settingsData.aria2_max_download_limit = bps;
-    if (st) { st.style.color='var(--green)'; st.textContent = bps > 0 ? 'Set: ' + fmtSpeed(bps) : 'Unlimited'; }
+    if (st) { st.style.color='var(--green)'; st.textContent = bps > 0 ? 'Set: ' + fmtSpeedCap(bps) : 'Unlimited'; }
     setTimeout(function(){ if(st) st.style.color='var(--text2)'; }, 3000);
     updateAria2TopbarBadge({limitBps: bps});
     return true;
@@ -3294,7 +3308,7 @@ function updateAria2TopbarBadge(patch) {
   if (elActive) elActive.textContent = s.active;
   if (elMax)    elMax.textContent    = s.maxDl || '—';
   if (elSpeed)  elSpeed.textContent  = fmtSpeed(s.liveBps || 0);
-  if (elLimit)  elLimit.textContent  = s.limitBps > 0 ? fmtSpeed(s.limitBps) : '\u221e';
+  if (elLimit)  elLimit.textContent  = fmtSpeedCap(s.limitBps);
   document.querySelectorAll('#aria2-cap-menu [data-cap-bps]').forEach(function(button) {
     button.classList.toggle('active', Number(button.dataset.capBps) === Number(s.limitBps || 0));
   });

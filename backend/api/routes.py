@@ -939,22 +939,14 @@ async def resume_torrent(torrent_id: int):
         await manager.resume_torrent(torrent_id)
         globally_paused = bool(get_settings().paused)
         if globally_paused:
-            async with get_db() as db:
-                remaining_paused = await db.fetchone(
-                    "SELECT 1 AS paused FROM torrents WHERE status='paused' LIMIT 1"
-                )
-            if not remaining_paused:
-                cfg = get_settings().model_copy(update={"paused": False})
-                save_settings(cfg)
-                apply_settings(cfg)
-                globally_paused = False
-                try:
-                    await manager._dispatch_pending_aria2_queue()
-                except Exception as exc:
-                    logger.debug(
-                        "aria2 dispatch after final individual resume skipped: %s",
-                        sanitize_exception(exc),
-                    )
+            # An individual Resume means queue processing is active again.
+            # Other parents remain selectively paused; they no longer keep a
+            # hidden global gate over ready successors.
+            cfg = get_settings().model_copy(update={"paused": False})
+            save_settings(cfg)
+            apply_settings(cfg)
+            globally_paused = False
+            await manager.advance_aria2_queue()
         return {"ok": True, "paused": globally_paused}
     except Exception as e:
         raise HTTPException(400, _sanitize_error(e))
@@ -1065,7 +1057,9 @@ async def get_stats():
         size_total      = _v(await db.fetchone("SELECT COALESCE(SUM(size_bytes),0) as v FROM torrents WHERE status='completed'"))
         blocked         = _c(await db.fetchone("SELECT COUNT(*) as c FROM download_files WHERE blocked=1"))
         active          = _c(await db.fetchone("SELECT COUNT(*) as c FROM torrents WHERE status IN ('downloading','processing','uploading','paused')"))
-        queued          = _c(await db.fetchone("SELECT COUNT(*) as c FROM torrents WHERE status='queued'"))
+        # Provider-ready parents are queued work even before their file rows
+        # have been materialized for aria2.
+        queued          = _c(await db.fetchone("SELECT COUNT(*) as c FROM torrents WHERE status IN ('ready','queued')"))
 
         # Browser-tab operator state deliberately uses only torrents that are
         # genuinely transferring bytes.  Do not inherit the broader historical
@@ -1257,6 +1251,7 @@ async def resume_processing():
     cfg = cfg.model_copy(update={"paused": False})
     save_settings(cfg)
     apply_settings(cfg)
+    await manager.advance_aria2_queue()
     return {"ok": True, "paused": False, **result}
 
 
@@ -1561,7 +1556,7 @@ async def aria2_set_global_options(body: dict):
         if "max_concurrent_downloads" in cfg_updates:
             manager.reset_services()
             try:
-                await manager._dispatch_pending_aria2_queue()
+                await manager.advance_aria2_queue()
             except Exception as exc:
                 logger.debug("aria2 quick slot dispatch skipped: %s", sanitize_exception(exc))
         return {

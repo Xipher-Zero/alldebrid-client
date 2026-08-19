@@ -21,7 +21,7 @@ jobs:
 
       - name: Verify exact baseline
         run: |
-          expected="a3105ed50aae1f185423cd83845c4c5c79606b34"
+          expected="414074eadee8792450cc7e45b15171d1ef2de7b9"
           actual="$(git rev-parse HEAD)"
           echo "expected=$expected"
           echo "actual=$actual"
@@ -30,31 +30,28 @@ jobs:
             exit 1
           fi
 
-      - name: Materialize guarded follow-up from automation base
+      - name: Materialize guarded CI fix from automation base
         run: |
           git fetch origin automation/pass3-base
-          git show origin/automation/pass3-base:.pass3_fix.py > .pass3_fix.py
+          git show origin/automation/pass3-base:.pass3_ci_fix.py > .pass3_ci_fix.py
 
-      - name: Apply guarded pass 3 follow-up
-        run: python .pass3_fix.py
+      - name: Apply guarded pass 3 CI compatibility fix
+        run: python .pass3_ci_fix.py
 
-      - name: Normalize generated test EOF and remove local patcher
-        run: |
-          python -c "from pathlib import Path; p=Path('backend/tests/test_ui_responsiveness.py'); p.write_text(p.read_text(encoding='utf-8').rstrip() + '\n', encoding='utf-8')"
-          rm .pass3_fix.py
+      - name: Remove temporary local patcher
+        run: rm .pass3_ci_fix.py
 
       - name: Static syntax checks
         run: |
           python -m py_compile backend/services/manager_v2.py
-          python -m py_compile backend/tests/test_ui_responsiveness.py
           node --check frontend/static/app.js
           git diff --check
 
-      - name: Commit follow-up to work branch
+      - name: Commit CI fix to work branch
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add backend/services/manager_v2.py backend/tests/test_ui_responsiveness.py
+          git add backend/services/manager_v2.py
           git diff --cached --check
-          git commit -m "fix: preserve pass3 provider no-op semantics"
+          git commit -m "fix: tolerate legacy aria2 sync row fixtures"
           git push origin HEAD:work/v1.0.2-ui-responsiveness

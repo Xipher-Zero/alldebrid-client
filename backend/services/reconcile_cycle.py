@@ -47,12 +47,20 @@ def install_scheduler_snapshot_reuse(manager) -> None:
     manager._dp_scheduler_snapshot_reuse_installed = True
 
 
-def _install_confirm_gid_metrics(coordinator) -> None:
-    """Instrument strict GID confirmation without changing its semantics."""
-    if getattr(coordinator, "_dp_confirm_gid_metrics_installed", False):
+def _install_confirm_gid_metrics(manager) -> None:
+    """Instrument the manager confirmation path without changing semantics.
+
+    TransferControlCoordinator.install() binds ``manager._aria2_confirm_gid`` to
+    the coordinator's then-current bound method. Replacing
+    ``coordinator.confirm_gid`` later does not update that already-bound manager
+    attribute, so scheduler instrumentation must wrap the manager reference
+    itself. This is diagnostic-only and leaves operator pause/resume methods
+    untouched.
+    """
+    if getattr(manager, "_dp_confirm_gid_metrics_installed", False):
         return
 
-    original_confirm_gid = coordinator.confirm_gid
+    original_confirm_gid = manager._aria2_confirm_gid
 
     async def profiled_confirm_gid(*args, **kwargs):
         increment("aria2.confirm_gid_calls")
@@ -66,8 +74,8 @@ def _install_confirm_gid_metrics(coordinator) -> None:
             increment("aria2.confirm_gid_missing")
         return result
 
-    coordinator.confirm_gid = profiled_confirm_gid
-    coordinator._dp_confirm_gid_metrics_installed = True
+    manager._aria2_confirm_gid = profiled_confirm_gid
+    manager._dp_confirm_gid_metrics_installed = True
 
 
 async def _raw_snapshot(manager):
@@ -106,7 +114,7 @@ async def reconcile_download_client_cycle(manager) -> None:
         return
 
     install_scheduler_snapshot_reuse(manager)
-    _install_confirm_gid_metrics(coordinator)
+    _install_confirm_gid_metrics(manager)
     await coordinator.ensure_initialized()
     globally_paused = bool(get_settings().paused)
 

@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.1] — 2026-08-19
+
+### Hotfix
+
+- Restored the upper-right live aria2 telemetry indicator when using an external aria2 daemon.
+- External mode now shows DebridPulse-owned active transfers and live download speed while clearly marking the bandwidth cap as **Externally Controlled**.
+- Restored live download speed in the active browser-tab title for external aria2.
+- Prevented unrelated jobs on a shared external aria2 daemon from appearing in DebridPulse telemetry or the live aria2 queue.
+- Preserved the external-daemon safety boundary: DebridPulse does not modify daemon-global bandwidth limits in external mode.
+
+
 ## [1.0.0] — 2026-08-19
 
 ### DebridPulse identity

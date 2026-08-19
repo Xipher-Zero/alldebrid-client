@@ -2382,24 +2382,36 @@ async function loadAria2Runtime() {
     renderAria2Runtime(data);
     loadAria2Downloads().catch(()=>{});
     const badge = document.getElementById('aria2-speed-badge');
-    const dlEl  = document.getElementById('aria2-speed-dl');
     if (badge) {
-      const isBuiltin = (data.mode||'')==='builtin' && data.running;
-      if (!isBuiltin) {
+      const isBuiltin = (data.mode || '') === 'builtin';
+
+      if (settingsData) {
+        _aria2BadgeState.limitBps =
+          parseInt(settingsData.aria2_max_download_limit) || 0;
+        _aria2BadgeState.maxDl =
+          parseInt(
+            settingsData.max_concurrent_downloads ??
+            settingsData.aria2_max_active_downloads
+          ) || 3;
+      }
+
+      if (isBuiltin && !data.running) {
         badge.style.display = 'none';
-      } else {
-        // Pre-seed from settingsData for instant first render,
-        // then fetch live values from RPC
-        if (settingsData) {
-          _aria2BadgeState.limitBps = parseInt(settingsData.aria2_max_download_limit)||0;
-          _aria2BadgeState.maxDl    = parseInt(settingsData.aria2_max_active_downloads)||3;
-        }
+      } else if (isBuiltin) {
         badge.style.display = 'flex';
         updateAria2TopbarBadge({
           active: Number(data.active) || 0,
           liveBps: Number(data.download_speed) || 0,
+          externalControl: false,
         });
         loadAria2SpeedLimit().catch(function(){});
+      } else {
+        badge.style.display = 'flex';
+        updateAria2TopbarBadge({
+          maxDl: _aria2BadgeState.maxDl,
+          externalControl: true,
+        });
+        loadAria2TopbarStat().catch(function(){});
       }
     }
     return data;
@@ -3197,6 +3209,7 @@ async function runRecovery() {
 async function loadAria2SpeedLimit() {
   try {
     var data = await api('GET', '/aria2/global-options', null, 10000);
+    var externalControl = !!data.global_options_read_only;
     var bps   = parseInt(data.max_download_speed || 0);
     var maxDl = parseInt(data.max_concurrent_downloads || 0)
                 || (settingsData && settingsData.aria2_max_active_downloads)
@@ -3206,7 +3219,9 @@ async function loadAria2SpeedLimit() {
     if (settingsData) {
       settingsData.aria2_max_active_downloads = maxDl;
       settingsData.max_concurrent_downloads   = maxDl;
-      settingsData.aria2_max_download_limit   = bps;
+      if (!externalControl) {
+        settingsData.aria2_max_download_limit = bps;
+      }
     }
     // ── Sync Settings-page inputs (Downloads → Settings, bidirectional) ──
     var inMad = document.getElementById('s-aria2_max_active_downloads');
@@ -3247,7 +3262,11 @@ async function loadAria2SpeedLimit() {
     }
 
     // ── Update topbar badge ───────────────────────────────────────────────
-    updateAria2TopbarBadge({limitBps: bps, maxDl: maxDl});
+    updateAria2TopbarBadge({
+      limitBps: bps,
+      maxDl: maxDl,
+      externalControl: externalControl,
+    });
 
   } catch (e) { /* aria2 not connected — silently ignore */ }
 }
@@ -3270,6 +3289,16 @@ async function applyAria2SpeedCustom() {
 
 async function _setAria2Speed(bps) {
   var st = document.getElementById('aria2-speed-status');
+
+  if (settingsData && (settingsData.aria2_mode || 'builtin') !== 'builtin') {
+    if (st) {
+      st.style.color = 'var(--text2)';
+      st.textContent = 'Externally Controlled';
+    }
+    updateAria2TopbarBadge({externalControl: true});
+    return false;
+  }
+
   if (st) { st.style.color='var(--text2)'; st.textContent='Applying…'; }
   try {
     await api('POST', '/aria2/global-options', {max_download_speed: bps});
@@ -3296,18 +3325,28 @@ function updateAria2Badge(activeCount) {
 }
 
 // Topbar badge: live active count, speed cap, and max concurrent
-var _aria2BadgeState = {active: 0, limitBps: 0, maxDl: 3, liveBps: 0};
+var _aria2BadgeState = {
+  active: 0,
+  limitBps: 0,
+  maxDl: 3,
+  liveBps: 0,
+  externalControl: false,
+};
 var _aria2TopbarStatBusy = false;
 
 async function loadAria2TopbarStat() {
-  if (_aria2TopbarStatBusy || !settingsData ||
-      (settingsData.aria2_mode || 'builtin') !== 'builtin') return;
+  if (_aria2TopbarStatBusy || !settingsData) return;
   _aria2TopbarStatBusy = true;
   try {
     const data = await api('GET', '/aria2/global-stat', null, 3000);
     updateAria2TopbarBadge({
       active: Number(data.active) || 0,
       liveBps: Number(data.download_speed) || 0,
+      maxDl: Number(
+        settingsData.max_concurrent_downloads ??
+        settingsData.aria2_max_active_downloads
+      ) || 3,
+      externalControl: !!data.external_control,
     });
   } finally {
     _aria2TopbarStatBusy = false;
@@ -3322,19 +3361,62 @@ function updateAria2TopbarBadge(patch) {
   var elMax    = document.getElementById('aria2-badge-max');
   var elSpeed  = document.getElementById('aria2-badge-speed');
   var elLimit  = document.getElementById('aria2-badge-limit');
+  var toggle   = document.getElementById('aria2-cap-toggle');
   if (!topBadge) return;
+
+  var externalControl = !!s.externalControl;
+
   if (elActive) elActive.textContent = s.active;
   if (elMax)    elMax.textContent    = s.maxDl || '—';
   if (elSpeed)  elSpeed.textContent  = fmtSpeed(s.liveBps || 0);
-  if (elLimit)  elLimit.textContent  = fmtSpeedCap(s.limitBps);
+
+  if (elLimit) {
+    elLimit.textContent = externalControl
+      ? 'Externally Controlled'
+      : fmtSpeedCap(s.limitBps);
+  }
+
+  topBadge.classList.toggle('external-control', externalControl);
+
+  if (toggle) {
+    toggle.setAttribute(
+      'aria-disabled',
+      externalControl ? 'true' : 'false'
+    );
+    toggle.title = externalControl
+      ? 'Bandwidth cap is controlled by the external aria2 daemon'
+      : 'Set download speed cap';
+    toggle.style.cursor = externalControl ? 'default' : '';
+
+    var capArrow = toggle.querySelector('span[aria-hidden="true"]');
+    if (capArrow) {
+      capArrow.style.display = externalControl ? 'none' : '';
+    }
+  }
+
+  topBadge.title = externalControl
+    ? 'Active / max — DebridPulse-owned live speed — bandwidth externally controlled'
+    : 'Active / max — live speed — download speed cap';
+
+  if (externalControl) {
+    topBadge.style.display = 'flex';
+    closeAria2SpeedCapMenu();
+  }
+
   renderOperatorTitle();
+
   document.querySelectorAll('#aria2-cap-menu [data-cap-bps]').forEach(function(button) {
-    button.classList.toggle('active', Number(button.dataset.capBps) === Number(s.limitBps || 0));
+    button.classList.toggle(
+      'active',
+      !externalControl &&
+      Number(button.dataset.capBps) === Number(s.limitBps || 0)
+    );
   });
 }
 
 function toggleAria2SpeedCapMenu(event) {
   if (event) event.stopPropagation();
+  if (_aria2BadgeState.externalControl) return;
   var menu = document.getElementById('aria2-cap-menu');
   var toggle = document.getElementById('aria2-cap-toggle');
   if (!menu || !toggle) return;

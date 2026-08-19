@@ -34,6 +34,7 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
+          import textwrap
 
           def replace_once(path, old, new, label):
               p = Path(path)
@@ -54,24 +55,21 @@ jobs:
               '<div class="direct-link-entry">\n            <textarea class="input direct-link-input" id="q-magnet" rows="1" placeholder="magnet:?xt=urn:btih:… or paste multiple lines, one per line" oninput="resizeDebridLinkInput(this)" onkeydown="if((event.ctrlKey||event.metaKey)&&event.key===\'Enter\')quickAdd()"></textarea>\n            <button class="btn btn-primary" id="btn-add-magnet" onclick="quickAdd()" style="padding:9px 20px" title="Add entered magnet links, or choose a .torrent file when the field is empty">Add</button>\n          </div>',
               'dashboard magnet textarea',
           )
-
           replace_once(
               index,
               '<span class="card-title">Torrent Status</span>',
               '<span class="card-title">Download Status</span>',
               'statistics status label',
           )
-
           replace_once(index, '/style.css?v=10', '/style.css?v=11', 'stylesheet cache key')
           replace_once(index, '/app.js?v=10', '/app.js?v=11', 'script cache key')
 
           replace_once(
               app,
-              '<div class="metric-card"><div class="metric-label">Torrents</div><div class="metric-value">'+(t.torrent_total||0)+'</div><div class="metric-sub">Added in '+pLabel+'.</div></div>',
-              '<div class="metric-card"><div class="metric-label">Downloads</div><div class="metric-value">'+(t.torrent_total||0)+'</div><div class="metric-sub">Added in '+pLabel+'.</div></div>',
+              '<div class="metric-label">Torrents</div>',
+              '<div class="metric-label">Downloads</div>',
               'statistics download label',
           )
-
           replace_once(
               app,
               "    input.value = '';\n    input.focus();\n    loadStats(); loadRecent();",
@@ -112,10 +110,11 @@ jobs:
 
           test_path = Path(tests)
           test_text = test_path.read_text(encoding='utf-8')
-          marker = '\n\ndef test_v102_minor_ui_cleanup_contract():\n'
-          if marker in test_text:
+          if 'def test_v102_minor_ui_cleanup_contract():' in test_text:
               raise SystemExit('UI cleanup regression test already present')
-          test_text += '''\n\ndef test_v102_minor_ui_cleanup_contract():
+          test_text += textwrap.dedent('''
+
+          def test_v102_minor_ui_cleanup_contract():
               index = (REPO_ROOT / "frontend/static/index.html").read_text()
               frontend = (REPO_ROOT / "frontend/static/app.js").read_text()
               styles = (REPO_ROOT / "frontend/static/style.css").read_text()
@@ -139,12 +138,8 @@ jobs:
               assert 'overflow-wrap: anywhere' in styles.split('.aria2-job-meta {', 1)[1].split('}', 1)[0]
               assert '/style.css?v=11' in index
               assert '/app.js?v=11' in index
-          '''
-          # Dedent only the appended function body while preserving the existing file verbatim.
-          import textwrap
-          prefix, addition = test_text.rsplit('\n\ndef test_v102_minor_ui_cleanup_contract():\n', 1)
-          addition = 'def test_v102_minor_ui_cleanup_contract():\n' + addition
-          test_path.write_text(prefix + '\n\n' + textwrap.dedent(addition), encoding='utf-8')
+          ''')
+          test_path.write_text(test_text, encoding='utf-8')
 
           print('V1.0.2 UI CLEANUP PATCH: PASS')
           PY

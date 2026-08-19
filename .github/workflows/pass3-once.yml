@@ -1,16 +1,16 @@
 name: Apply v1.0.2 performance pass 3 once
 
 on:
-  push:
+  pull_request:
     branches:
-      - work/v1.0.2-ui-responsiveness
+      - automation/pass3-base
 
 permissions:
   contents: write
 
 jobs:
   apply:
-    if: github.event.head_commit.message == 'chore: trigger v1.0.2 performance pass 3'
+    if: github.head_ref == 'automation/pass3-trigger'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout working branch
@@ -19,20 +19,36 @@ jobs:
           ref: work/v1.0.2-ui-responsiveness
           fetch-depth: 0
 
+      - name: Verify exact baseline
+        run: |
+          expected="28a48df9637a15ada5660fb19d552d6acec5267f"
+          actual="$(git rev-parse HEAD)"
+          echo "expected=$expected"
+          echo "actual=$actual"
+          if [ "$actual" != "$expected" ]; then
+            echo "Refusing to patch an unexpected baseline"
+            exit 1
+          fi
+
+      - name: Materialize guarded patcher from automation base
+        run: |
+          git fetch origin automation/pass3-base
+          git show origin/automation/pass3-base:.pass3_apply.py > .pass3_apply.py
+
       - name: Apply guarded pass 3 patch
         run: python .pass3_apply.py
 
-      - name: Compile changed backend module
-        run: python -m py_compile backend/services/manager_v2.py
+      - name: Remove temporary local patcher
+        run: rm .pass3_apply.py
 
-      - name: Verify static responsiveness tests parse
-        run: python -m py_compile backend/tests/test_ui_responsiveness.py
-
-      - name: Remove one-shot patch machinery
+      - name: Static syntax checks
         run: |
-          git rm .pass3_apply.py .github/workflows/pass3-once.yml
+          python -m py_compile backend/services/manager_v2.py
+          python -m py_compile backend/tests/test_ui_responsiveness.py
+          node --check frontend/static/app.js
+          git diff --check
 
-      - name: Commit pass 3
+      - name: Commit pass 3 to work branch
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

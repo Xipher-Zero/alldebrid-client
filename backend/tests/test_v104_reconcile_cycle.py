@@ -123,22 +123,43 @@ async def test_scheduler_snapshot_context_never_leaks_into_child_task():
 
 
 @pytest.mark.asyncio
-async def test_confirm_gid_metrics_wraps_bound_manager_path_transparently():
+async def test_confirmed_missing_gid_is_proved_once_then_cached_for_scheduler():
     manager = _Manager()
     coordinator = manager._dp_transfer_control
 
-    reconcile_cycle._install_confirm_gid_metrics(manager)
+    reconcile_cycle._install_confirm_gid_cache(manager)
 
-    present = await manager._aria2_confirm_gid("present", attempts=3)
-    missing = await manager._aria2_confirm_gid("missing", attempts=3)
+    first = await manager._aria2_confirm_gid("missing", attempts=3)
+    second = await manager._aria2_confirm_gid("missing", attempts=3)
 
-    assert present.gid == "present"
-    assert missing is None
-    assert coordinator.confirm_calls == 2
-    assert manager._dp_confirm_gid_metrics_installed is True
-    # The operator-facing coordinator method remains untouched; the scheduler
-    # manager reference is the path sync_aria2_downloads actually invokes.
+    assert first is None
+    assert second is None
+    assert coordinator.confirm_calls == 1
+    assert "missing" in manager._dp_confirmed_missing_gids
+    assert manager._dp_confirm_gid_cache_installed is True
+    # Operator-facing confirmation is still the original strict method.
     assert coordinator.confirm_gid.__name__ == "confirm_gid"
+
+
+@pytest.mark.asyncio
+async def test_confirmed_missing_cache_is_invalidated_if_gid_reappears():
+    manager = _Manager()
+    coordinator = manager._dp_transfer_control
+    reconcile_cycle._install_confirm_gid_cache(manager)
+
+    assert await manager._aria2_confirm_gid("missing", attempts=3) is None
+    assert coordinator.confirm_calls == 1
+
+    reconcile_cycle._refresh_confirmed_missing_cache(
+        manager,
+        [_Download("missing", status="waiting")],
+    )
+    assert "missing" not in manager._dp_confirmed_missing_gids
+
+    # Once the authoritative snapshot has shown the GID again, reconciliation
+    # must perform strict confirmation again instead of trusting the old miss.
+    assert await manager._aria2_confirm_gid("missing", attempts=3) is None
+    assert coordinator.confirm_calls == 2
 
 
 def test_scheduler_uses_reconciliation_cycle_instead_of_legacy_sync_wrapper():

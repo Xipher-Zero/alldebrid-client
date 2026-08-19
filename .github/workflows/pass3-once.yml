@@ -38,8 +38,10 @@ jobs:
       - name: Apply guarded pass 3 follow-up
         run: python .pass3_fix.py
 
-      - name: Remove temporary local patcher
-        run: rm .pass3_fix.py
+      - name: Normalize generated test EOF and remove local patcher
+        run: |
+          python -c "from pathlib import Path; p=Path('backend/tests/test_ui_responsiveness.py'); p.write_text(p.read_text(encoding='utf-8').rstrip() + '\n', encoding='utf-8')"
+          rm .pass3_fix.py
 
       - name: Static syntax checks
         run: |

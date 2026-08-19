@@ -52,29 +52,29 @@
   --chrome-header-height: 81px;
 }
 body.light {
-  /* Light theme: Catppuccin-inspired cool surfaces with blue interaction. */
-  --bg:       #dbe7f6;
-  --bg2:      #eef4fb;
+  /* Light theme: neutral slate canvas, crisp white surfaces, blue interaction. */
+  --bg:       #e9eff6;
+  --bg2:      #f7f9fc;
   --surface:  #ffffff;
-  --surface2: #e5eef9;
-  --border:   #b5c6de;
-  --border2:  #8298bb;
+  --surface2: #f1f5f9;
+  --border:   #cfd9e5;
+  --border2:  #a9b8ca;
   --accent:   #315fae;
-  --accent2:  #234a8f;
+  --accent2:  #477ac5;
   --accent-rgb: 49,95,174;
   --accent-contrast: #ffffff;
   --primary-gradient: linear-gradient(135deg, #4479c9, #315fae);
   --primary-gradient-hover: linear-gradient(135deg, #315fae, #234a8f);
-  --focus-ring: rgba(49,95,174,.20);
-  --text:     #202a44;
-  --text2:    #4f5f7a;
-  --text3:    #5b6c87;
-  --nav-hover:#cfddf0;
-  --nav-active: rgba(49,95,174,.20);
-  --panel-a:  rgba(255,255,255,.99);
-  --panel-b:  rgba(225,236,249,.97);
-  --panel-glow: rgba(76,131,212,.14);
-  --shadow-soft: 0 14px 28px rgba(46,67,105,.12);
+  --focus-ring: rgba(49,95,174,.18);
+  --text:     #172033;
+  --text2:    #46566f;
+  --text3:    #6b7b91;
+  --nav-hover:#e7edf5;
+  --nav-active: rgba(49,95,174,.11);
+  --panel-a:  rgba(255,255,255,.98);
+  --panel-b:  rgba(244,247,251,.96);
+  --panel-glow: rgba(49,95,174,.08);
+  --shadow-soft: 0 8px 24px rgba(28,44,70,.08);
 }
 /* Sidebar theme control */
 .sidebar-theme-control {
@@ -181,6 +181,25 @@ body {
   font-family: var(--font);
   display: flex;
   font-size: 14px;
+}
+
+/* Light mode uses depth and contrast instead of tinting every surface blue. */
+body.light {
+  background:
+    radial-gradient(circle at 18% 8%, rgba(49,95,174,.055), transparent 28%),
+    linear-gradient(180deg, #f8fafc 0%, var(--bg) 100%);
+}
+body.light #sidebar {
+  background: linear-gradient(180deg, #f8fafc, #eef3f8);
+  box-shadow: 4px 0 18px rgba(28,44,70,.04);
+}
+body.light #topbar {
+  background: rgba(255,255,255,.92);
+  box-shadow: 0 1px 10px rgba(28,44,70,.04);
+}
+body.light .theme-toggle { box-shadow: 0 3px 12px rgba(28,44,70,.12); }
+body.light .nav-item.active {
+  background: linear-gradient(90deg, rgba(49,95,174,.14), rgba(49,95,174,.04));
 }
 
 /* ── Mobile ── */
@@ -500,11 +519,23 @@ body.light :disabled { opacity: .55; }
   margin: 8px 0;
 }
 
-/* Light mode: keep primary cards white over the blue canvas; nested controls
-   continue using surface2 so hierarchy does not depend on borders alone. */
+/* Light mode: raised surfaces stay white while controls use a neutral inset. */
 body.light .card,
+body.light .list-card,
+body.light .scard,
 body.light .dash-hero-stat,
-body.light .dash-kpi-strip { background: var(--surface); }
+body.light .dash-kpi-strip {
+  background: linear-gradient(180deg, #ffffff, #fbfcfe);
+  box-shadow: var(--shadow-soft);
+}
+body.light .dash-hero-stat:hover {
+  box-shadow: 0 8px 20px rgba(28,44,70,.10);
+}
+body.light .input,
+body.light .settings-subsection,
+body.light .aria2-cap-options button,
+body.light .aria2-cap-custom input { background: #f6f8fb; }
+body.light thead th { background: #f1f4f8; }
 
 /* Stat Cards ── */
 /* Drag & Drop reordering */

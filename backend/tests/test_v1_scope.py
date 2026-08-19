@@ -108,8 +108,9 @@ def test_operator_tab_title_uses_short_active_identity_and_queue_average():
     routes = (REPO_ROOT / "backend/api/routes.py").read_text()
 
     assert "document.title = 'DebridPulse';" in frontend
-    assert "document.title = `DP | (${active} Active) ${progress}%`;" in frontend
+    assert "document.title = `DP | ${speed} (${_operatorTitleState.progress}%)`;" in frontend
     assert "document.title = `DebridPulse | (${active} Active)" not in frontend
+    assert "renderOperatorTitle();" in frontend
 
     assert "AVG(COALESCE(progress, 0)) AS average_progress" in routes
     assert "AS weighted_progress" not in routes

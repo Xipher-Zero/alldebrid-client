@@ -412,28 +412,28 @@ function fmtDuration(secs) {
   return (secs/3600).toFixed(1) + 'h';
 }
 
-function updateOperatorTitle(stats) {
-  const active = Math.max(0, parseInt(stats?.operator_active_downloads, 10) || 0);
+var _operatorTitleState = {active: 0, progress: 0};
 
-  if (active === 0) {
+function renderOperatorTitle() {
+  if (_operatorTitleState.active === 0) {
     document.title = 'DebridPulse';
     return;
   }
 
-  const rawProgress = stats?.operator_active_progress_pct;
-  if (rawProgress === null || rawProgress === undefined || rawProgress === '') {
-    document.title = `DP | (${active} Active)`;
-    return;
-  }
+  const liveBps = (_aria2BadgeState && Number(_aria2BadgeState.liveBps)) || 0;
+  const speed = fmtTransferRate(Math.max(0, liveBps), 100).replace(/\s+/g, '');
+  document.title = `DP | ${speed} (${_operatorTitleState.progress}%)`;
+}
 
-  const value = Number(rawProgress);
-  if (!Number.isFinite(value)) {
-    document.title = `DP | (${active} Active)`;
-    return;
-  }
+function updateOperatorTitle(stats) {
+  const active = Math.max(0, parseInt(stats?.operator_active_downloads, 10) || 0);
+  const value = Number(stats?.operator_active_progress_pct);
 
-  const progress = Math.min(100, Math.max(0, Math.round(value)));
-  document.title = `DP | (${active} Active) ${progress}%`;
+  _operatorTitleState.active = active;
+  _operatorTitleState.progress = Number.isFinite(value)
+    ? Math.min(100, Math.max(0, Math.round(value)))
+    : 0;
+  renderOperatorTitle();
 }
 
 async function loadStats() {
@@ -3309,6 +3309,7 @@ function updateAria2TopbarBadge(patch) {
   if (elMax)    elMax.textContent    = s.maxDl || '—';
   if (elSpeed)  elSpeed.textContent  = fmtSpeed(s.liveBps || 0);
   if (elLimit)  elLimit.textContent  = fmtSpeedCap(s.limitBps);
+  renderOperatorTitle();
   document.querySelectorAll('#aria2-cap-menu [data-cap-bps]').forEach(function(button) {
     button.classList.toggle('active', Number(button.dataset.capBps) === Number(s.limitBps || 0));
   });

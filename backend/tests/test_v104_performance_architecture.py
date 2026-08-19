@@ -143,3 +143,44 @@ def test_manager_control_bootstrap_is_explicit_not_import_hooked():
     assert "_install_global_pause_semantics(manager)" in manager
     assert "install_import_hook" not in services_init
     assert not (REPO_ROOT / "backend/services/_control_bootstrap.py").exists()
+
+
+def test_full_provider_inventory_reuses_one_bulk_snapshot():
+    manager = (REPO_ROOT / "backend/services/manager_v2.py").read_text()
+    reconcile = manager.split("async def reconcile_provider_inventory", 1)[1].split(
+        "async def full_alldebrid_sync", 1
+    )[0]
+    assert reconcile.count("get_magnet_status()") == 1
+    assert "import_existing_magnets(all_magnets=all_magnets)" in reconcile
+    assert "full_alldebrid_sync(all_magnets=all_magnets)" in reconcile
+
+    imported = manager.split("async def import_existing_magnets", 1)[1].split(
+        "async def delete_torrent", 1
+    )[0]
+    full = manager.split("async def full_alldebrid_sync", 1)[1].split(
+        "async def sync_alldebrid_status", 1
+    )[0]
+    assert "if all_magnets is None:" in imported
+    assert "if all_magnets is None:" in full
+
+
+def test_scheduler_profiles_provider_and_download_domains():
+    scheduler = (REPO_ROOT / "backend/core/scheduler.py").read_text()
+    assert 'async_timer("scheduler.provider_poll")' in scheduler
+    assert 'async_timer("scheduler.provider_inventory")' in scheduler
+    assert 'async_timer("scheduler.download_client_sync")' in scheduler
+    assert "await manager.reconcile_provider_inventory()" in scheduler
+    full_loop = scheduler.split("async def full_sync_loop", 1)[1].split(
+        "async def sync_download_clients_loop", 1
+    )[0]
+    assert "import_existing_magnets" not in full_loop
+    assert "full_alldebrid_sync" not in full_loop
+
+
+def test_lifespan_closes_database_runtime_pool():
+    main = (REPO_ROOT / "backend/main.py").read_text()
+    shutdown = main.split('logger.info("Shutting down %s...", APP_NAME)', 1)[1].split(
+        "app = FastAPI(", 1
+    )[0]
+    assert "from db.database import close_db_runtime" in shutdown
+    assert "await close_db_runtime()" in shutdown

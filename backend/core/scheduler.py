@@ -5,6 +5,7 @@ import logging
 from core.branding import REPOSITORY_API_URL
 from core.config import get_settings
 from core.logging_utils import sanitize_exception
+from core.performance import async_timer
 from core.version import normalize_version_tag
 from services.manager_v2 import manager
 
@@ -52,7 +53,8 @@ async def sync_status_loop():
     await _jitter_sleep(get_settings().poll_interval_seconds)
     while True:
         try:
-            await manager.sync_alldebrid_status()
+            async with async_timer("scheduler.provider_poll"):
+                await manager.sync_alldebrid_status()
         except Exception as e:
             logger.error(f"Status sync error: {e}")
         try:
@@ -87,13 +89,17 @@ async def full_sync_loop():
             await asyncio.sleep(60)
             continue
         try:
-            await manager.import_existing_magnets()
+            async with async_timer("scheduler.provider_inventory"):
+                result = await manager.reconcile_provider_inventory()
+            if result.get("imported") or result.get("updated"):
+                logger.info(
+                    "Provider inventory: %d imported, %d reconciled from %d item(s)",
+                    int(result.get("imported") or 0),
+                    int(result.get("updated") or 0),
+                    int(result.get("snapshot_count") or 0),
+                )
         except Exception as e:
-            logger.error("Existing magnet import failed: %s", sanitize_exception(e))
-        try:
-            await manager.full_alldebrid_sync()
-        except Exception as e:
-            logger.error(f"Full sync error: {e}")
+            logger.error("Provider inventory sync failed: %s", sanitize_exception(e))
         await asyncio.sleep(interval * 60)
 
 
@@ -101,7 +107,8 @@ async def sync_download_clients_loop():
     await _jitter_sleep(max(2, get_settings().aria2_poll_interval_seconds))
     while True:
         try:
-            await manager.sync_download_clients()
+            async with async_timer("scheduler.download_client_sync"):
+                await manager.sync_download_clients()
         except Exception as e:
             logger.error(f"Download client sync error: {e}")
         await asyncio.sleep(max(2, get_settings().aria2_poll_interval_seconds))

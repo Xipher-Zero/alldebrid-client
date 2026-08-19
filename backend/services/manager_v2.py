@@ -1320,7 +1320,41 @@ class TorrentManager:
             row = await (await db.execute("SELECT * FROM torrents WHERE hash=?", (hash_value,))).fetchone()
         return dict(row) if row else {}
 
-    async def full_alldebrid_sync(self) -> int:
+    async def reconcile_provider_inventory(self) -> dict:
+        """Run one provider inventory cycle from one authoritative bulk snapshot."""
+        if self.is_paused() or not get_settings().alldebrid_api_key:
+            return {"imported": 0, "updated": 0, "snapshot_count": 0}
+
+        try:
+            all_magnets = await self.ad().get_magnet_status()
+        except Exception as exc:
+            error = str(exc)
+            if any(
+                keyword in error
+                for keyword in (
+                    "DISCONTINUED",
+                    "discontinued",
+                    "deprecated",
+                    "migrate",
+                )
+            ):
+                raise Exception(
+                    "AllDebrid has disabled 'list all magnets' for your account. "
+                    "Add magnets manually through the DebridPulse UI."
+                ) from exc
+            raise
+
+        imported = await self.import_existing_magnets(all_magnets=all_magnets)
+        updated = await self.full_alldebrid_sync(all_magnets=all_magnets)
+        return {
+            "imported": len(imported),
+            "updated": int(updated or 0),
+            "snapshot_count": len(all_magnets or []),
+        }
+
+    async def full_alldebrid_sync(
+        self, all_magnets: Optional[List[Dict]] = None
+    ) -> int:
         """
         Full reconciliation: fetches all magnets from AllDebrid and syncs
         every known torrent — including those marked 'completed' or 'error'.
@@ -1335,11 +1369,12 @@ class TorrentManager:
         if self.is_paused() or not get_settings().alldebrid_api_key:
             return 0
 
-        try:
-            all_magnets = await self.ad().get_magnet_status()
-        except Exception as exc:
-            logger.warning("full_alldebrid_sync: could not fetch magnets: %s", exc)
-            return 0
+        if all_magnets is None:
+            try:
+                all_magnets = await self.ad().get_magnet_status()
+            except Exception as exc:
+                logger.warning("full_alldebrid_sync: could not fetch magnets: %s", exc)
+                return 0
 
         if not all_magnets:
             return 0
@@ -4973,16 +5008,19 @@ class TorrentManager:
         except Exception:
             pass
 
-    async def import_existing_magnets(self) -> List[dict]:
+    async def import_existing_magnets(
+        self, all_magnets: Optional[List[Dict]] = None
+    ) -> List[dict]:
         if self.is_paused():
             return []
-        try:
-            all_magnets = await self.ad().get_magnet_status()
-        except Exception as exc:
-            error = str(exc)
-            if any(keyword in error for keyword in ("DISCONTINUED", "discontinued", "deprecated", "migrate")):
-                raise Exception("AllDebrid has disabled 'list all magnets' for your account. Add magnets manually through the DebridPulse UI.")
-            raise
+        if all_magnets is None:
+            try:
+                all_magnets = await self.ad().get_magnet_status()
+            except Exception as exc:
+                error = str(exc)
+                if any(keyword in error for keyword in ("DISCONTINUED", "discontinued", "deprecated", "migrate")):
+                    raise Exception("AllDebrid has disabled 'list all magnets' for your account. Add magnets manually through the DebridPulse UI.")
+                raise
 
         if not all_magnets:
             return []

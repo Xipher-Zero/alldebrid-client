@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ACDC</title>
-<meta name="description" content="Self-hosted torrent automation via AllDebrid. Add magnets via Web UI, watch folder, Sonarr/Radarr or API.">
+<title>DebridPulse</title>
+<meta name="description" content="DebridPulse is a self-hosted debrid download manager for direct links, magnets, and torrent files.">
 <link rel="icon" type="image/svg+xml" href="./docs/logo.svg">
 <link rel="apple-touch-icon" href="./docs/logo.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -49,6 +49,8 @@ nav{position:fixed;top:0;left:0;right:0;z-index:100;padding:0 5vw;height:64px;di
 .hero-title{font-family:var(--disp);font-size:clamp(46px,8vw,90px);font-weight:800;line-height:1.02;letter-spacing:-2px;color:#fff;margin-bottom:24px;animation:fadeUp .7s .1s ease both}
 .hero-title span{color:var(--acc)}
 .hero-sub{font-size:clamp(15px,2vw,18px);color:var(--mu2);max-width:620px;margin-bottom:48px;animation:fadeUp .8s .2s ease both}
+.hero-license{font-size:11px;color:var(--mu2);max-width:760px;margin-top:24px;animation:fadeUp .95s .35s ease both}
+.hero-license a{color:var(--acc);text-decoration:none}
 .hero-ctas{display:flex;gap:14px;flex-wrap:wrap;justify-content:center;animation:fadeUp .9s .3s ease both}
 .btn{display:inline-flex;align-items:center;gap:8px;padding:12px 28px;border-radius:10px;font-family:var(--mono);font-size:14px;font-weight:500;text-decoration:none;transition:all .2s;cursor:pointer;border:none}
 .btn-primary{background:var(--acc);color:#fff}
@@ -149,14 +151,14 @@ footer{padding:48px 5vw;border-top:1px solid var(--brd);display:flex;align-items
 <!-- NAV -->
 <nav>
   <a href="#" class="nav-logo">
-    <img src="./docs/logo.svg" alt="AllDebrid Control &amp; Download Center logo">
-    <span class="nav-logo-text">AC<span>DC</span></span>
+    <img src="./docs/logo.svg" alt="DebridPulse logo">
+    <span class="nav-logo-text">Debrid<span>Pulse</span></span>
   </a>
   <ul class="nav-links">
     <li><a href="#features">Features</a></li>
     <li><a href="#pipeline">How it works</a></li>
     <li><a href="#install">Install</a></li>
-    <li><a href="https://github.com/Xipher-Zero/alldebrid-client" target="_blank" class="nav-cta">GitHub ↗</a></li>
+    <li><a href="https://github.com/Xipher-Zero/debridpulse" target="_blank" class="nav-cta">GitHub ↗</a></li>
   </ul>
   <div class="hamburger" id="hamburger" onclick="toggleNav()">
     <span></span><span></span><span></span>
@@ -166,7 +168,7 @@ footer{padding:48px 5vw;border-top:1px solid var(--brd);display:flex;align-items
   <a href="#features" onclick="toggleNav()">Features</a>
   <a href="#pipeline" onclick="toggleNav()">How it works</a>
   <a href="#install" onclick="toggleNav()">Install</a>
-  <a href="https://github.com/Xipher-Zero/alldebrid-client" target="_blank">GitHub ↗</a>
+  <a href="https://github.com/Xipher-Zero/debridpulse" target="_blank">GitHub ↗</a>
 </div>
 
 <!-- HERO -->
@@ -175,21 +177,22 @@ footer{padding:48px 5vw;border-top:1px solid var(--brd);display:flex;align-items
     <span class="badge-dot"></span>
     v<span id="version-num">latest</span>&nbsp;·&nbsp;open source
   </div>
-  <h1 class="hero-title">Torrent automation<br>via <span>AllDebrid</span>.</h1>
-  <p class="hero-sub">Add magnets or direct links through the Web UI, watch folder, Sonarr/Radarr or REST API. ACDC handles the full lifecycle — upload, poll, unlock, download and notify.</p>
+  <h1 class="hero-title">Debrid downloads,<br><span>in motion.</span></h1>
+  <p class="hero-sub">Submit direct links, magnets, or torrent files through one self-hosted manager. DebridPulse handles the full lifecycle — submit, process, unlock, download, track, and recover.</p>
   <div class="hero-ctas">
     <a href="#install" class="btn btn-primary">⚡ Get started</a>
-    <a href="https://github.com/Xipher-Zero/alldebrid-client" target="_blank" class="btn btn-ghost">
+    <a href="https://github.com/Xipher-Zero/debridpulse" target="_blank" class="btn btn-ghost">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.374 0 0 5.373 0 12c0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23A11.509 11.509 0 0112 5.803c1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576C20.566 21.797 24 17.3 24 12c0-6.627-5.373-12-12-12z"/></svg>
       GitHub
     </a>
-    <a href="https://github.com/Xipher-Zero/alldebrid-client/pkgs/container/alldebrid-client" target="_blank" class="btn btn-ghost">🐳 GHCR</a>
+    <a href="https://github.com/Xipher-Zero/debridpulse/pkgs/container/debridpulse" target="_blank" class="btn btn-ghost">🐳 GHCR</a>
   </div>
+  <p class="hero-license">GPL-2.0-or-later · DebridPulse modifications © 2026 Chris Moore · Derived from <a href="https://github.com/kroeberd/alldebrid-client/tree/c0f7a5bfeba4f259fb2acc62ac6eed27e8ac4d5c" target="_blank">kroeberd/alldebrid-client v1.9.9</a> (MIT, © 2026 kroeberd)</p>
   <div class="hero-stats">
-    <div class="hero-stat"><div class="hero-stat-num">4</div><div class="hero-stat-label">Input sources</div></div>
-    <div class="hero-stat"><div class="hero-stat-num">10+</div><div class="hero-stat-label">Discord events</div></div>
-    <div class="hero-stat"><div class="hero-stat-num">∞</div><div class="hero-stat-label">Concurrent DLs</div></div>
-    <div class="hero-stat"><div class="hero-stat-num">MIT</div><div class="hero-stat-label">License</div></div>
+    <div class="hero-stat"><div class="hero-stat-num">3</div><div class="hero-stat-label">Input types</div></div>
+    <div class="hero-stat"><div class="hero-stat-num">2</div><div class="hero-stat-label">aria2 modes</div></div>
+    <div class="hero-stat"><div class="hero-stat-num">Live</div><div class="hero-stat-label">Status pulse</div></div>
+    <div class="hero-stat"><div class="hero-stat-num">GPL</div><div class="hero-stat-label">2.0 or later</div></div>
   </div>
 </section>
 
@@ -200,9 +203,9 @@ footer{padding:48px 5vw;border-top:1px solid var(--brd);display:flex;align-items
     <h2 class="section-title reveal" style="text-align:center">The full lifecycle,<br>fully automated.</h2>
     <p class="section-sub reveal" style="text-align:center;margin:0 auto">From magnet to downloaded file — every step handled automatically.</p>
     <div class="pipeline-flow reveal">
-      <div class="pipe-step"><div class="pipe-icon">🧲</div><div class="pipe-label">Magnet / .torrent</div></div>
+      <div class="pipe-step"><div class="pipe-icon">🧲</div><div class="pipe-label">Link / magnet / .torrent</div></div>
       <div class="pipe-arrow">→</div>
-      <div class="pipe-step"><div class="pipe-icon">☁️</div><div class="pipe-label">Upload to AllDebrid</div></div>
+      <div class="pipe-step"><div class="pipe-icon">☁️</div><div class="pipe-label">Submit to provider</div></div>
       <div class="pipe-arrow">→</div>
       <div class="pipe-step"><div class="pipe-icon">🔄</div><div class="pipe-label">Poll until ready</div></div>
       <div class="pipe-arrow">→</div>
@@ -222,15 +225,15 @@ footer{padding:48px 5vw;border-top:1px solid var(--brd);display:flex;align-items
   <div id="features">
     <div class="section-label reveal">Features</div>
     <h2 class="section-title reveal">Everything you need.<br>Nothing you don't.</h2>
-    <p class="section-sub reveal">Built for self-hosters who want reliable, hands-off torrent automation with full visibility into what's happening.</p>
+    <p class="section-sub reveal">Built for self-hosters who want reliable debrid downloads with full visibility into what is happening.</p>
     <div class="features-grid">
       <div class="feat-card reveal"><div class="feat-icon">🖥️</div><div class="feat-title">Web UI</div><div class="feat-text">Clean single-page dashboard: all torrents, status, progress, events, file list. Dark tech aesthetic, mobile-friendly.</div></div>
-      <div class="feat-card reveal"><div class="feat-icon">📁</div><div class="feat-title">Watch folder</div><div class="feat-text">Drop a .torrent or .magnet file and it's automatically imported. Processed files are moved to a separate folder.</div></div>
-      <div class="feat-card reveal"><div class="feat-icon">🔗</div><div class="feat-title">Sonarr / Radarr</div><div class="feat-text">Direct integration as a download client. After completion, Sonarr/Radarr is triggered to import the file automatically.</div></div>
+      <div class="feat-card reveal"><div class="feat-icon">⏯️</div><div class="feat-title">Pause-aware queue</div><div class="feat-text">Pause individual transfers without consuming active slots. The queue advances around paused work and resumes cleanly.</div></div>
+      <div class="feat-card reveal"><div class="feat-icon">🔗</div><div class="feat-title">Direct debrid links</div><div class="feat-text">Submit up to 100 hoster links in one tracked transaction, including delayed link generation and recovery.</div></div>
       <div class="feat-card reveal"><div class="feat-icon">🌐</div><div class="feat-title">REST API</div><div class="feat-text">Full REST API for adding magnets, querying status, triggering syncs and webhooks. Swagger UI at /api/docs.</div></div>
       <div class="feat-card reveal"><div class="feat-icon">⬇️</div><div class="feat-title">aria2 integration</div><div class="feat-text">Slot-based queue with configurable concurrency. Existing downloads detected on restart — no duplicates, no orphans.</div></div>
       <div class="feat-card reveal"><div class="feat-icon">🔔</div><div class="feat-title">Discord webhooks</div><div class="feat-text">Rich embeds for every event. Separate channel support for added vs completed. Custom avatar and username.</div></div>
-      <div class="feat-card reveal"><div class="feat-icon">🌿</div><div class="feat-title">FlexGet v3</div><div class="feat-text">Schedule and trigger FlexGet tasks from the UI. Per-event Discord notifications for each task result.</div></div>
+      <div class="feat-card reveal"><div class="feat-icon">⚡</div><div class="feat-title">Live application pulse</div><div class="feat-text">Server-Sent Events keep transfer state, progress, and recent activity current without full-page polling.</div></div>
       <div class="feat-card reveal"><div class="feat-icon">🚫</div><div class="feat-title">File filters</div><div class="feat-text">Block by extension, keyword or minimum size. All-blocked torrents auto-removed from AllDebrid. Partial downloads continue normally.</div></div>
       <div class="feat-card reveal"><div class="feat-icon">🗄️</div><div class="feat-title">SQLite or PostgreSQL</div><div class="feat-text">SQLite by default — zero config. Switch to external PostgreSQL via environment variable for multi-container setups.</div></div>
       <div class="feat-card reveal"><div class="feat-icon">📊</div><div class="feat-title">Statistics</div><div class="feat-text">Rolling snapshots with configurable retention. Periodic summary reports via webhook.</div></div>
@@ -267,7 +270,7 @@ footer{padding:48px 5vw;border-top:1px solid var(--brd);display:flex;align-items
           <div class="step-num">3</div>
           <div class="step-body">
             <strong>Add your first magnet</strong>
-            <p>Paste a magnet link, drop a .magnet file in the watch folder, or configure Sonarr/Radarr.</p>
+            <p>Paste one or more direct links or magnets, or upload a .torrent file from the Dashboard.</p>
           </div>
         </div>
         <div class="install-step reveal">
@@ -286,20 +289,18 @@ footer{padding:48px 5vw;border-top:1px solid var(--brd);display:flex;align-items
           <button class="copy-btn" onclick="copyCode('cc1',this)">copy</button>
         </div>
         <pre id="cc1"><span class="kw">services</span>:
-  <span class="kw">alldebrid-client</span>:
-    <span class="cm">image</span>: <span class="str">ghcr.io/xipher-zero/alldebrid-client:internal-v0.9.4</span>
-    <span class="cm">container_name</span>: <span class="str">alldebrid-client</span>
+  <span class="kw">debridpulse</span>:
+    <span class="cm">image</span>: <span class="str">ghcr.io/xipher-zero/debridpulse:v1.0.0</span>
+    <span class="cm">container_name</span>: <span class="str">debridpulse</span>
     <span class="cm">restart</span>: <span class="str">unless-stopped</span>
     <span class="cm">network_mode</span>: <span class="str">host</span>
     <span class="cm">environment</span>:
       - <span class="str">TZ=Europe/Berlin</span>
       - <span class="str">LOG_LEVEL=INFO</span>
     <span class="cm">volumes</span>:
-      - <span class="str">/mnt/appdata/alldebrid/config:/app/config</span>
-      - <span class="str">/mnt/appdata/alldebrid/data:/app/data</span>
-      - <span class="str">/mnt/data/torrents/watch:/app/data/watch</span>
-      - <span class="str">/mnt/data/torrents/processed:/app/data/processed</span>
-      - <span class="str">/mnt/downloads/alldebrid:/download</span></pre>
+      - <span class="str">/mnt/appdata/debridpulse/config:/app/config</span>
+      - <span class="str">/mnt/appdata/debridpulse/data:/app/data</span>
+      - <span class="str">/mnt/downloads/debridpulse:/download</span></pre>
       </div>
       <div class="code-block reveal">
         <div class="code-header">
@@ -307,14 +308,16 @@ footer{padding:48px 5vw;border-top:1px solid var(--brd);display:flex;align-items
           <button class="copy-btn" onclick="copyCode('cc2',this)">copy</button>
         </div>
         <pre id="cc2"><span class="str">docker run -d \
-  --name alldebrid-client \
+  --name debridpulse \
   --restart unless-stopped \
   --network host \
   -e TZ=Europe/Berlin \
-  -v /mnt/appdata/alldebrid/config:/app/config \
-  -v /mnt/appdata/alldebrid/data:/app/data \
-  -v /mnt/downloads/alldebrid:/download \
-  ghcr.io/xipher-zero/alldebrid-client:internal-v0.9.4</span></pre>
+  -e CONFIG_PATH=/app/config/config.json \
+  -e DB_PATH=/app/data/debridpulse.db \
+  -v /mnt/appdata/debridpulse/config:/app/config \
+  -v /mnt/appdata/debridpulse/data:/app/data \
+  -v /mnt/downloads/debridpulse:/download \
+  ghcr.io/xipher-zero/debridpulse:v1.0.0</span></pre>
       </div>
     </div>
   </div>
@@ -326,7 +329,7 @@ footer{padding:48px 5vw;border-top:1px solid var(--brd);display:flex;align-items
 <div id="discord">
   <div class="section-label reveal">Notifications</div>
   <h2 class="section-title reveal">Know what the queue is doing.</h2>
-  <p class="section-sub reveal">Optional Discord webhooks report important download and automation events.</p>
+  <p class="section-sub reveal">Optional Discord webhooks report important download lifecycle events.</p>
   <div style="margin-top:48px">
     <div class="section-label reveal">Webhook events</div>
     <p class="section-sub reveal" style="margin-bottom:20px">Rich Discord embeds for every important event — configure once in Settings:</p>
@@ -335,11 +338,8 @@ footer{padding:48px 5vw;border-top:1px solid var(--brd);display:flex;align-items
       <span class="event-pill pill-done">✅ Download Complete</span>
       <span class="event-pill pill-error">❌ Download Error</span>
       <span class="event-pill pill-partial">⚠️ Partial (filtered)</span>
-      <span class="event-pill pill-fg">🌿 FlexGet Run Started</span>
-      <span class="event-pill pill-fg">🌿 FlexGet Task Result</span>
-      <span class="event-pill pill-fg">🌿 FlexGet Run Finished</span>
-      <span class="event-pill pill-fg">🔴 FlexGet Unreachable</span>
-      <span class="event-pill pill-done">🟢 FlexGet Recovered</span>
+      <span class="event-pill pill-added">🔗 Direct Link Added</span>
+      <span class="event-pill pill-partial">🔄 Transfer Retried</span>
       <span class="event-pill pill-added">📊 Stats Report</span>
     </div>
   </div>
@@ -349,7 +349,7 @@ footer{padding:48px 5vw;border-top:1px solid var(--brd);display:flex;align-items
 <!-- WHY -->
 <div style="background:var(--bg2);border-top:1px solid var(--brd);padding:100px 5vw">
 <div id="why" style="max-width:1100px;margin:0 auto">
-  <div class="section-label reveal">Why ACDC</div>
+  <div class="section-label reveal">Why DebridPulse</div>
   <h2 class="section-title reveal">Built for reliability.</h2>
   <p class="section-sub reveal">Designed to run unattended for weeks. Every edge case is handled.</p>
   <div class="why-grid">
@@ -363,7 +363,7 @@ footer{padding:48px 5vw;border-top:1px solid var(--brd);display:flex;align-items
         <li>All-filtered torrents → complete, not error</li>
         <li>Config auto-corrected at startup</li>
         <li>Rate-limit aware AllDebrid API calls</li>
-        <li>FlexGet overlap guard — no concurrent runs</li>
+        <li>Expired debrid links regenerated during recovery</li>
       </ul>
     </div>
     <div class="why-card reveal">
@@ -373,9 +373,9 @@ footer{padding:48px 5vw;border-top:1px solid var(--brd);display:flex;align-items
         <li>Single-file vanilla JS frontend (no build step)</li>
         <li>aiohttp, aiosqlite, asyncpg</li>
         <li>SQLite default, PostgreSQL optional</li>
-        <li>Docker image under 200 MB, single container</li>
-        <li>MIT licensed, 100 % open source</li>
-        <li>109+ automated tests in CI</li>
+        <li>Single-container deployment with bundled aria2</li>
+        <li>GPL-2.0-or-later, 100 % open source</li>
+        <li>Automated tests and container smoke checks in CI</li>
       </ul>
     </div>
   </div>
@@ -384,13 +384,13 @@ footer{padding:48px 5vw;border-top:1px solid var(--brd);display:flex;align-items
 
 <!-- FOOTER -->
 <footer>
-  <a href="#" class="footer-logo">AC<span>DC</span></a>
-  <div class="footer-copy">ACDC fork · MIT License</div>
+  <a href="#" class="footer-logo">Debrid<span>Pulse</span></a>
+  <div class="footer-copy">DebridPulse · GPL-2.0-or-later · © 2026 Chris Moore</div>
   <div class="footer-links">
-    <a href="https://github.com/Xipher-Zero/alldebrid-client" target="_blank">GitHub</a>
-    <a href="https://github.com/Xipher-Zero/alldebrid-client/pkgs/container/alldebrid-client" target="_blank">GHCR</a>
-    <a href="https://github.com/Xipher-Zero/alldebrid-client/blob/main/CHANGELOG.md" target="_blank">Changelog</a>
-    <a href="https://github.com/Xipher-Zero/alldebrid-client/blob/main/LICENSE" target="_blank">License</a>
+    <a href="https://github.com/Xipher-Zero/debridpulse" target="_blank">GitHub</a>
+    <a href="https://github.com/Xipher-Zero/debridpulse/pkgs/container/debridpulse" target="_blank">GHCR</a>
+    <a href="https://github.com/Xipher-Zero/debridpulse/blob/main/CHANGELOG.md" target="_blank">Changelog</a>
+    <a href="https://github.com/Xipher-Zero/debridpulse/blob/main/LICENSE" target="_blank">License</a>
   </div>
 </footer>
 
@@ -398,7 +398,7 @@ footer{padding:48px 5vw;border-top:1px solid var(--brd);display:flex;align-items
 // Version from the fork's canonical VERSION file
 (async()=>{
   try{
-    const r=await fetch('https://raw.githubusercontent.com/Xipher-Zero/alldebrid-client/main/VERSION');
+    const r=await fetch('https://raw.githubusercontent.com/Xipher-Zero/debridpulse/main/VERSION');
     if(r.ok){const v=(await r.text()).trim();if(v)document.getElementById('version-num').textContent=v;}
   }catch(e){}
 })();

@@ -1,0 +1,34 @@
+name: Corresponding Source Request
+description: Request source covered by the DebridPulse container source offer
+labels: ["source-request"]
+body:
+  - type: input
+    id: image
+    attributes:
+      label: Container image and digest
+      description: Provide the complete image reference, including its sha256 digest.
+      placeholder: ghcr.io/xipher-zero/debridpulse@sha256:...
+    validations:
+      required: true
+
+  - type: input
+    id: architecture
+    attributes:
+      label: Target architecture
+      placeholder: linux/amd64 or linux/arm64
+    validations:
+      required: true
+
+  - type: input
+    id: package
+    attributes:
+      label: Package name
+      description: Name the GPL- or LGPL-covered package when known.
+
+  - type: textarea
+    id: delivery
+    attributes:
+      label: Preferred machine-readable delivery method
+      description: Do not include private credentials or other sensitive information.
+    validations:
+      required: true

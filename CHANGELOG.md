@@ -1,5 +1,47 @@
 # Changelog
 
+## [1.0.0] — 2026-08-19
+
+### DebridPulse identity
+
+- Finalized the V1 product name as **DebridPulse**.
+- Standardized the repository, container, service, and image name as `debridpulse`.
+- Set browser and notification identity to `DebridPulse` and API/OCI metadata to **DebridPulse — Multi-provider Debrid Download Manager**.
+- Added startup migration from the transitional ACDC identity and prior AllDebrid client names while preserving custom user-supplied identities.
+- Corrected the project landing page to describe the pruned V1 feature set and GPL-2.0-or-later license.
+
+### Focused V1 scope
+
+- Retained direct-link, magnet, and torrent-file submission through AllDebrid with built-in or external aria2 delivery.
+- Removed inherited qBittorrent emulation, Sonarr/Radarr, Jackett/Prowlarr, FlexGet, saved-search, rule-engine, and watch-folder functionality.
+- Removed the internal PostgreSQL sidecar; SQLite remains the default and an existing external PostgreSQL server remains optional.
+
+### Download lifecycle and queueing
+
+- Preserved failed or provider-removed transfers in history with actionable terminal states.
+- Added reliable per-download and global pause/resume behavior without allowing paused work to consume active queue slots.
+- Added live aggregate speed, a top-bar speed-cap control, and averaged DebridPulse queue progress in the active browser title.
+- Corrected re-added direct links so removed transfers start cleanly without unnecessary filename suffixes.
+
+### Interface and deployment
+
+- Refined the light theme and retained the established dark theme.
+- Added pause/resume controls to Dashboard Recent Activity and clarified global controls as Pause All and Resume All.
+- Made Settings test actions contextual and removed retired folder and database-sidecar controls.
+- Made the direct-link field expand from one to five lines for multiline submissions.
+- Standardized new SQLite databases as `/app/data/debridpulse.db` while preserving legacy installations automatically.
+
+### Licensing and release metadata
+
+- Licensed DebridPulse modifications under GPL-2.0-or-later while preserving the upstream MIT notice and provenance.
+- Added an in-application license page, dependency inventory, container source offer, and bundled bencode2 MIT notice.
+- Added public `v*` image tags, OCI license metadata, SBOM/provenance generation, and container smoke checks for shipped notices.
+
+### Security audit
+
+- Replaced unrestricted ZIP extraction with validated, no-symlink extraction that rejects path traversal outside the selected destination.
+- Updated aiohttp, pydantic-settings, and python-multipart to patched releases after auditing the complete pinned Python runtime.
+
 ## [0.9.4] — 2026-08-12
 
 ### Refreshed themes and application identity

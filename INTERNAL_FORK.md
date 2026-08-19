@@ -9,9 +9,9 @@ It converts a production-tested bind-mount override deployment into a normal
 source repository. Runtime configuration, databases, API credentials, download
 history, host-specific paths, and backup files are intentionally excluded.
 
-## Commit organization
+## Initial divergence
 
-The fork divergence is kept in two reviewable commits:
+The initial fork divergence was kept in two reviewable commits:
 
 1. `Preserve internal v1.9.9 corrections`
    - persistent ownership tracking for downloads added to a shared external
@@ -48,20 +48,11 @@ The fork divergence is kept in two reviewable commits:
    states in Recent Activity and the event log.
 6. Retry and recovery regenerate expiring URLs from the stored original URL.
 
-## Validation
+## V1 cleanup
 
-- Python syntax compilation passed for the changed backend modules.
-- JavaScript syntax validation passed for `frontend/static/app.js`.
-- Nine focused direct-link tests pass.
-- A live 1fichier URL completed submission, AllDebrid generation, generated-URL
-  retrieval, external aria2 dispatch, and active progress reporting.
-- The inherited fork's legacy `test_manager_v2` result is unchanged from the
-  pre-feature override baseline: 74 tests run with five failures and six errors.
-  Those existing failures reflect stale upstream test mocks/expectations and a
-  missing `asyncpg` dependency in the scratch verification environment.
-
-Full completion/finalization of the first live direct-link download was not yet
-observed when this snapshot was prepared.
+The V1 line removes inherited media-automation, indexer, saved-search, rules,
+and qBittorrent-compatibility code. Current validation results belong in the
+release notes and CI logs rather than this historical snapshot.
 
 ## Deployment
 
@@ -83,3 +74,11 @@ Keep the original project configured as the `upstream` Git remote. The GitHub
 fork should be `origin`. When the Codeberg repository is ready, add it as a
 second push remote and transfer all branches and tags without rewriting this
 history.
+
+## Licensing provenance
+
+Upstream release `v1.9.9` and commit
+`c0f7a5bfeba4f259fb2acc62ac6eed27e8ac4d5c` were distributed under the MIT
+License, copyright © 2026 kroeberd. That notice is preserved in `NOTICE` and
+`LICENSES/MIT.txt`. DebridPulse modifications are copyright © 2026 Chris Moore and
+licensed under GPL-2.0-or-later.

@@ -10,6 +10,16 @@ def make_cfg(**kwargs) -> AppSettings:
 
 class TestValidateAndSanitise:
 
+    def test_removed_watch_folder_keys_are_ignored_for_config_compatibility(self):
+        cfg = make_cfg(
+            watch_folder="/legacy/watch",
+            processed_folder="/legacy/processed",
+            watch_interval_seconds=5,
+        )
+        assert not hasattr(cfg, "watch_folder")
+        assert not hasattr(cfg, "processed_folder")
+        assert not hasattr(cfg, "watch_interval_seconds")
+
     def test_clean_config_no_changes(self):
         cfg = make_cfg()
         result = validate_and_sanitise(cfg)
@@ -20,11 +30,6 @@ class TestValidateAndSanitise:
         result = validate_and_sanitise(cfg)
         # data URIs are cleared (Discord rejects them; user must configure a valid PNG/JPG URL)
         assert result.discord_avatar_url == ""
-
-    def test_invalid_json_schedules_reset(self):
-        cfg = make_cfg(flexget_task_schedules_json="{not valid json}")
-        result = validate_and_sanitise(cfg)
-        assert result.flexget_task_schedules_json == "[]"
 
     def test_invalid_db_type_reset(self):
         cfg = make_cfg(db_type="mysql")
@@ -41,12 +46,25 @@ class TestValidateAndSanitise:
         result = validate_and_sanitise(cfg)
         assert result.download_folder == "/download"
 
-    @pytest.mark.parametrize("legacy_name", ["AllDebrid-Client", "AllDebrid-Torrent-Client"])
-    def test_legacy_application_identity_migrates_to_acdc(self, legacy_name):
+    @pytest.mark.parametrize(
+        "legacy_name",
+        [
+            "ACDC",
+            "AllDebrid Control & Download Center",
+            "AllDebrid-Client",
+            "AllDebrid-Torrent-Client",
+        ],
+    )
+    def test_legacy_application_identity_migrates_to_debridpulse(self, legacy_name):
         cfg = make_cfg(alldebrid_agent=legacy_name, discord_username=legacy_name)
         result = validate_and_sanitise(cfg)
-        assert result.alldebrid_agent == "ACDC"
-        assert result.discord_username == "ACDC"
+        assert result.alldebrid_agent == "DebridPulse"
+        assert result.discord_username == "DebridPulse"
+
+    def test_legacy_postgres_application_identity_migrates_to_debridpulse(self):
+        cfg = make_cfg(postgres_application_name="alldebrid-client")
+        result = validate_and_sanitise(cfg)
+        assert result.postgres_application_name == "debridpulse"
 
     def test_custom_application_identity_is_preserved(self):
         cfg = make_cfg(alldebrid_agent="My downloader", discord_username="My notifier")
@@ -100,12 +118,10 @@ class TestValidateAndSanitise:
     def test_multiple_fixes_applied(self):
         cfg = make_cfg(
             discord_avatar_url="data:image/png;base64,xxx",
-            flexget_task_schedules_json="broken",
             db_type="oracle",
         )
         result = validate_and_sanitise(cfg)
         assert not result.discord_avatar_url.startswith("data:")
-        assert result.flexget_task_schedules_json == "[]"
         assert result.db_type == "sqlite"
 
     def test_returns_same_object_when_no_fixes(self):

@@ -1,11 +1,15 @@
-FROM python:3.12-slim
+FROM python:3.12.14-slim-bookworm
 
 WORKDIR /app
 
 ARG APP_VERSION=unknown
-LABEL org.opencontainers.image.title="AllDebrid Control & Download Center"
+ARG VCS_REF=unknown
+LABEL org.opencontainers.image.title="DebridPulse — Multi-provider Debrid Download Manager"
 LABEL org.opencontainers.image.version="${APP_VERSION}"
-LABEL org.opencontainers.image.description="AllDebrid download control center for torrents and direct links"
+LABEL org.opencontainers.image.description="Multi-provider debrid download manager for direct links, magnets, and torrent files"
+LABEL org.opencontainers.image.source="https://github.com/Xipher-Zero/debridpulse"
+LABEL org.opencontainers.image.revision="${VCS_REF}"
+LABEL org.opencontainers.image.licenses="GPL-2.0-or-later"
 
 # System deps + gosu (for PUID/PGID user-switching)
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -24,6 +28,10 @@ COPY backend/ /app/
 COPY frontend/ /app/frontend/
 COPY CHANGELOG.md /app/CHANGELOG.md
 COPY VERSION /app/VERSION
+COPY LICENSE NOTICE SOURCE_OFFER.md /app/
+COPY LICENSES/ /app/LICENSES/
+COPY licenses/ /app/licenses/
+COPY docs/DEPENDENCY_LICENSES.md /app/docs/DEPENDENCY_LICENSES.md
 
 # Entrypoint (handles PUID/PGID + chown)
 COPY entrypoint.sh /entrypoint.sh
@@ -31,7 +39,7 @@ RUN chmod +x /entrypoint.sh
 
 # Directories — owned by nobody:users (65534:100) by default
 # Override at runtime via PUID / PGID environment variables
-RUN mkdir -p /app/data/watch /app/data/processed /app/data/downloads /app/config /download && \
+RUN mkdir -p /app/data /app/config /download && \
     chown -R 99:100 /app /download
 
 EXPOSE 8080

@@ -1,29 +1,32 @@
 <div align="center">
-  <img src="docs/logo.svg" width="96" alt="ACDC Logo"/>
-  <h1>AllDebrid Control &amp; Download Center</h1>
+  <img src="docs/logo.svg" width="96" alt="DebridPulse Logo"/>
+  <h1>DebridPulse</h1>
   <p><strong>A self-hosted AllDebrid download client for direct links, magnets, and torrent files.</strong><br/>AllDebrid processing · aria2 downloads · unified transfer tracking · recovery · observability</p>
 
-  [![License](https://img.shields.io/github/license/Xipher-Zero/alldebrid-client?style=flat-square)](LICENSE)
-  [![Tests](https://img.shields.io/github/actions/workflow/status/Xipher-Zero/alldebrid-client/tests.yml?style=flat-square&label=tests)](https://github.com/Xipher-Zero/alldebrid-client/actions/workflows/tests.yml)
-  [![Fork Image](https://img.shields.io/github/actions/workflow/status/Xipher-Zero/alldebrid-client/fork-image.yml?style=flat-square&label=image)](https://github.com/Xipher-Zero/alldebrid-client/actions/workflows/fork-image.yml)
+  [![License](https://img.shields.io/github/license/Xipher-Zero/debridpulse?style=flat-square)](LICENSE)
+  [![Tests](https://img.shields.io/github/actions/workflow/status/Xipher-Zero/debridpulse/tests.yml?style=flat-square&label=tests)](https://github.com/Xipher-Zero/debridpulse/actions/workflows/tests.yml)
+  [![Image](https://img.shields.io/github/actions/workflow/status/Xipher-Zero/debridpulse/fork-image.yml?style=flat-square&label=image)](https://github.com/Xipher-Zero/debridpulse/actions/workflows/fork-image.yml)
 </div>
+
+> [!IMPORTANT]
+> **License and attribution:** DebridPulse modifications are Copyright © 2026 Chris Moore and are licensed under **GPL-2.0-or-later**. DebridPulse is derived from [`kroeberd/alldebrid-client` v1.9.9](https://github.com/kroeberd/alldebrid-client/tree/c0f7a5bfeba4f259fb2acc62ac6eed27e8ac4d5c), Copyright © 2026 kroeberd, originally licensed under MIT. See [LICENSE](LICENSE), [NOTICE](NOTICE), and [LICENSES/MIT.txt](LICENSES/MIT.txt).
 
 ---
 
-## What is ACDC?
+## What is DebridPulse?
 
-**AllDebrid Control & Download Center (ACDC)** is a self-hosted client for submitting downloads through an AllDebrid account and managing the resulting transfers through aria2.
+**DebridPulse** is a self-hosted debrid download manager for direct links, magnet links, and `.torrent` files. V1 submits work through AllDebrid and manages the resulting transfers through aria2.
 
 The normal workflow is intentionally simple:
 
 1. Submit an ordinary HTTP/HTTPS hoster link, magnet link, or `.torrent` file.
-2. ACDC sends it to AllDebrid for unlocking or torrent processing.
+2. DebridPulse sends it to AllDebrid for unlocking or torrent processing.
 3. AllDebrid produces downloadable HTTP(S) file URLs.
-4. ACDC dispatches those files to aria2.
+4. DebridPulse dispatches those files to aria2.
 5. The resulting transfer is tracked through the Dashboard, Downloads view, statistics, and event log.
 6. Failed or expired transfers can be retried or recovered without rebuilding the download manually.
 
-ACDC can manage its own built-in aria2 instance or safely use a shared external aria2 daemon.
+DebridPulse can manage its own built-in aria2 instance or safely use a shared external aria2 daemon.
 
 ---
 
@@ -36,14 +39,14 @@ ACDC can manage its own built-in aria2 instance or safely use a shared external 
 | **Magnet links** | Submit one or more magnets through AllDebrid |
 | **Torrent files** | Upload `.torrent` files directly to AllDebrid |
 | **Delayed link generation** | Automatically handles AllDebrid links that require asynchronous generation |
-| **Built-in aria2** | Run ACDC with its bundled aria2 instance for a self-contained deployment |
+| **Built-in aria2** | Run DebridPulse with its bundled aria2 instance for a self-contained deployment |
 | **External aria2** | Connect to an existing aria2 JSON-RPC daemon |
-| **Shared aria2 safety** | Tracks ACDC-owned downloads and avoids modifying global settings, result history, or unrelated transfers on external aria2 instances |
+| **Shared aria2 safety** | Tracks DebridPulse-owned downloads and avoids modifying global settings, result history, or unrelated transfers on external aria2 instances |
 | **Unified Downloads view** | Direct links, magnets, torrent files, and imported transfers share one lifecycle and history |
 | **Recent Activity** | Dashboard view of active and recently processed downloads |
 | **Retry and recovery** | Retry failed transfers and regenerate expired AllDebrid download URLs from the original source |
 | **Import existing magnets** | Import AllDebrid magnets not yet represented in the local database |
-| **Live status updates** | Server-Sent Events update transfer state without requiring full-page polling |
+| **Live status updates** | Server-Sent Events carry the application's pulse without requiring full-page polling |
 | **Event log** | Searchable transfer and application event history |
 | **Statistics and analytics** | Built-in operational and download statistics |
 | **Auto-extraction** | Optional post-download extraction of common archive formats |
@@ -56,9 +59,9 @@ ACDC can manage its own built-in aria2 instance or safely use a shared external 
 
 ## Direct-link downloads
 
-Direct hoster links are first-class ACDC transfers rather than untracked aria2 jobs.
+Direct hoster links are first-class DebridPulse transfers rather than untracked aria2 jobs.
 
-Paste one or more HTTP/HTTPS links into the direct-link field on the Dashboard. ACDC then:
+Paste one or more HTTP/HTTPS links into the direct-link field on the Dashboard. DebridPulse then:
 
 1. validates and records the original URL;
 2. asks AllDebrid to unlock the link;
@@ -67,7 +70,7 @@ Paste one or more HTTP/HTTPS links into the direct-link field on the Dashboard. 
 5. submits the generated download URL to aria2;
 6. tracks progress with the rest of the download queue.
 
-The original source URL is retained. If an AllDebrid-generated URL expires, ACDC can generate a new one during retry or recovery.
+The original source URL is retained. If an AllDebrid-generated URL expires, DebridPulse can generate a new one during retry or recovery.
 
 A single submission can contain up to **100 unique links**.
 
@@ -75,15 +78,15 @@ A single submission can contain up to **100 unique links**.
 
 ## Torrent downloads
 
-ACDC supports both magnet links and `.torrent` files.
+DebridPulse supports both magnet links and `.torrent` files.
 
 For a torrent submission:
 
 1. the magnet or torrent metadata is sent to AllDebrid;
-2. ACDC monitors the AllDebrid torrent state;
+2. DebridPulse monitors the AllDebrid torrent state;
 3. once files are available, their unlocked HTTP(S) links are retrieved;
 4. those files are dispatched to aria2;
-5. ACDC tracks the complete transfer lifecycle locally.
+5. DebridPulse tracks the complete transfer lifecycle locally.
 
 The local aria2 daemon does **not** need to participate in BitTorrent swarms. AllDebrid performs the torrent-side work and aria2 downloads the resulting files.
 
@@ -93,24 +96,24 @@ The local aria2 daemon does **not** need to participate in BitTorrent swarms. Al
 
 ### Built-in aria2
 
-The default configuration can run a bundled aria2 instance controlled by ACDC.
+The default configuration can run a bundled aria2 instance controlled by DebridPulse.
 
-In this mode ACDC owns the daemon and can manage its runtime configuration.
+In this mode DebridPulse owns the daemon and can manage its runtime configuration.
 
 ### External aria2
 
-ACDC can instead use an existing aria2 JSON-RPC endpoint.
+DebridPulse can instead use an existing aria2 JSON-RPC endpoint.
 
-External mode is designed to be safe for a **shared aria2 daemon**. ACDC maintains ownership information for downloads that it creates and does not assume that every transfer in aria2 belongs to ACDC.
+External mode is designed to be safe for a **shared aria2 daemon**. DebridPulse maintains ownership information for downloads that it creates and does not assume that every transfer in aria2 belongs to DebridPulse.
 
-In external mode ACDC intentionally avoids operations such as:
+In external mode DebridPulse intentionally avoids operations such as:
 
 - changing daemon-wide bandwidth limits;
 - rewriting global aria2 configuration;
 - purging global download-result history;
 - controlling unrelated aria2 GIDs.
 
-Application-level concurrency for ACDC-owned jobs remains independently configurable.
+Application-level concurrency for DebridPulse-owned jobs remains independently configurable.
 
 ---
 
@@ -121,13 +124,13 @@ Application-level concurrency for ACDC-owned jobs remains independently configur
 Clone the repository:
 
 ```bash
-git clone https://github.com/Xipher-Zero/alldebrid-client.git
-cd alldebrid-client
+git clone https://github.com/Xipher-Zero/debridpulse.git
+cd debridpulse
 ```
 
 Review `docker-compose.yml` before starting it. Adapt host paths, UID/GID, timezone, networking, and persistent storage to your environment.
 
-Then start ACDC:
+Then start DebridPulse:
 
 ```bash
 docker compose up -d
@@ -145,28 +148,28 @@ Go to **Settings → General** and configure your AllDebrid API key.
 
 Fork-owned images are published to GHCR.
 
-Current version:
+Versioned V1 images use the release tag:
 
 ```text
-ghcr.io/xipher-zero/alldebrid-client:internal-v0.9.4
+ghcr.io/xipher-zero/debridpulse:v1.0.0
 ```
 
 Example:
 
 ```bash
 docker run -d \
-  --name alldebrid-client \
+  --name debridpulse \
   --restart unless-stopped \
   -p 8080:8080 \
   -e PUID=1000 \
   -e PGID=1000 \
   -e TZ=America/Phoenix \
   -e CONFIG_PATH=/app/config/config.json \
-  -e DB_PATH=/app/data/alldebrid.db \
-  -v /path/to/acdc/config:/app/config \
-  -v /path/to/acdc/data:/app/data \
-  -v /path/to/downloads:/downloads \
-  ghcr.io/xipher-zero/alldebrid-client:internal-v0.9.4
+  -e DB_PATH=/app/data/debridpulse.db \
+  -v /path/to/debridpulse/config:/app/config \
+  -v /path/to/debridpulse/data:/app/data \
+  -v /path/to/downloads:/download \
+  ghcr.io/xipher-zero/debridpulse:v1.0.0
 ```
 
 Adjust the paths and UID/GID for your system.
@@ -192,7 +195,7 @@ Configure:
 - download directory;
 - built-in or external aria2 mode;
 - external aria2 URL and authentication when applicable;
-- ACDC download concurrency;
+- DebridPulse download concurrency;
 - download filtering and limits.
 
 ### Extract
@@ -248,7 +251,7 @@ Transfers can be searched and filtered by state, with retry, reset, pause, resum
 
 ## REST API
 
-ACDC exposes a REST API used by the web interface and available for external automation.
+DebridPulse exposes a REST API used by the web interface and available for external automation.
 
 ### Download submission and management
 
@@ -274,16 +277,14 @@ ACDC exposes a REST API used by the web interface and available for external aut
 | `PUT` | `/api/settings` | Update application settings |
 | `GET` | `/api/events/stream` | Server-Sent Events status stream |
 | `GET` | `/api/metrics` | Prometheus-compatible metrics |
-| `GET` | `/api/version` | ACDC version |
+| `GET` | `/api/version` | DebridPulse version |
 | `GET` | `/api/health` | Lightweight application health endpoint |
 
 ---
 
-## Legacy upstream integrations
+## V1 scope boundary
 
-ACDC began as a fork of `kroeberd/alldebrid-client` v1.9.9. The upstream project combined an AllDebrid client with a number of media-automation and search functions.
-
-Some inherited backend code is still present in the repository, including support related to:
+DebridPulse began as a fork of `kroeberd/alldebrid-client` v1.9.9. V1 removes the inherited media-automation and indexer surface, including:
 
 - qBittorrent API emulation;
 - Sonarr/Radarr integration;
@@ -291,19 +292,13 @@ Some inherited backend code is still present in the repository, including suppor
 - FlexGet;
 - saved-search and automation systems.
 
-These integrations are **not the focus of ACDC and should not be considered part of its supported product direction**.
-
-Their configuration has been removed from the primary Settings interface and they are intentionally not documented as standard ACDC workflows.
-
-Existing backend endpoints or implementation code may remain while the fork continues to diverge from upstream. Compatibility with those legacy integrations is not guaranteed, and they may be further isolated or removed in future releases.
-
-ACDC is intended to be an **AllDebrid download client**, not an all-in-one media automation suite.
+Their routes, services, scheduler jobs, configuration, UI, database tables, and dependencies are not part of the V1 application. DebridPulse is a **debrid download manager**, not an all-in-one media automation suite.
 
 ---
 
-## Fork history
+## Upstream provenance
 
-ACDC is derived from upstream `kroeberd/alldebrid-client` release **v1.9.9**, commit:
+DebridPulse is derived from upstream [`kroeberd/alldebrid-client`](https://github.com/kroeberd/alldebrid-client) release **v1.9.9**, commit:
 
 ```text
 c0f7a5bfeba4f259fb2acc62ac6eed27e8ac4d5c
@@ -311,9 +306,9 @@ c0f7a5bfeba4f259fb2acc62ac6eed27e8ac4d5c
 
 The fork initially preserved production corrections around AllDebrid processing and shared external aria2 operation, then added tracked direct-link downloading and began simplifying the user interface around the actual AllDebrid download workflow.
 
-See [`INTERNAL_FORK.md`](INTERNAL_FORK.md) for historical notes about the initial divergence.
+See [`INTERNAL_FORK.md`](INTERNAL_FORK.md) for historical notes about the initial divergence and [`NOTICE`](NOTICE) for the retained upstream attribution.
 
-See [`CHANGELOG.md`](CHANGELOG.md) for current ACDC changes.
+See [`CHANGELOG.md`](CHANGELOG.md) for current DebridPulse changes.
 
 ---
 
@@ -357,11 +352,11 @@ frontend/static/
 
 ## Project direction
 
-ACDC favors a focused responsibility:
+DebridPulse favors a focused responsibility:
 
 > **Submit work to AllDebrid, retrieve the resulting files, download them reliably, and make that lifecycle observable and recoverable.**
 
-Features that improve that workflow belong naturally in ACDC.
+Features that improve that workflow belong naturally in DebridPulse. Provider-specific integrations belong behind the DebridPulse provider layer; V1 uses AllDebrid as its provider backend.
 
 Recreating an entire media-management or indexer ecosystem inside the download client does not.
 
@@ -369,4 +364,9 @@ Recreating an entire media-management or indexer ecosystem inside the download c
 
 ## License
 
-This project retains the license of the upstream project. See [`LICENSE`](LICENSE) for details.
+DebridPulse modifications are copyright © 2026 Chris Moore and are distributed under
+[`GPL-2.0-or-later`](LICENSE). The upstream MIT copyright and permission notice
+are preserved in [`NOTICE`](NOTICE) and [`LICENSES/MIT.txt`](LICENSES/MIT.txt).
+Runtime dependency licensing is inventoried in
+[`docs/DEPENDENCY_LICENSES.md`](docs/DEPENDENCY_LICENSES.md). The container source
+offer is documented in [`SOURCE_OFFER.md`](SOURCE_OFFER.md).

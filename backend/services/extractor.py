@@ -20,10 +20,11 @@ import logging
 import os
 import re
 import shutil
+import stat
 import subprocess
 import tarfile
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Iterable, List, Optional, Tuple
 
 logger = logging.getLogger("alldebrid.extractor")
@@ -143,8 +144,54 @@ def _run_tool(cmd: List[str], timeout: int = 3600) -> Tuple[int, str]:
 
 
 def _extract_zip(archive: Path, dest: Path) -> None:
+    root = dest.resolve()
+    no_follow = getattr(os, "O_NOFOLLOW", 0)
+
     with zipfile.ZipFile(archive, "r") as zf:
-        zf.extractall(dest)
+        for member in zf.infolist():
+            # ZIP member names are POSIX paths. Treat backslashes as separators
+            # as well so a Windows-style traversal remains unsafe on Linux.
+            member_name = member.filename.replace("\\", "/")
+            relative = PurePosixPath(member_name)
+            parts = tuple(part for part in relative.parts if part not in ("", "."))
+            unix_mode = member.external_attr >> 16
+
+            if (
+                not parts
+                or relative.is_absolute()
+                or ".." in parts
+                or ":" in parts[0]
+                or stat.S_ISLNK(unix_mode)
+            ):
+                raise ValueError(f"Unsafe ZIP member path: {member.filename!r}")
+
+            target = root.joinpath(*parts)
+            resolved_target = target.resolve(strict=False)
+            if resolved_target != root and root not in resolved_target.parents:
+                raise ValueError(f"ZIP member escapes extraction directory: {member.filename!r}")
+
+            current = root
+            for part in parts[:-1]:
+                current = current / part
+                if current.is_symlink():
+                    raise ValueError(f"ZIP member traverses a symlink: {member.filename!r}")
+                current.mkdir(exist_ok=True)
+
+            if member.is_dir():
+                if target.is_symlink():
+                    raise ValueError(f"ZIP directory replaces a symlink: {member.filename!r}")
+                target.mkdir(exist_ok=True)
+                continue
+
+            if target.is_symlink():
+                raise ValueError(f"ZIP file replaces a symlink: {member.filename!r}")
+            flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | no_follow
+            # Create regular extracted files with standard non-writable group/
+            # other permissions.  Do not rely on the process umask to remove
+            # potentially dangerous write bits from a permissive mode.
+            fd = os.open(target, flags, 0o644)
+            with zf.open(member, "r") as source, os.fdopen(fd, "wb") as output:
+                shutil.copyfileobj(source, output)
 
 
 def _extract_tar(archive: Path, dest: Path) -> None:

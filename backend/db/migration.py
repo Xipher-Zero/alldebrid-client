@@ -24,9 +24,7 @@ MIGRATION_TABLES = [
     "torrents",
     "download_files",
     "events",
-    "flexget_runs",
     "stats_snapshots",
-    "saved_searches",
 ]
 
 

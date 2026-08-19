@@ -21,18 +21,16 @@ class AppSettings(BaseModel):
 
     # Database
     db_type: str = "sqlite"
-    postgres_host: str = "alldebrid-postgres"
+    postgres_host: str = "localhost"
     postgres_port: int = 5432
-    postgres_db: str = "alldebrid"
-    postgres_user: str = "alldebrid"
+    postgres_db: str = "debridpulse"
+    postgres_user: str = "debridpulse"
     postgres_password: str = ""
     postgres_schema: str = "public"
     postgres_ssl: bool = False
-    postgres_application_name: str = "alldebrid-client"
+    postgres_application_name: str = "debridpulse"
 
-    # Folders
-    watch_folder: str = "/app/data/watch"
-    processed_folder: str = "/app/data/processed"
+    # Download control
     download_folder: str = "/download"
     max_concurrent_downloads: int = 3
     max_speed_mbps: int = 0
@@ -73,16 +71,6 @@ class AppSettings(BaseModel):
     aria2_continue_downloads: bool = True
     aria2_lowest_speed_limit: str = "0"
 
-    # Sonarr integration
-    sonarr_enabled: bool = False
-    sonarr_url: str = ""
-    sonarr_api_key: str = ""
-
-    # Radarr integration
-    radarr_enabled: bool = False
-    radarr_url: str = ""
-    radarr_api_key: str = ""
-
     # Discord
     discord_webhook_url: str = ""
     discord_webhook_added: str = ""
@@ -109,26 +97,6 @@ class AppSettings(BaseModel):
     block_samples:    bool = False   # block files matching common sample patterns
     block_extras:     bool = False   # block extras / featurettes / behind-the-scenes
 
-    # ── Generic Webhook Actions ───────────────────────────────────────────────
-    # A generic HTTP webhook called on various torrent lifecycle events.
-    # Payload is a JSON object with event type + torrent metadata.
-    # Separate from Discord notifications.
-    webhook_on_complete:    str = ""   # URL called when a torrent completes
-    webhook_on_error:       str = ""   # URL called when a torrent errors
-    webhook_on_added:       str = ""   # URL called when a torrent is added
-    webhook_secret:         str = ""   # Optional Bearer token / secret header value
-
-    # ── Plex / Jellyfin Post-Import ───────────────────────────────────────────
-    # Trigger a library scan after a torrent is completed, so the media server
-    # picks up the new files without manual intervention.
-    plex_url:            str = ""   # e.g. http://192.168.1.10:32400
-    plex_verify_ssl:     bool = False  # set True if Plex uses a valid CA-signed certificate
-    jellyfin_verify_ssl: bool = False  # set True if Jellyfin uses a valid CA-signed certificate
-    plex_token:          str = ""   # Plex X-Plex-Token
-    plex_library_id:     str = ""   # Library section ID (empty = all libs)
-    jellyfin_url:        str = ""   # e.g. http://192.168.1.10:8096
-    jellyfin_api_key:    str = ""   # Jellyfin API key
-
     # ── Advanced Extraction ───────────────────────────────────────────────────
     # Optional password applied to all archive extractions (7z -p and unrar -p).
     # Leave empty if archives are not password-protected.
@@ -149,14 +117,13 @@ class AppSettings(BaseModel):
 
     # Polling
     poll_interval_seconds: int = 30
-    watch_interval_seconds: int = 10
     paused: bool = False
 
     # Rate limiting — AllDebrid API calls per minute (0 = unlimited)
     alldebrid_rate_limit_per_minute: int = 60
 
-    # Auto-restart stuck downloads
-    # Torrents stuck in queued/downloading for longer than this are reset (0 = disabled)
+    # Auto-recover stalled downloads
+    # Transfers stuck in queued/downloading for longer than this are reset (0 = disabled)
     stuck_download_timeout_hours: int = 6
     # Full AllDebrid reconciliation interval (minutes) — syncs ALL torrents incl. error/queued
     full_sync_interval_minutes: int = 5
@@ -192,36 +159,6 @@ class AppSettings(BaseModel):
 
     # Labels / categories (comma-separated, empty = disabled)
     torrent_labels: List[str] = []
-
-    # ── FlexGet integration ───────────────────────────────────────────────────
-    flexget_enabled: bool = False
-    flexget_url: str = "http://localhost:5050"
-    flexget_api_key: str = ""
-    # Comma-separated task names to run (empty = all tasks)
-    flexget_tasks_raw: str = ""
-    # Webhook URL for FlexGet events (separate from Discord)
-    flexget_webhook_url: str = ""
-    # JSON array of task schedule objects: [{task, interval_minutes, jitter_seconds, enabled}]
-    flexget_task_schedules_json: str = "[]"
-    # Minutes to wait before retrying when FlexGet is unreachable (0 = disabled)
-    flexget_retry_delay_minutes: int = 5
-    # Max seconds to wait for a single FlexGet task (0 = use default of 3600s = 1h)
-    flexget_task_timeout_seconds: int = 0
-
-    # Legacy schedule fields (kept for migration compatibility)
-    flexget_schedule_minutes: int = 0
-    flexget_jitter_seconds: int = 0
-
-    # ── Jackett ───────────────────────────────────────────────────────────────
-    jackett_enabled:    bool = False
-    jackett_url:        str  = "http://localhost:9117"
-    jackett_api_key:    str  = ""
-    jackett_webhook_url: str = ""  # if empty, falls back to discord_webhook_url
-
-    # ── Prowlarr ──────────────────────────────────────────────────────────────
-    prowlarr_enabled:   bool = False
-    prowlarr_url:       str  = "http://localhost:9696"
-    prowlarr_api_key:   str  = ""
 
     # ── Statistics & Reporting ────────────────────────────────────────────────
     # How often to take a stats snapshot (minutes, 0 = disabled)
@@ -274,52 +211,6 @@ class AppSettings(BaseModel):
     # Hysteresis: resume paused downloads only when free space exceeds
     # min_free_disk_gb + disk_guard_resume_hysteresis_gb to prevent flapping.
     disk_guard_resume_hysteresis_gb: float = 0.5
-
-    # ── Post-processing script ────────────────────────────────────────────────
-    # Shell command to run after a torrent is fully downloaded and imported.
-    # Supports the following placeholders:
-    #   {name}        — torrent name
-    #   {path}        — local download path (may be empty)
-    #   {torrent_id}  — internal torrent ID
-    #   {status}      — final status (completed)
-    # Example: /scripts/notify.sh "{name}" "{path}"
-    # Leave empty to disable.
-    on_torrent_complete: str = ""
-
-    # ── Rule Engine ───────────────────────────────────────────────────────────
-    # JSON-serialised list of rules.  Each rule has an "if" condition dict and
-    # a "then" action dict.  See services/rules.py for supported keys.
-    # Example: [{"if":{"title_contains":"REMUX"},"then":{"priority":-10}}]
-    rules_enabled: bool = False
-    rules_list:    str  = "[]"
-
-    # ── Saved Searches ────────────────────────────────────────────────────────
-    # Interval in minutes for running saved searches (0 = disabled).
-    saved_searches_interval_minutes: int = 60
-
-    # ── Priority Queue — Starvation Prevention ────────────────────────────────
-    # Every `priority_aging_interval_minutes` minutes, long-waiting torrents get
-    # their priority bumped by `priority_aging_step` so they are never starved.
-    # Set interval=0 to disable.
-    priority_aging_interval_minutes:  int = 15
-    priority_aging_threshold_minutes: int = 60   # min wait before aging kicks in
-    priority_aging_step:              int = 1    # priority bump per aging cycle
-
-    # ── Download Profiles ─────────────────────────────────────────────────────
-    # JSON list of named download profiles.
-    # Each: {"name":"...", "download_path":"...", "priority":0, "label":"..."}
-    download_profiles: str = "[]"
-    active_profile:    str = ""   # name of the active profile ("" = none)
-
-    # ── Smart Scheduler ───────────────────────────────────────────────────────
-    # Night-mode: reduce max downloads and apply a speed limit during off-hours.
-    # Format: "HH:MM-HH:MM" in 24-h local time, e.g. "08:00-23:00" (day window).
-    # Downloads outside this window are considered "night" and use night settings.
-    bandwidth_day_window:     str = ""   # e.g. "08:00-23:00"; "" = always day
-    bandwidth_night_max_dl:   int = 1    # max concurrent downloads at night
-    bandwidth_night_speed_mbps: float = 0.0  # speed limit at night (0 = unlimited)
-
-
 
 _settings: AppSettings = AppSettings()
 
@@ -375,8 +266,6 @@ def load_settings() -> AppSettings:
 def save_settings(s: AppSettings):
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     data = s.model_dump()
-    if os.getenv("DB_TYPE") == "postgres_internal":
-        data.pop("postgres_password", None)
     with open(CONFIG_PATH, "w") as f:
         json.dump(data, f, indent=2)
 

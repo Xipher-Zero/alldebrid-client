@@ -1,4 +1,4 @@
-# ACDC — AllDebrid Control & Download Center
+# DebridPulse — Multi-provider Debrid Download Manager
 #
 # Operating modes:
 #
@@ -6,7 +6,7 @@
 #      docker compose up -d
 #
 #   2. PostgreSQL external (own instance):
-#      Set DB_TYPE=postgres and configure postgres_* in Settings → Database.
+#      Select PostgreSQL and configure the connection in Settings → Database.
 #
 # ── Unraid note ───────────────────────────────────────────────────────────────
 # The app uses network_mode: host to avoid conflicts with Unraid's shfs
@@ -16,31 +16,30 @@
 # With host mode the app is directly reachable on the host IP:
 #   http://<unraid-ip>:8080
 #
-# ── PostgreSQL with host mode ─────────────────────────────────────────────────
-# If you use an external PostgreSQL instance, configure the host IP directly
-# in Settings → Database (e.g. 192.168.1.x or the container's IP).
-# The internal PostgreSQL profile is not compatible with host network mode.
+# If you use PostgreSQL, configure the external server's host IP directly in
+# Settings → Database (e.g. 192.168.1.x or the database container's IP).
 
 services:
 
-  alldebrid-client:
-    image: ghcr.io/xipher-zero/alldebrid-client:internal-v0.9.4
+  debridpulse:
+    image: ghcr.io/xipher-zero/debridpulse:v1.0.0
     build: .
-    container_name: alldebrid-client
+    container_name: debridpulse
     restart: unless-stopped
     # host mode: avoids custom bridge networks that conflict with Unraid shfs
     network_mode: host
     volumes:
-      - /mnt/user/appdata/alldebrid-client/data:/app/data
-      - /mnt/user/appdata/alldebrid-client/config:/app/config
+      - /mnt/user/appdata/debridpulse/data:/app/data
+      - /mnt/user/appdata/debridpulse/config:/app/config
+      - /mnt/user/downloads:/download
     environment:
       # File ownership for downloaded files — set to match your host user
-      # so that Sonarr, Radarr, Plex, etc. can read and write the files.
+      # so that other host processes can read and write the files.
       # Run `id` on the host to find your UID and GID.
       - PUID=99
       - PGID=100
       - CONFIG_PATH=/app/config/config.json
-      - DB_PATH=/app/data/alldebrid.db
+      - DB_PATH=/app/data/debridpulse.db
       - TZ=Europe/Berlin
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/api/stats"]

@@ -3,6 +3,7 @@
 import asyncio
 import struct
 import sys
+import tempfile
 import types
 import unittest
 from contextlib import asynccontextmanager
@@ -129,6 +130,26 @@ class DirectLinkInputTests(unittest.TestCase):
     def test_schema_migrates_original_source_url(self):
         self.assertIn(("source_url", "TEXT"), _SCHEMA_COLUMNS_FILES)
 
+    def test_removed_source_can_reuse_its_original_target_path(self):
+        manager = TorrentManager()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            existing = root / "archive.zip"
+            existing.write_bytes(b"previous download")
+
+            protected = manager._unique_direct_link_path(
+                root, "archive.zip", set()
+            )
+            reusable = manager._unique_direct_link_path(
+                root,
+                "archive.zip",
+                set(),
+                reuse_existing=True,
+            )
+
+        self.assertEqual(protected.name, "archive (2).zip")
+        self.assertEqual(reusable.name, "archive.zip")
+
 
 class DelayedAllDebridTests(unittest.IsolatedAsyncioTestCase):
     async def test_returns_immediate_unlocked_link(self):
@@ -242,7 +263,7 @@ class DashboardContractTests(unittest.TestCase):
         repo_root = Path(__file__).resolve().parents[2]
         html = (repo_root / "frontend/static/index.html").read_text()
         js = (repo_root / "frontend/static/app.js").read_text()
-        direct_heading = "⬇️ Add Links to Generate and Download DeBrid links"
+        direct_heading = "⬇️ Add Links to Generate and Download Debrid Links"
         magnet_heading = "🧲 Add Magnet Links or a Torrent File"
         self.assertIn(direct_heading, html)
         self.assertLess(html.index(direct_heading), html.index(magnet_heading))
@@ -251,7 +272,7 @@ class DashboardContractTests(unittest.TestCase):
         self.assertNotIn('id="t-magnet"', html)
         self.assertIn('<span class="nav-label">Downloads</span>', html)
         self.assertIn('id="torrent-card-title">All Downloads</span>', html)
-        self.assertIn('<script src="/app.js?v=8" defer></script>', html)
+        self.assertIn('<script src="/app.js?v=9" defer></script>', html)
         self.assertIn("'/links/add'", js)
         self.assertIn("button.textContent = 'Adding…'", js)
         self.assertIn("🔗 Direct link", js)
@@ -278,12 +299,13 @@ class DashboardContractTests(unittest.TestCase):
         css = (repo_root / "frontend/static/style.css").read_text()
 
         sidebar_nav = html.split("<nav>", 1)[1].split("</nav>", 1)[0]
-        for removed_view in ("learning", "saved-searches", "changelog", "support", "help"):
+        for removed_view in ("learning", "saved-searches", "changelog", "support"):
             self.assertNotIn(f'data-view="{removed_view}"', sidebar_nav)
+        self.assertIn('data-view="help"', sidebar_nav)
         self.assertNotIn('<div class="nav-group">Project</div>', sidebar_nav)
         self.assertIn('class="sidebar-theme-control"', sidebar_nav)
         self.assertIn('aria-label="Switch to light mode"', sidebar_nav)
-        self.assertIn('aria-label="Open the ACDC changelog"', html)
+        self.assertIn('aria-label="Open the DebridPulse changelog"', html)
         self.assertNotIn("data-view=changelog", html)
 
         sidebar_footer = html.split('<div class="sidebar-footer">', 1)[1].split("</aside>", 1)[0]
@@ -303,7 +325,7 @@ class DashboardContractTests(unittest.TestCase):
         self.assertIn("btn.setAttribute('aria-label', action);", js)
         self.assertIn(".sidebar-theme-control", css)
         self.assertNotIn("position:fixed; bottom:16px; right:16px", css)
-        self.assertIn('<link rel="stylesheet" href="/style.css?v=8">', html)
+        self.assertIn('<link rel="stylesheet" href="/style.css?v=9">', html)
 
     def test_theme_branding_and_semantic_colors_are_separated(self):
         repo_root = Path(__file__).resolve().parents[2]
@@ -313,10 +335,10 @@ class DashboardContractTests(unittest.TestCase):
         logo = (repo_root / "frontend/static/logo.svg").read_text()
         favicon = (repo_root / "frontend/static/favicon.svg").read_text()
 
-        self.assertIn("<title>ACDC</title>", html)
+        self.assertIn("<title>DebridPulse</title>", html)
         logo_block = html.split('<div class="logo">', 1)[1].split("</div>\n  </div>", 1)[0]
-        self.assertIn("AllDebrid Control &amp;<br>Download Center", logo_block)
-        self.assertNotIn("(ACDC)", logo_block)
+        self.assertIn("Debrid<span>Pulse</span>", logo_block)
+        self.assertNotIn("ACDC", logo_block)
         self.assertIn('href="/favicon.svg?v=4"', html)
         self.assertIn('href="/favicon-32.png?v=4"', html)
         self.assertIn('href="/apple-touch-icon.png?v=4"', html)
@@ -343,15 +365,16 @@ class DashboardContractTests(unittest.TestCase):
         self.assertIn("font-variant-emoji:text", css)
         self.assertNotIn("--accent:   #ff8c42;", css)
         for light_theme_token in (
-            "--bg:       #dbe7f6;",
+            "--bg:       #e9eff6;",
             "--surface:  #ffffff;",
-            "--surface2: #e5eef9;",
-            "--border:   #b5c6de;",
-            "--nav-active: rgba(49,95,174,.20);",
+            "--surface2: #f1f5f9;",
+            "--border:   #cfd9e5;",
+            "--nav-active: rgba(49,95,174,.11);",
         ):
             self.assertIn(light_theme_token, css)
         self.assertIn("body.light .dash-hero-stat,", css)
-        self.assertIn("body.light .dash-kpi-strip { background: var(--surface); }", css)
+        self.assertIn("body.light .dash-kpi-strip {", css)
+        self.assertIn("background: linear-gradient(180deg, #ffffff, #fbfcfe);", css)
 
         self.assertIn('viewBox="0 0 512 512"', logo)
         self.assertIn("violet and blue download arrow entering a bucket", logo)

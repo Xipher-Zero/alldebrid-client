@@ -303,7 +303,7 @@ class TestCheckBeforeAdd:
 
         with patch("services.duplicates.get_db", return_value=mock_ctx):
             decision = await check_before_add(DuplicateCandidate(
-                source="jackett",
+                source="manual",
                 title="Example Show S01E02 1080p WEB DL OTHER",
                 size_bytes=1_010_000_000,
             ))
@@ -328,7 +328,7 @@ class TestCheckBeforeAdd:
 
         with patch("services.duplicates.get_db", return_value=mock_ctx):
             decision = await check_before_add(DuplicateCandidate(
-                source="saved_search",
+                source="api",
                 title="Example Movie (2024) 2160p BluRay OTHER",
                 size_bytes=8_050_000_000,
             ))
@@ -356,7 +356,7 @@ class TestCheckBeforeAdd:
 
         with patch("services.duplicates.get_db", return_value=mock_ctx):
             decision = await check_before_add(DuplicateCandidate(
-                source="jackett",
+                source="manual_file",
                 title="Example Show S02E03 1080p WEB DL OTHER",
                 size_bytes=2_010_000_000,
             ))

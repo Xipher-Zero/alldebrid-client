@@ -17,7 +17,7 @@ For all notifications:
 
 ```json
 {
-  "discord_username": "ACDC",
+  "discord_username": "DebridPulse",
   "discord_avatar_url": "https://example.com/avatar.png"
 }
 ```
@@ -51,7 +51,7 @@ Hinweis:
 
 ### Torrent Added
 - Torrent-Name
-- Quelle (manual, watch_file, watch_torrent, alldebrid_existing)
+- Quelle (manual, manual_file, direct_link, alldebrid_existing)
 - AllDebrid ID
 - Zeitstempel
 

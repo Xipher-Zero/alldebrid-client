@@ -20,7 +20,6 @@ TABLES = [
     "torrents",
     "download_files",
     "events",
-    "flexget_runs",
     "stats_snapshots",
 ]
 
@@ -127,17 +126,16 @@ async def wipe_database() -> dict:
     async with get_db() as db:
         if getattr(db, "backend", "sqlite") == "postgres":
             await db.execute(
-                "TRUNCATE TABLE download_files, events, flexget_runs, stats_snapshots, torrents RESTART IDENTITY CASCADE"
+                "TRUNCATE TABLE download_files, events, stats_snapshots, torrents RESTART IDENTITY CASCADE"
             )
         else:
             await db.execute("DELETE FROM download_files")
             await db.execute("DELETE FROM events")
-            await db.execute("DELETE FROM flexget_runs")
             await db.execute("DELETE FROM stats_snapshots")
             await db.execute("DELETE FROM torrents")
             try:
                 await db.execute(
-                    "DELETE FROM sqlite_sequence WHERE name IN ('torrents','download_files','events','flexget_runs','stats_snapshots')"
+                    "DELETE FROM sqlite_sequence WHERE name IN ('torrents','download_files','events','stats_snapshots')"
                 )
             except Exception as _e:
                 logger.debug("sqlite_sequence reset skipped: %s", _e)

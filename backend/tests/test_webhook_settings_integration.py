@@ -61,13 +61,6 @@ class RouteHelperTests(unittest.TestCase):
         warning = routes._avatar_reachability_warning("https://example.com/api/avatar")
         self.assertEqual(warning, "")
 
-    def test_jackett_title_key_ignores_punctuation_and_extension(self):
-        self.assertEqual(
-            routes._jackett_title_key("CzechSexCasting.E435.Kathy.Deep.1080p.mp4"),
-            routes._jackett_title_key("CzechSexCasting E435 Kathy Deep 1080p.mkv"),
-        )
-
-
 class SchedulerWebhookTests(unittest.TestCase):
     def test_reporting_webhook_accepts_discord_fallback(self):
         cfg = SimpleNamespace(
@@ -102,27 +95,6 @@ class SettingsSaveTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, {"ok": True})
         self.assertEqual(saved["cfg"].discord_avatar_url, "")
         self.assertEqual(saved["applied"].discord_avatar_url, "")
-
-    async def test_update_settings_resets_flexget_runtime_when_toggled_off(self):
-        previous = routes.AppSettings(flexget_enabled=True)
-        saved = {}
-
-        def fake_save(cfg):
-            saved["cfg"] = cfg
-
-        def fake_apply(cfg):
-            saved["applied"] = cfg
-
-        with patch("api.routes.get_settings", return_value=previous), \
-             patch("api.routes.save_settings", side_effect=fake_save), \
-             patch("api.routes.apply_settings", side_effect=fake_apply), \
-             patch.object(routes.manager, "apply_aria2_memory_tuning", AsyncMock(return_value={"ok": True})), \
-             patch("services.flexget.reset_runtime_state") as reset_runtime_state, \
-             patch.object(routes.manager, "reset_services", MagicMock()):
-            result = await routes.update_settings(routes.AppSettings(flexget_enabled=False))
-
-        self.assertEqual(result, {"ok": True})
-        reset_runtime_state.assert_called_once()
 
     async def test_update_settings_persists_reporting_window(self):
         saved = {}
@@ -168,7 +140,7 @@ class SettingsSaveTests(unittest.IsolatedAsyncioTestCase):
              patch("api.routes.apply_settings", side_effect=fake_apply), \
              patch.object(routes.manager, "aria2", return_value=fake_aria2), \
              patch.object(routes.manager, "reset_services", MagicMock()) as reset_services, \
-             patch.object(routes.manager, "_dispatch_pending_aria2_queue", AsyncMock()) as dispatch:
+             patch.object(routes.manager, "advance_aria2_queue", AsyncMock()) as advance:
             result = await routes.aria2_set_global_options({"max_concurrent_downloads": 2})
 
         self.assertEqual(result["applied"]["max-concurrent-downloads"], "2")
@@ -176,7 +148,7 @@ class SettingsSaveTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(saved["cfg"].aria2_max_active_downloads, 2)
         self.assertEqual(saved["applied"].max_concurrent_downloads, 2)
         reset_services.assert_called_once()
-        dispatch.assert_awaited_once()
+        advance.assert_awaited_once()
 
 
 class _FakeDb:
@@ -243,258 +215,72 @@ class TorrentListingRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(params[-2:], [250, 25])
 
 
-class JackettRouteTests(unittest.IsolatedAsyncioTestCase):
-    async def test_jackett_search_marks_existing_hashes(self):
-        db = _FakeDb(rows=[{"id": 7, "hash": "abc123", "status": "completed", "name": "Existing"}], total=1)
-        payload = {
-            "results": [
-                {"title": "Existing", "hash": "abc123", "magnet": "magnet:?xt=urn:btih:abc123", "torrent_url": ""},
-                {"title": "New", "hash": "def456", "magnet": "", "torrent_url": "http://example/test.torrent"},
-            ],
-            "total": 2,
-            "query": "test",
-            "error": None,
+class ProcessingPauseRouteTests(unittest.IsolatedAsyncioTestCase):
+    async def test_individual_resume_exits_global_pause_and_advances_queue(self):
+        cfg = routes.AppSettings(paused=True)
+        saved = []
+
+        with patch.object(routes.manager, "resume_torrent", AsyncMock()) as resume, \
+             patch.object(routes.manager, "advance_aria2_queue", AsyncMock()) as advance, \
+             patch("api.routes.get_settings", return_value=cfg), \
+             patch("api.routes.save_settings", side_effect=saved.append), \
+             patch("api.routes.apply_settings") as apply:
+            result = await routes.resume_torrent(71)
+
+        resume.assert_awaited_once_with(71)
+        advance.assert_awaited_once_with()
+        self.assertEqual(result, {"ok": True, "paused": False})
+        self.assertFalse(saved[0].paused)
+        apply.assert_called_once_with(saved[0])
+
+    async def test_individual_resume_leaves_other_items_selectively_paused(self):
+        cfg = routes.AppSettings(paused=True)
+
+        with patch.object(routes.manager, "resume_torrent", AsyncMock()) as resume, \
+             patch.object(routes.manager, "advance_aria2_queue", AsyncMock()) as advance, \
+             patch("api.routes.get_settings", return_value=cfg), \
+             patch("api.routes.save_settings") as save, \
+             patch("api.routes.apply_settings") as apply:
+            result = await routes.resume_torrent(72)
+
+        self.assertEqual(result, {"ok": True, "paused": False})
+        resume.assert_awaited_once_with(72)
+        advance.assert_awaited_once_with()
+        self.assertFalse(save.call_args.args[0].paused)
+        apply.assert_called_once_with(save.call_args.args[0])
+
+    async def test_individual_resume_does_not_reapply_unpaused_settings(self):
+        cfg = routes.AppSettings(paused=False)
+
+        with patch.object(routes.manager, "resume_torrent", AsyncMock()) as resume, \
+             patch.object(routes.manager, "advance_aria2_queue", AsyncMock()) as advance, \
+             patch("api.routes.get_settings", return_value=cfg), \
+             patch("api.routes.save_settings") as save, \
+             patch("api.routes.apply_settings") as apply:
+            result = await routes.resume_torrent(73)
+
+        self.assertEqual(result, {"ok": True, "paused": False})
+        resume.assert_awaited_once_with(73)
+        advance.assert_not_awaited()
+        save.assert_not_called()
+        apply.assert_not_called()
+
+
+class Aria2LiveStatRouteTests(unittest.IsolatedAsyncioTestCase):
+    async def test_global_stat_route_returns_live_rpc_counters(self):
+        stat = {
+            "download_speed": 42_000_000,
+            "upload_speed": 0,
+            "active": 2,
+            "waiting": 1,
         }
-        with patch("api.routes.get_db", return_value=_fake_db_context(db)), \
-             patch("services.jackett.search", AsyncMock(return_value=payload)):
-            result = await routes.jackett_search({"query": "test", "trackers": ["a", "b"]})
+        fake_aria2 = SimpleNamespace(get_global_stat=AsyncMock(return_value=stat))
 
-        self.assertTrue(result["results"][0]["already_added"])
-        self.assertEqual(result["results"][0]["existing_torrent_id"], 7)
-        self.assertEqual(result["results"][0]["existing_status"], "completed")
-        self.assertEqual(result["results"][0]["duplicate"]["action"], "skip")
-        self.assertFalse(result["results"][1]["already_added"])
+        with patch.object(routes.manager, "aria2", return_value=fake_aria2):
+            result = await routes.aria2_global_stat()
 
-    async def test_jackett_search_can_hide_dead_torrents(self):
-        db = _FakeDb(rows=[], total=0)
-        payload = {
-            "results": [
-                {"title": "Alive", "hash": "abc123", "magnet": "magnet:?xt=urn:btih:abc123", "torrent_url": "", "seeders": 12},
-                {"title": "Dead", "hash": "def456", "magnet": "magnet:?xt=urn:btih:def456", "torrent_url": "", "seeders": 0},
-            ],
-            "total": 2,
-            "query": "test",
-            "error": None,
-        }
-        with patch("api.routes.get_db", return_value=_fake_db_context(db)), \
-             patch("services.jackett.search", AsyncMock(return_value=payload)):
-            result = await routes.jackett_search({"query": "test", "hide_dead": True})
-
-        self.assertEqual(result["total"], 1)
-        self.assertEqual(len(result["results"]), 1)
-        self.assertEqual(result["results"][0]["title"], "Alive")
-
-    async def test_jackett_search_keeps_dead_torrents_when_filter_disabled(self):
-        db = _FakeDb(rows=[], total=0)
-        payload = {
-            "results": [
-                {"title": "Alive", "hash": "abc123", "magnet": "magnet:?xt=urn:btih:abc123", "torrent_url": "", "seeders": 12},
-                {"title": "Dead", "hash": "def456", "magnet": "magnet:?xt=urn:btih:def456", "torrent_url": "", "seeders": 0},
-            ],
-            "total": 2,
-            "query": "test",
-            "error": None,
-        }
-        with patch("api.routes.get_db", return_value=_fake_db_context(db)), \
-             patch("services.jackett.search", AsyncMock(return_value=payload)):
-            result = await routes.jackett_search({"query": "test"})
-
-        self.assertEqual(result["total"], 2)
-        self.assertEqual(len(result["results"]), 2)
-
-    async def test_jackett_search_marks_existing_titles_via_download_files(self):
-        db = _FakeDb(
-            rows=[{"id": 8, "hash": "zzz999", "status": "completed", "name": "Some Torrent", "filename": "Exact.Match.File.mp4"}],
-            total=1,
-        )
-        payload = {
-            "results": [
-                {"title": "Exact.Match.File.mp4", "hash": "", "magnet": "", "torrent_url": "http://example/test.torrent"},
-            ],
-            "total": 1,
-            "query": "test",
-            "error": None,
-        }
-        with patch("api.routes.get_db", return_value=_fake_db_context(db)), \
-             patch("services.jackett.search", AsyncMock(return_value=payload)):
-            result = await routes.jackett_search({"query": "test"})
-
-        self.assertTrue(result["results"][0]["already_added"])
-        self.assertEqual(result["results"][0]["existing_torrent_id"], 8)
-        self.assertEqual(result["results"][0]["existing_status"], "completed")
-
-    async def test_jackett_search_marks_existing_titles_with_punctuation_variants(self):
-        db = _FakeDb(
-            rows=[{"id": 12, "hash": "zzz111", "status": "completed", "name": "Some Torrent", "filename": "CzechSexCasting E435 Kathy Deep 1080p.mkv"}],
-            total=1,
-        )
-        payload = {
-            "results": [
-                {"title": "CzechSexCasting.E435.Kathy.Deep.1080p.mp4", "hash": "", "magnet": "", "torrent_url": "http://example/test.torrent"},
-            ],
-            "total": 1,
-            "query": "test",
-            "error": None,
-        }
-        with patch("api.routes.get_db", return_value=_fake_db_context(db)), \
-             patch("services.jackett.search", AsyncMock(return_value=payload)):
-            result = await routes.jackett_search({"query": "test"})
-
-        self.assertTrue(result["results"][0]["already_added"])
-        self.assertEqual(result["results"][0]["existing_torrent_id"], 12)
-        self.assertEqual(result["results"][0]["existing_status"], "completed")
-
-    async def test_jackett_add_prefers_torrent_file_before_magnet(self):
-        row = {"id": 5, "status": "uploading", "alldebrid_id": "123"}
-        with patch("services.jackett.download_torrent_file", AsyncMock(return_value={"filename": "item.torrent", "content": b"abc"})) as download_mock, \
-             patch.object(routes.manager, "add_torrent_file_direct", AsyncMock(return_value=row)) as add_torrent_mock, \
-             patch.object(routes.manager, "add_magnet_direct", AsyncMock(return_value={"id": 9})) as add_magnet_mock, \
-             patch("services.jackett.send_jackett_webhook", AsyncMock(return_value=None)):
-            result = await routes.jackett_add({
-                "magnet": "magnet:?xt=urn:btih:abcdefabcdefabcdefabcdefabcdefabcdefabcd",
-                "torrent_url": "http://example/item.torrent",
-                "title": "Example",
-                "indexer": "Tracker",
-                "size_bytes": 123,
-            })
-
-        download_mock.assert_awaited_once()
-        add_torrent_mock.assert_awaited_once()
-        add_magnet_mock.assert_not_awaited()
-        self.assertEqual(result["added_via"], "torrent_file")
-
-    async def test_jackett_add_passes_result_hash_to_torrent_upload_path(self):
-        row = {"id": 6, "status": "uploading", "alldebrid_id": "124"}
-        with patch("services.jackett.download_torrent_file", AsyncMock(return_value={"filename": "item.torrent", "content": b"abc"})), \
-             patch.object(routes.manager, "add_torrent_file_direct", AsyncMock(return_value=row)) as add_torrent_mock, \
-             patch("services.jackett.send_jackett_webhook", AsyncMock(return_value=None)):
-            await routes.jackett_add({
-                "hash": "ABCDEF1234567890ABCDEF1234567890ABCDEF12",
-                "magnet": "",
-                "torrent_url": "http://example/item.torrent",
-                "title": "Example",
-                "indexer": "Tracker",
-                "size_bytes": 123,
-            })
-
-        add_torrent_mock.assert_awaited_once_with(
-            b"abc",
-            "item.torrent",
-            source="jackett",
-            preferred_hash="abcdef1234567890abcdef1234567890abcdef12",
-        )
-
-    async def test_jackett_add_falls_back_to_downloaded_torrent_infohash(self):
-        row = {"id": 7, "status": "uploading", "alldebrid_id": "125"}
-        with patch("services.jackett.download_torrent_file", AsyncMock(return_value={
-            "filename": "item.torrent",
-            "content": b"abc",
-            "infohash": "1234567890abcdef1234567890abcdef12345678",
-        })), \
-             patch.object(routes.manager, "add_torrent_file_direct", AsyncMock(return_value=row)) as add_torrent_mock, \
-             patch("services.jackett.send_jackett_webhook", AsyncMock(return_value=None)):
-            await routes.jackett_add({
-                "hash": "",
-                "magnet": "",
-                "torrent_url": "http://example/item.torrent",
-                "title": "Example",
-                "indexer": "Tracker",
-                "size_bytes": 123,
-            })
-
-        add_torrent_mock.assert_awaited_once_with(
-            b"abc",
-            "item.torrent",
-            source="jackett",
-            preferred_hash="1234567890abcdef1234567890abcdef12345678",
-        )
-
-    async def test_jackett_add_falls_back_to_magnet_when_torrent_download_requires_login(self):
-        row = {"id": 8, "status": "uploading", "alldebrid_id": "126"}
-        with patch("services.jackett.download_torrent_file", AsyncMock(side_effect=RuntimeError("Tracker download requires a valid Jackett login/session for this indexer"))), \
-             patch.object(routes.manager, "add_torrent_file_direct", AsyncMock()) as add_torrent_mock, \
-             patch.object(routes.manager, "add_magnet_direct", AsyncMock(return_value=row)) as add_magnet_mock, \
-             patch("services.jackett.send_jackett_webhook", AsyncMock(return_value=None)):
-            result = await routes.jackett_add({
-                "hash": "abcdef1234567890abcdef1234567890abcdef12",
-                "magnet": "magnet:?xt=urn:btih:abcdef1234567890abcdef1234567890abcdef12&dn=Example",
-                "torrent_url": "http://example/item.torrent",
-                "title": "Example",
-                "indexer": "Tracker",
-                "size_bytes": 123,
-            })
-
-        add_torrent_mock.assert_not_awaited()
-        add_magnet_mock.assert_awaited_once()
-        self.assertEqual(result["added_via"], "magnet_fallback")
-
-    async def test_check_duplicate_endpoint_is_read_only(self):
-        duplicate = {
-            "is_duplicate": True,
-            "confidence": 1.0,
-            "action": "skip",
-            "reason": "same_infohash",
-            "matches": [],
-        }
-        decision = SimpleNamespace(as_dict=lambda: duplicate)
-        with patch("services.duplicates.check_before_add", AsyncMock(return_value=decision)) as check_mock, \
-             patch("services.alldebrid.AllDebridService.upload_magnet", AsyncMock()) as upload_mock:
-            result = await routes.check_torrent_duplicate({
-                "hash": "abcdef1234567890abcdef1234567890abcdef12",
-                "title": "Example",
-                "source": "test",
-            })
-
-        check_mock.assert_awaited_once()
-        upload_mock.assert_not_awaited()
-        self.assertEqual(result["duplicate"]["action"], "skip")
-
-    async def test_saved_search_auto_add_prefers_jackett_torrent_file(self):
-        search = {
-            "id": 42,
-            "query": "example",
-            "auto_add": True,
-            "min_seeders": 1,
-            "max_size_gb": 0,
-            "min_size_gb": 0,
-            "regex_filter": "",
-        }
-        cfg = SimpleNamespace(prowlarr_enabled=False, jackett_enabled=True)
-        db = _FakeDb(rows=[], total=0)
-        result_row = {"id": 9, "status": "uploading"}
-        with patch("core.config.get_settings", return_value=cfg), \
-             patch("services.jackett.search", AsyncMock(return_value={
-                 "results": [{
-                     "title": "Example",
-                     "source": "jackett",
-                     "torrent_url": "http://jackett/item.torrent",
-                     "magnet": "magnet:?xt=urn:btih:abcdef1234567890abcdef1234567890abcdef12",
-                     "hash": "abcdef1234567890abcdef1234567890abcdef12",
-                     "seeders": 5,
-                     "size_bytes": 123,
-                 }]
-             })), \
-             patch("services.jackett.download_torrent_file", AsyncMock(return_value={
-                 "filename": "item.torrent",
-                 "content": b"torrent-data",
-                 "infohash": "abcdef1234567890abcdef1234567890abcdef12",
-             })) as download_mock, \
-             patch.object(routes.manager, "add_torrent_file_direct", AsyncMock(return_value=result_row)) as add_torrent_mock, \
-             patch.object(routes.manager, "add_magnet_direct", AsyncMock()) as add_magnet_mock, \
-             patch("db.database.get_db", return_value=_fake_db_context(db)):
-            result = await routes._execute_saved_search(search)
-
-        download_mock.assert_awaited_once()
-        add_torrent_mock.assert_awaited_once()
-        add_magnet_mock.assert_not_awaited()
-        self.assertEqual(result["added_count"], 1)
-
-
-class FlexGetRouteTests(unittest.IsolatedAsyncioTestCase):
-    async def test_flexget_running_returns_empty_when_disabled(self):
-        with patch("api.routes.get_settings", return_value=SimpleNamespace(flexget_enabled=False)):
-            result = await routes.flexget_running()
-        self.assertEqual(result, {"running": []})
+        self.assertEqual(result, {"ok": True, **stat})
+        fake_aria2.get_global_stat.assert_awaited_once_with()
 
 
 class DatabaseMaintenanceRouteTests(unittest.IsolatedAsyncioTestCase):

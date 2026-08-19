@@ -1,8 +1,27 @@
 from __future__ import annotations
 
+import os
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
+
+
+def test_default_database_path_uses_debridpulse_name_and_preserves_legacy_install():
+    from db.database import _default_sqlite_path
+
+    with patch.dict(os.environ, {}, clear=True), patch.object(
+        Path, "exists", return_value=False
+    ):
+        assert _default_sqlite_path() == Path("/app/data/debridpulse.db")
+
+    with patch.dict(os.environ, {}, clear=True), patch.object(
+        Path, "exists", side_effect=[True, False]
+    ):
+        assert _default_sqlite_path() == Path("/app/data/alldebrid.db")
+
+    with patch.dict(os.environ, {"DB_PATH": "/custom/library.db"}, clear=True):
+        assert _default_sqlite_path() == Path("/custom/library.db")
 
 
 class _FakeTransaction:
@@ -33,7 +52,7 @@ class _FakePostgresConnection:
 
 
 @pytest.mark.asyncio
-async def test_postgres_schema_creates_saved_searches_table():
+async def test_postgres_schema_excludes_removed_automation_tables():
     from db.database import _init_db_postgres
 
     fake_conn = _FakePostgresConnection()
@@ -43,12 +62,18 @@ async def test_postgres_schema_creates_saved_searches_table():
         await _init_db_postgres()
 
     ddl = "\n".join(fake_conn.statements)
-    assert "CREATE TABLE IF NOT EXISTS saved_searches" in ddl
-    assert "last_run_at TIMESTAMPTZ" in ddl
-    assert "interval_minutes INTEGER DEFAULT 60" in ddl
+    assert "CREATE TABLE IF NOT EXISTS torrents" in ddl
+    assert "CREATE TABLE IF NOT EXISTS stats_snapshots" in ddl
+    assert "CREATE TABLE IF NOT EXISTS saved_searches" not in ddl
+    assert "CREATE TABLE IF NOT EXISTS flexget_runs" not in ddl
 
 
-def test_saved_searches_are_included_in_bidirectional_migration_tables():
+def test_bidirectional_migration_only_includes_supported_tables():
     from db.migration import MIGRATION_TABLES
 
-    assert MIGRATION_TABLES[-1] == "saved_searches"
+    assert MIGRATION_TABLES == [
+        "torrents",
+        "download_files",
+        "events",
+        "stats_snapshots",
+    ]

@@ -10,8 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.routes import router
-from api.qbit import router as qbit_router
-from core.branding import APP_NAME, APP_SHORT_NAME
+from core.branding import APP_METADATA_TITLE, APP_NAME, APP_SHORT_NAME
 from core.config import get_settings as _get_log_settings
 from core.logging_utils import configure_logging, log_startup_banner, sanitize_exception, sanitize_log_value
 from core.scheduler import start_scheduler, stop_scheduler
@@ -327,7 +326,7 @@ async def lifespan(app: FastAPI):
         web_ui=f"http://0.0.0.0:{getattr(_cfg, 'port', 8080)}",
         auth=_au,
     )
-    logger.info("Starting %s (%s) v%s", APP_NAME, APP_SHORT_NAME, _ver)
+    logger.info("Starting %s v%s", APP_NAME, _ver)
 
     # 0. Validate and sanitise config — fix obvious misconfigurations before anything else
     try:
@@ -428,7 +427,7 @@ async def lifespan(app: FastAPI):
 
     await start_scheduler()
     yield
-    logger.info("Shutting down %s (%s)...", APP_NAME, APP_SHORT_NAME)
+    logger.info("Shutting down %s...", APP_NAME)
     await stop_scheduler()
     try:
         await aria2_runtime.stop()
@@ -437,14 +436,14 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title=f"{APP_NAME} ({APP_SHORT_NAME})",
+    title=APP_METADATA_TITLE,
     description=(
-        "Self-hosted torrent automation via AllDebrid.\n\n"
+        "Self-hosted debrid transfer manager for direct links, magnets, and torrent files. "
+        "V1 includes the AllDebrid provider backend.\n\n"
         "## API structure\n\n"
         "| Prefix | Description |\n"
         "|--------|-------------|\n"
-        f"| `/api/` | Native {APP_SHORT_NAME} REST API |\n"
-        "| `/api/v2/` | qBittorrent v4.3.2 Web API emulation (for Sonarr/Radarr) |\n\n"
+        f"| `/api/` | Native {APP_SHORT_NAME} REST API |\n\n"
         "Interactive docs: `/docs` (Swagger UI) · `/redoc` (ReDoc) · `/openapi.json`"
     ),
     version=read_version(),
@@ -514,9 +513,6 @@ async def basic_auth_middleware(request: Request, call_next):
     )
 
 app.include_router(router, prefix="/api")
-# qBittorrent v4.3.2 API emulation — allows Sonarr/Radarr to use ACDC
-# as a standard qBittorrent download client (host=this server, port=8080).
-app.include_router(qbit_router, prefix="/api/v2")
 
 # ── Static files ──────────────────────────────────────────────────────────────
 _here = Path(__file__).parent

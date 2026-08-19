@@ -1,5 +1,5 @@
 """
-Automatic backup service for ACDC.
+Automatic backup service for DebridPulse.
 
 Backs up config.json and the SQLite database to a configurable folder.
 Rotates backups by keeping only the last N days worth.

@@ -1,0 +1,126 @@
+import json
+import re
+from importlib.metadata import distribution
+from pathlib import Path
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _normalized_name(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).casefold()
+
+
+def _locked_runtime_packages() -> dict[str, str]:
+    packages: dict[str, str] = {}
+    for raw_line in (REPO_ROOT / "backend/requirements.txt").read_text().splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith(("#", "--")):
+            continue
+        name, version = line.split("==", 1)
+        packages[_normalized_name(name)] = version.split(";", 1)[0].strip()
+    return packages
+
+
+def test_runtime_license_inventory_matches_lock_exactly():
+    manifest = json.loads(
+        (REPO_ROOT / "licenses/python-runtime.json").read_text()
+    )
+    inventoried = {
+        _normalized_name(item["name"]): item["version"]
+        for item in manifest["packages"]
+    }
+    assert inventoried == _locked_runtime_packages()
+
+
+def test_runtime_inventory_has_no_unknown_or_unreviewed_copyleft_license():
+    manifest = json.loads(
+        (REPO_ROOT / "licenses/python-runtime.json").read_text()
+    )
+    for item in manifest["packages"]:
+        license_id = item["license"].upper()
+        assert "UNKNOWN" not in license_id
+        assert "AGPL" not in license_id
+        assert "GPL" not in license_id
+
+
+def test_v1_license_and_upstream_notice_are_present():
+    license_text = (REPO_ROOT / "LICENSE").read_text()
+    notice = (REPO_ROOT / "NOTICE").read_text()
+    upstream_mit = (REPO_ROOT / "LICENSES/MIT.txt").read_text()
+
+    assert "GNU GENERAL PUBLIC LICENSE" in license_text
+    assert "Version 2, June 1991" in license_text
+    assert "Copyright (C) 2026 Chris Moore" in notice
+    assert "c0f7a5bfeba4f259fb2acc62ac6eed27e8ac4d5c" in notice
+    assert "Copyright (c) 2026 kroeberd" in upstream_mit
+
+
+def test_bencode2_notice_and_machine_readable_inventory_ship_in_image():
+    bencode_notice = (REPO_ROOT / "licenses/bencode2-MIT.txt").read_text()
+    dockerfile = (REPO_ROOT / "Dockerfile").read_text()
+
+    assert "Copyright (c) 2024 trim21" in bencode_notice
+    assert "Permission is hereby granted, free of charge" in bencode_notice
+    assert "COPY licenses/ /app/licenses/" in dockerfile
+
+
+def test_installed_runtime_packages_retain_license_or_notice_files():
+    manifest = json.loads(
+        (REPO_ROOT / "licenses/python-runtime.json").read_text()
+    )
+    explicit_notices = {
+        "bencode2": REPO_ROOT / "licenses/bencode2-MIT.txt",
+    }
+
+    for item in manifest["packages"]:
+        name = _normalized_name(item["name"])
+        if name in explicit_notices:
+            assert explicit_notices[name].is_file()
+            continue
+        files = distribution(item["name"]).files or ()
+        license_files = [
+            path
+            for path in files
+            if any(
+                part.casefold().startswith(("license", "copying", "notice"))
+                for part in Path(str(path)).parts
+            )
+        ]
+        assert license_files, f"{item['name']} {item['version']} has no packaged license notice"
+
+
+def test_current_project_surfaces_state_the_debridpulse_gpl_identity():
+    readme = (REPO_ROOT / "README.md").read_text()
+    landing_page = (REPO_ROOT / "index.html").read_text()
+    notice = (REPO_ROOT / "NOTICE").read_text()
+    source_offer = (REPO_ROOT / "SOURCE_OFFER.md").read_text()
+
+    assert "DebridPulse" in readme
+    assert "GPL-2.0-or-later" in readme
+    assert "DebridPulse · GPL-2.0-or-later" in landing_page
+    assert "MIT License" not in landing_page
+    assert notice.startswith("DebridPulse — Multi-provider Debrid Download Manager")
+    assert "issues/new?template=source_request.yml" in source_offer
+
+
+def test_license_attribution_is_prominent_and_available_in_application_help():
+    readme = (REPO_ROOT / "README.md").read_text()
+    frontend = (REPO_ROOT / "frontend/static/index.html").read_text()
+    landing_page = (REPO_ROOT / "index.html").read_text()
+
+    readme_intro = readme.split("## What is DebridPulse?", 1)[0]
+    for surface in (readme_intro, frontend, landing_page):
+        assert "Chris Moore" in surface
+        assert "GPL-2.0-or-later" in surface
+        assert "kroeberd" in surface
+
+    assert 'data-htab="license"' in frontend
+    assert 'id="htab-license"' in frontend
+    assert 'data-view="help"' in frontend
+    assert "without warranty" in frontend
+    assert "redistribute and modify" in frontend
+    assert "LICENSES/MIT.txt" in frontend
+    assert "SOURCE_OFFER.md" in frontend
+    assert "docs/DEPENDENCY_LICENSES.md" in frontend
+    assert (REPO_ROOT / ".github/ISSUE_TEMPLATE/source_request.yml").is_file()

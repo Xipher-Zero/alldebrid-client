@@ -33,7 +33,7 @@ _CLOSING_TRANSPORT_MSGS = frozenset({
 
 
 def _is_builtin_mode() -> bool:
-    """Return whether ACDC exclusively owns the aria2 daemon."""
+    """Return whether DebridPulse exclusively owns the aria2 daemon."""
     return getattr(get_settings(), "aria2_mode", "external") == "builtin"
 
 

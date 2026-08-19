@@ -1,6 +1,6 @@
 # Code of Conduct
 
-ACDC is a technical project. Contributions are evaluated primarily on technical quality, maintainability, correctness, and relevance to the project.
+DebridPulse is a technical project. Contributions are evaluated primarily on technical quality, maintainability, correctness, and relevance to the project.
 
 ## Expectations
 
@@ -30,6 +30,6 @@ Reports may be made by opening an issue or contacting a maintainer directly.
 
 ## Scope
 
-This policy applies to ACDC-controlled project spaces, including repository issues, pull requests, reviews, discussions, and other official project channels.
+This policy applies to DebridPulse-controlled project spaces, including repository issues, pull requests, reviews, discussions, and other official project channels.
 
 In short: **contribute good work, argue about the code if necessary, and don't make yourself impossible to work with.**

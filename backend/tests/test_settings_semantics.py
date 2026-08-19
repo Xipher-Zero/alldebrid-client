@@ -105,6 +105,48 @@ class SettingsFrontendContractTests(unittest.TestCase):
             js,
         )
 
+    def test_settings_footer_test_actions_follow_the_active_tab(self):
+        root = Path(__file__).resolve().parents[2]
+        js = (root / "frontend" / "static" / "app.js").read_text()
+        html = (root / "frontend" / "static" / "index.html").read_text()
+
+        expected = {
+            "tab-general": "Test AllDebrid",
+            "tab-download": "Test Aria2",
+            "tab-notifications": "Test Discord",
+            "tab-database": "Test DB",
+        }
+        for tab, label in expected.items():
+            self.assertIn(f'data-settings-test-tab="{tab}"', html)
+            self.assertIn(label, html)
+
+        self.assertEqual(html.count('data-settings-test-tab="tab-general"'), 1)
+        self.assertEqual(html.count('data-settings-test-tab="tab-download"'), 1)
+        self.assertEqual(html.count('data-settings-test-tab="tab-notifications"'), 1)
+        self.assertIn("updateSettingsFooterActions(id);", js)
+        self.assertIn("button.hidden = !visible;", js)
+        self.assertIn("visible = visible && dbType === 'postgres'", js)
+
+    def test_stalled_download_recovery_is_download_scoped_and_type_agnostic(self):
+        js = (
+            Path(__file__).resolve().parents[2]
+            / "frontend"
+            / "static"
+            / "app.js"
+        ).read_text()
+        general_panel = js.split('id="tab-general"', 1)[1].split(
+            'id="tab-download"', 1
+        )[0]
+        download_panel = js.split('id="tab-download"', 1)[1].split(
+            'id="tab-extract"', 1
+        )[0]
+
+        self.assertNotIn('id="s-stuck_download_timeout_hours"', general_panel)
+        self.assertIn('id="s-stuck_download_timeout_hours"', download_panel)
+        self.assertIn("Auto-Recover Stalled Downloads", download_panel)
+        self.assertIn("regardless of transfer source", download_panel)
+        self.assertNotIn("Torrents stuck", download_panel)
+
 
 if __name__ == "__main__":
     unittest.main()

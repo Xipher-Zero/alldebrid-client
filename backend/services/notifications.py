@@ -95,8 +95,8 @@ def _source_label(source: str) -> str:
     """Maps internal source identifiers to readable labels."""
     return {
         "manual":             "Manual (UI)",
-        "watch_file":         "Watch folder (.magnet)",
-        "watch_torrent":      "Watch folder (.torrent)",
+        "manual_file":        "Torrent file (UI)",
+        "direct_link":        "Direct link (UI)",
         "alldebrid_existing": "AllDebrid import",
         "api":                "API",
     }.get(source, source)
@@ -353,7 +353,7 @@ class NotificationService:
         release_url: str = "",
         release_notes: str = "",
     ) -> None:
-        """Notify that a new ACDC version is available."""
+        """Notify that a new DebridPulse version is available."""
         cfg = get_settings()
         if not getattr(cfg, "discord_notify_update", True):
             return
@@ -361,8 +361,8 @@ class NotificationService:
         if not url:
             return False
         desc = (
-            "**ACDC " + latest_version + "** is available.\n"
-            "You are running **" + current_version + "**."
+            f"**{APP_NAME} {latest_version}** is available.\n"
+            f"You are running **{current_version}**."
         )
         fields: List[Dict[str, Any]] = []
         if release_url:
@@ -412,7 +412,8 @@ class NotificationService:
         # Deduplication: same content within 30s → skip
         # Key includes description to avoid suppressing different torrents with same event type
         dedup_key = hashlib.md5(
-            f"{url}|{title}|{description[:200]}".encode()
+            f"{url}|{title}|{description[:200]}".encode(),
+            usedforsecurity=False,
         ).hexdigest()
 
         async with self._get_lock():

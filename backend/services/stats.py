@@ -6,7 +6,6 @@ Per-table time filters use the correct timestamp column for each table:
   torrents:       created_at
   download_files: updated_at  (has no created_at)
   events:         created_at
-  flexget_runs:   ran_at      (has no created_at)
   stats_snapshots: created_at
 """
 from __future__ import annotations
@@ -18,6 +17,8 @@ from typing import Any, Dict, Optional
 from urllib.parse import urlparse
 
 import aiohttp
+
+from core.branding import APP_SHORT_NAME
 
 logger = logging.getLogger("alldebrid.stats")
 
@@ -93,21 +94,18 @@ async def collect_all_metrics(
     tf_t  = ""   # torrents.created_at
     tf_f  = ""   # download_files.updated_at
     tf_ev = ""   # events.created_at
-    tf_fg = ""   # flexget_runs.ran_at
     p: tuple = ()   # query params (only used when since= is given)
 
     if since:
         tf_t  = "AND created_at >= ?"
         tf_f  = "AND updated_at >= ?"
         tf_ev = "AND created_at >= ?"
-        tf_fg = "AND ran_at >= ?"
         p = (since,)
     elif hours:
         h = int(hours)
         tf_t  = f"AND created_at >= datetime('now', '-{h} hours')"
         tf_f  = f"AND updated_at >= datetime('now', '-{h} hours')"
         tf_ev = f"AND created_at >= datetime('now', '-{h} hours')"
-        tf_fg = f"AND ran_at >= datetime('now', '-{h} hours')"
         # no params needed — datetime() is in the SQL string, converted by _adapt()
 
     trend_days = min(hours // 24, 14) if hours else 14
@@ -201,29 +199,6 @@ async def collect_all_metrics(
                ORDER BY date ASC""",
         )
 
-        # ── FlexGet runs (flexget_runs.ran_at) ───────────────────────────────
-        flexget: Dict[str, Any] = {}
-        try:
-            fg_rows = await db.fetchall(
-                f"""SELECT status, COUNT(*) AS cnt,
-                    COALESCE(AVG(elapsed_seconds), 0) AS avg_elapsed
-                   FROM flexget_runs WHERE 1=1 {tf_fg} GROUP BY status""",
-                p,
-            )
-            fg_recent = await db.fetchall(
-                "SELECT task_name, status, elapsed_seconds, triggered_by, ran_at"
-                " FROM flexget_runs ORDER BY ran_at DESC LIMIT 10",
-            )
-            flexget = {
-                "by_status": {
-                    r["status"]: {"count": _i(r["cnt"]), "avg_elapsed": round(_f(r["avg_elapsed"]), 2)}
-                    for r in fg_rows
-                },
-                "recent": fg_recent,
-            }
-        except Exception as exc:
-            logger.debug("FlexGet stats unavailable: %s", exc)
-
         # ── Assemble ─────────────────────────────────────────────────────────
         total_bytes = _i(vol.get("total_bytes"))
         return {
@@ -261,7 +236,6 @@ async def collect_all_metrics(
             },
             "events":      event_counts,
             "daily_trend": daily,
-            "flexget":     flexget,
         }
 
 
@@ -324,14 +298,14 @@ async def send_stats_report(
     summary = report["report"]["summary"]
     payload = {
         "event": "stats_report",
-        "source": "alldebrid-client",
+        "source": "debridpulse",
         "triggered_by": triggered_by,
         "report": report["report"],
         "raw": report["raw"],
     }
 
     if _is_discord_webhook(url):
-        _app = "ACDC"
+        _app = APP_SHORT_NAME
         try:
             from services.notifications import _get_discord_identity
             _botname, _avatar = _get_discord_identity()
@@ -339,7 +313,7 @@ async def send_stats_report(
             _botname, _avatar = _app, ""
         embeds = [{
             "title":       f"📊 Statistics Report — Last {hours}h",
-            "description": "Automated activity summary from ACDC.",
+            "description": f"Automated activity summary from {APP_SHORT_NAME}.",
             "color":       0x3B82F6,
             "fields": [
                 {"name": "Torrents",      "value": str(summary["torrents_processed"]), "inline": True},

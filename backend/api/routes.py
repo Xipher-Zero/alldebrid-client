@@ -1,5 +1,5 @@
 """
-REST API routes for ACDC.
+REST API routes for DebridPulse.
 
 Conventions:
 - All DB access uses get_db() (supports both SQLite and PostgreSQL).
@@ -11,7 +11,6 @@ import ipaddress
 import json as _json
 import logging
 import os
-import re
 import time
 from pathlib import Path
 from typing import Optional, AsyncGenerator
@@ -104,15 +103,6 @@ logger = logging.getLogger("alldebrid.routes")
 router = APIRouter()
 
 
-def _jackett_title_key(value: str) -> str:
-    """Return a tolerant comparison key for Jackett titles and stored filenames."""
-    text = (value or "").strip().lower()
-    if not text:
-        return ""
-    stem = Path(text).stem
-    return re.sub(r"[^a-z0-9]+", "", stem)
-
-
 def _duplicate_candidate_from_payload(payload: dict, source: str = "preview"):
     """Build a read-only duplicate-check candidate from API/search payload data."""
     from services.duplicates import DuplicateCandidate
@@ -174,8 +164,7 @@ def _is_public_url(url: str) -> bool:
 async def get_settings_ep():
     data = get_settings().model_dump()
     env_db_type = os.getenv("DB_TYPE", "").strip()
-    if env_db_type == "postgres_internal":
-        data["db_type"] = "postgres_internal"
+    if env_db_type in ("sqlite", "postgres"):
         data["_db_type_locked"] = True
     return data
 
@@ -243,8 +232,8 @@ async def version_check():
 async def update_settings(new: AppSettings):
     previous = get_settings()
     env_db_type = os.getenv("DB_TYPE", "").strip()
-    if env_db_type == "postgres_internal":
-        new = new.model_copy(update={"db_type": "postgres"})
+    if env_db_type in ("sqlite", "postgres"):
+        new = new.model_copy(update={"db_type": env_db_type})
     clean = validate_and_sanitise(new)
     # ── Sync derived fields before saving ───────────────────────────────────
     # max_concurrent_downloads is the application-level source of truth for
@@ -275,9 +264,6 @@ async def update_settings(new: AppSettings):
             await manager.apply_aria2_memory_tuning()
         except Exception as exc:
             logger.warning("Could not apply aria2 memory settings immediately: %s", exc)
-    if getattr(previous, "flexget_enabled", False) != getattr(clean, "flexget_enabled", False):
-        from services.flexget import reset_runtime_state
-        reset_runtime_state()
     return {"ok": True}
 
 
@@ -354,31 +340,6 @@ async def test_discord():
     return {"ok": True}
 
 
-@router.post("/settings/test-jackett-webhook")
-async def test_jackett_webhook():
-    cfg = get_settings()
-    webhook_url = (cfg.jackett_webhook_url or cfg.discord_webhook_url or "").strip()
-    if not webhook_url:
-        raise HTTPException(400, "No Jackett or Discord webhook configured")
-    from services.notifications import NotificationService, COLOR_ADDED, _now_utc
-    svc = NotificationService(webhook_url)
-    sent = await svc._send(
-        url=webhook_url,
-        title="📥 Jackett Webhook Test",
-        description=f"**{APP_SHORT_NAME}** can send Jackett notifications.",
-        color=COLOR_ADDED,
-        fields=[
-            {"name": "Source", "value": "Jackett Search", "inline": True},
-            {"name": "Indexer", "value": "Test", "inline": True},
-            {"name": "Time", "value": _now_utc(), "inline": True},
-        ],
-        bypass_dedup=True,
-    )
-    if not sent:
-        raise HTTPException(502, "Jackett webhook test failed — check webhook URL")
-    return {"ok": True}
-
-
 @router.post("/settings/test-alldebrid")
 async def test_alldebrid():
     cfg = get_settings()
@@ -429,6 +390,13 @@ async def aria2_runtime_status():
     except Exception as exc:
         diagnostics = {"error": str(exc)}
     return {**status, "diagnostics": diagnostics, **speed_stat}
+
+
+@router.get("/aria2/global-stat")
+async def aria2_global_stat():
+    """Return the lightweight live counters used by the topbar indicator."""
+    return {"ok": True, **await manager.aria2().get_global_stat()}
+
 
 @router.post("/aria2/runtime/start")
 async def aria2_runtime_start():
@@ -534,30 +502,6 @@ async def test_postgres():
         }
     except Exception as e:
         raise HTTPException(502, f"PostgreSQL connection failed: {_sanitize_error(e)}")
-
-
-@router.post("/settings/test-sonarr")
-async def test_sonarr():
-    cfg = get_settings()
-    if not cfg.sonarr_enabled or not cfg.sonarr_url:
-        raise HTTPException(400, "Sonarr not configured")
-    from services.integrations import test_connection
-    result = await test_connection(cfg.sonarr_url, cfg.sonarr_api_key)
-    if not result["ok"]:
-        raise HTTPException(502, result.get("error", "Connection failed"))
-    return result
-
-
-@router.post("/settings/test-radarr")
-async def test_radarr():
-    cfg = get_settings()
-    if not cfg.radarr_enabled or not cfg.radarr_url:
-        raise HTTPException(400, "Radarr not configured")
-    from services.integrations import test_connection
-    result = await test_connection(cfg.radarr_url, cfg.radarr_api_key)
-    if not result["ok"]:
-        raise HTTPException(502, result.get("error", "Connection failed"))
-    return result
 
 
 # ── Torrents ───────────────────────────────────────────────────────────────────
@@ -992,7 +936,17 @@ async def pause_torrent(torrent_id: int):
 async def resume_torrent(torrent_id: int):
     try:
         await manager.resume_torrent(torrent_id)
-        return {"ok": True}
+        globally_paused = bool(get_settings().paused)
+        if globally_paused:
+            # An individual Resume means queue processing is active again.
+            # Other parents remain selectively paused; they no longer keep a
+            # hidden global gate over ready successors.
+            cfg = get_settings().model_copy(update={"paused": False})
+            save_settings(cfg)
+            apply_settings(cfg)
+            globally_paused = False
+            await manager.advance_aria2_queue()
+        return {"ok": True, "paused": globally_paused}
     except Exception as e:
         raise HTTPException(400, _sanitize_error(e))
 
@@ -1102,7 +1056,9 @@ async def get_stats():
         size_total      = _v(await db.fetchone("SELECT COALESCE(SUM(size_bytes),0) as v FROM torrents WHERE status='completed'"))
         blocked         = _c(await db.fetchone("SELECT COUNT(*) as c FROM download_files WHERE blocked=1"))
         active          = _c(await db.fetchone("SELECT COUNT(*) as c FROM torrents WHERE status IN ('downloading','processing','uploading','paused')"))
-        queued          = _c(await db.fetchone("SELECT COUNT(*) as c FROM torrents WHERE status='queued'"))
+        # Provider-ready parents are queued work even before their file rows
+        # have been materialized for aria2.
+        queued          = _c(await db.fetchone("SELECT COUNT(*) as c FROM torrents WHERE status IN ('ready','queued')"))
 
         # Browser-tab operator state deliberately uses only torrents that are
         # genuinely transferring bytes.  Do not inherit the broader historical
@@ -1111,34 +1067,21 @@ async def get_stats():
         operator_row = await db.fetchone(
             """SELECT
                        COUNT(*) AS active_count,
-                       COALESCE(SUM(size_bytes), 0) AS total_bytes,
-                       COALESCE(SUM(size_bytes * COALESCE(progress, 0)), 0)
-                           AS weighted_progress,
-                       COALESCE(SUM(
-                           CASE
-                               WHEN size_bytes IS NULL OR size_bytes <= 0
-                                    OR progress IS NULL
-                               THEN 1 ELSE 0
-                           END
-                       ), 0) AS unknown_totals
+                       AVG(COALESCE(progress, 0)) AS average_progress
                FROM torrents
                WHERE status='downloading'"""
         ) or {}
         operator_active = int(operator_row.get("active_count") or 0)
         operator_progress = None
-        operator_total = int(operator_row.get("total_bytes") or 0)
-        operator_unknown = int(operator_row.get("unknown_totals") or 0)
 
-        # Parent torrent progress is already byte-weighted from aria2 file
-        # completed/total lengths. Weighting each parent by its total size
-        # therefore produces the byte-weighted aggregate across active jobs.
-        # If any active job lacks a meaningful total, omit the percentage
-        # rather than presenting a misleading partial aggregate.
-        if operator_active > 0 and operator_unknown == 0 and operator_total > 0:
-            weighted = float(operator_row.get("weighted_progress") or 0)
+        # Use the same DebridPulse parent progress displayed for each item on
+        # the dashboard, averaged equally across actively downloading queue
+        # entries. This is queue progress, not aria2's byte-weighted aggregate.
+        if operator_active > 0:
+            average = float(operator_row.get("average_progress") or 0)
             operator_progress = max(
                 0,
-                min(100, round(weighted / operator_total)),
+                min(100, round(average)),
             )
         error_count     = _c(await db.fetchone("SELECT COUNT(*) as c FROM torrents WHERE status='error'"))
         completed_count = _c(await db.fetchone("SELECT COUNT(*) as c FROM torrents WHERE status='completed'"))
@@ -1156,7 +1099,7 @@ async def get_stats():
 
         env_db  = os.getenv("DB_TYPE", "").strip()
         act_db  = getattr(get_settings(), "db_type", "sqlite")
-        db_type = ("sqlite_fallback" if act_db == "sqlite" and env_db in ("postgres", "postgres_internal")
+        db_type = ("sqlite_fallback" if act_db == "sqlite" and env_db == "postgres"
                    else act_db)
 
         return {
@@ -1296,16 +1239,19 @@ async def pause_processing():
     cfg = cfg.model_copy(update={"paused": True})
     save_settings(cfg)
     apply_settings(cfg)
-    return {"ok": True, "paused": True}
+    result = await manager.pause_all_downloads()
+    return {"ok": True, "paused": True, **result}
 
 
 @router.post("/processing/resume")
 async def resume_processing():
+    result = await manager.resume_all_downloads()
     cfg = get_settings()
     cfg = cfg.model_copy(update={"paused": False})
     save_settings(cfg)
     apply_settings(cfg)
-    return {"ok": True, "paused": False}
+    await manager.advance_aria2_queue()
+    return {"ok": True, "paused": False, **result}
 
 
 # ── Changelog ──────────────────────────────────────────────────────────────────
@@ -1531,87 +1477,8 @@ async def wipe_database_admin(body: dict | None = None):
 
 
 
-# ── FlexGet ────────────────────────────────────────────────────────────────────
-
-@router.get("/flexget/tasks")
-async def flexget_list_tasks():
-    """List available FlexGet tasks."""
-    cfg = get_settings()
-    if not getattr(cfg, "flexget_enabled", False):
-        return {"tasks": [], "enabled": False}
-    from services.flexget import _client
-    tasks = await _client().list_tasks()
-    return {"tasks": tasks, "enabled": True}
-
-
-@router.get("/flexget/running")
-async def flexget_running():
-    """Return which FlexGet tasks are currently executing (for UI indicator)."""
-    if not getattr(get_settings(), "flexget_enabled", False):
-        return {"running": []}
-    from services.flexget import running_tasks
-    return {"running": running_tasks()}
-
-
-@router.post("/flexget/run/{task_name}")
-async def flexget_run_single(task_name: str):
-    """Run a single named FlexGet task immediately, with duplicate guard."""
-    cfg = get_settings()
-    if not getattr(cfg, "flexget_enabled", False):
-        raise HTTPException(400, "FlexGet integration is not enabled")
-    from services.flexget import run_flexget_tasks, is_task_running
-    if is_task_running(task_name):
-        raise HTTPException(409, f"Task '{task_name}' is already running")
-    results = await run_flexget_tasks(tasks=[task_name], triggered_by="manual")
-    r = results[0] if results else {"task": task_name, "status": "error", "error": "no result", "elapsed": 0}
-    return {
-        "ok": r.get("status") == "ok",
-        "task": task_name,
-        "status": r.get("status"),
-        "elapsed": r.get("elapsed", 0),
-        "first_error": r.get("error") if r.get("status") != "ok" else None,
-    }
-
-
-@router.post("/flexget/run")
-async def flexget_run(body: dict = {}):
-    """Trigger FlexGet task execution manually."""
-    cfg = get_settings()
-    if not getattr(cfg, "flexget_enabled", False):
-        raise HTTPException(400, "FlexGet integration is not enabled")
-    tasks = body.get("tasks") or None  # None = all tasks
-    from services.flexget import run_flexget_tasks
-    results = await run_flexget_tasks(tasks=tasks, triggered_by="manual")
-    ok    = sum(1 for r in results if r.get("status") == "ok")
-    errs  = len(results) - ok
-    # Include first error detail for quick diagnosis in the UI
-    first_error = next(
-        (r.get("error") or str(r.get("result", "")) for r in results if r.get("status") != "ok"),
-        None,
-    )
-    return {
-        "ok": True,
-        "tasks_total": len(results),
-        "tasks_ok": ok,
-        "tasks_error": errs,
-        "first_error": first_error,
-        "results": results,
-    }
-
-
-@router.get("/flexget/history")
-async def flexget_history(limit: int = Query(50, le=200)):
-    """Return recent FlexGet run history."""
-    async with get_db() as db:
-        rows = await db.fetchall(
-            "SELECT * FROM flexget_runs ORDER BY ran_at DESC LIMIT ?", (limit,)
-        )
-    return {"runs": rows}
-
-
 # ── Statistics & Reporting ──────────────────────────────────────────────────────
 
-# ── Jackett ────────────────────────────────────────────────────────────────────
 
 
 @router.get("/aria2/global-options")
@@ -1688,7 +1555,7 @@ async def aria2_set_global_options(body: dict):
         if "max_concurrent_downloads" in cfg_updates:
             manager.reset_services()
             try:
-                await manager._dispatch_pending_aria2_queue()
+                await manager.advance_aria2_queue()
             except Exception as exc:
                 logger.debug("aria2 quick slot dispatch skipped: %s", sanitize_exception(exc))
         return {
@@ -1704,266 +1571,6 @@ async def aria2_set_global_options(body: dict):
         raise HTTPException(502, _sanitize_error(e))
 
 
-
-
-@router.post("/settings/test-jackett")
-async def test_jackett():
-    from services.jackett import test_connection
-    result = await test_connection()
-    if not result["ok"]:
-        raise HTTPException(502, result.get("error", "Jackett test failed"))
-    return result
-
-
-@router.get("/jackett/indexers")
-async def jackett_indexers():
-    from services.jackett import get_indexers
-    return await get_indexers()
-
-
-# ── Prowlarr ──────────────────────────────────────────────────────────────────
-
-@router.get("/prowlarr/indexers")
-async def prowlarr_indexers():
-    """List all Prowlarr indexers."""
-    from services.prowlarr import get_indexers as pr_indexers
-    return await pr_indexers()
-
-
-@router.get("/prowlarr/search")
-async def prowlarr_search(
-    q:          str         = Query(..., min_length=1),
-    indexerIds: str         = Query(""),
-    categories: str         = Query(""),
-    limit:      int         = Query(100, ge=1, le=500),
-):
-    """Search Prowlarr indexers and return normalised results."""
-    from services.prowlarr import search as pr_search
-    ids  = [int(i) for i in indexerIds.split(",") if i.strip().isdigit()] if indexerIds else None
-    cats = [int(c) for c in categories.split(",") if c.strip().isdigit()] if categories else None
-    try:
-        return await pr_search(q, indexer_ids=ids, categories=cats, limit=limit)
-    except Exception as exc:
-        raise HTTPException(502, _sanitize_error(exc))
-
-
-@router.post("/prowlarr/test")
-async def prowlarr_test():
-    """Verify Prowlarr connectivity and API key."""
-    from services.prowlarr import test_connection
-    result = await test_connection()
-    if not result["ok"]:
-        # Sanitise the error message — avoid leaking internal stack traces
-        err = str(result.get("error") or "Prowlarr connection failed")[:200]
-        raise HTTPException(502, err)
-    # Return only non-sensitive fields
-    return {"ok": True, "issues": result.get("issues", [])}
-
-
-@router.post("/jackett/search")
-async def jackett_search(body: dict):
-    from services.jackett import search
-    query = (body.get("query") or "").strip()
-    if not query:
-        raise HTTPException(400, "query is required")
-    category = int(body.get("category") or 0)
-    tracker = (body.get("tracker") or "").strip()
-    trackers = body.get("trackers") or []
-    if tracker and tracker not in trackers:
-        trackers = [tracker, *trackers]
-    trackers = [str(t).strip() for t in trackers if str(t).strip()]
-    limit = min(int(body.get("limit") or 100), 500)
-    hide_dead = bool(body.get("hide_dead"))
-    # Extended tag-search parameters
-    search_type = (body.get("search_type") or "search").strip().lower()
-    if search_type not in ("search", "tvsearch", "movie", "music", "book"):
-        search_type = "search"
-    genre  = (body.get("genre")  or "").strip()
-    imdbid = (body.get("imdbid") or "").strip()
-    year   = (body.get("year")   or "").strip()
-    season = (body.get("season") or "").strip()
-    ep     = (body.get("ep")     or "").strip()
-    result = await search(
-        query=query, category=category, trackers=trackers, limit=limit,
-        search_type=search_type, genre=genre, imdbid=imdbid,
-        year=year, season=season, ep=ep,
-    )
-    if hide_dead:
-        result["results"] = [
-            item for item in (result.get("results", []) or [])
-            if int(item.get("seeders") or 0) > 0
-        ]
-        result["total"] = len(result["results"])
-    hashes = sorted({str(item.get("hash") or "").strip().lower() for item in result.get("results", []) if str(item.get("hash") or "").strip()})
-    titles = sorted({str(item.get("title") or "").strip().lower() for item in result.get("results", []) if str(item.get("title") or "").strip()})
-
-    existing_by_hash: dict[str, dict] = {}
-    existing_by_title: dict[str, dict] = {}
-    existing_by_title_key: dict[str, dict] = {}
-    if hashes or titles:
-        async with get_db() as db:
-            if hashes:
-                hash_placeholders = ",".join("?" for _ in hashes)
-                rows = await db.fetchall(
-                    f"SELECT id, hash, status, name FROM torrents WHERE LOWER(hash) IN ({hash_placeholders})",
-                    hashes,
-                )
-                existing_by_hash = {str(row["hash"]).strip().lower(): row for row in rows}
-            if titles:
-                title_placeholders = ",".join("?" for _ in titles)
-                title_rows = await db.fetchall(
-                    f"""SELECT DISTINCT t.id, t.hash, t.status, t.name, df.filename
-                        FROM torrents t
-                        LEFT JOIN download_files df ON df.torrent_id = t.id
-                        WHERE LOWER(COALESCE(t.name, '')) IN ({title_placeholders})
-                           OR LOWER(COALESCE(df.filename, '')) IN ({title_placeholders})""",
-                    [*titles, *titles],
-                )
-                for row in title_rows:
-                    torrent_name = str(row.get("name") or "").strip().lower()
-                    file_name = str(row.get("filename") or "").strip().lower()
-                    if torrent_name and torrent_name not in existing_by_title:
-                        existing_by_title[torrent_name] = row
-                    torrent_key = _jackett_title_key(torrent_name)
-                    if torrent_key and torrent_key not in existing_by_title_key:
-                        existing_by_title_key[torrent_key] = row
-                    if file_name and file_name not in existing_by_title:
-                        existing_by_title[file_name] = row
-                    file_key = _jackett_title_key(file_name)
-                    if file_key and file_key not in existing_by_title_key:
-                        existing_by_title_key[file_key] = row
-
-    for item in result.get("results", []):
-        item_hash = str(item.get("hash") or "").strip().lower()
-        item_title = str(item.get("title") or "").strip().lower()
-        item_title_key = _jackett_title_key(item_title)
-        existing = None
-        if item_hash:
-            existing = existing_by_hash.get(item_hash)
-        if not existing and item_title:
-            existing = existing_by_title.get(item_title)
-        if not existing and item_title_key:
-            existing = existing_by_title_key.get(item_title_key)
-        item["already_added"] = bool(existing)
-        item["existing_torrent_id"] = existing["id"] if existing else None
-        item["existing_status"] = existing["status"] if existing else ""
-        if existing:
-            item["duplicate"] = {
-                "is_duplicate": True,
-                "confidence": 1.0,
-                "action": "skip",
-                "reason": "existing_search_match",
-                "matches": [{
-                    "torrent_id": existing["id"],
-                    "name": existing["name"],
-                    "status": existing["status"],
-                    "hash": existing["hash"],
-                    "reason": "existing_search_match",
-                    "confidence": 1.0,
-                }],
-            }
-        # NOTE: per-item check_before_add() (semantic duplicate check) is intentionally
-        # omitted here. Calling it for every search result would open hundreds of
-        # sequential DB connections and is the primary cause of search timeouts.
-        # Duplicate detection runs at add-time (POST /jackett/add) where it matters.
-
-    # ── Learning Score: annotate results with indexer trust score ─────────────
-    try:
-        from services.learning import score_result, get_learning_stats
-        learning = await get_learning_stats()
-        indexer_scores = {
-            ix["indexer"].lower(): ix["score"]
-            for ix in learning.get("indexers", [])
-        }
-        for item in result.get("results", []):
-            item["_score"] = score_result(item, indexer_scores)
-        # Sort by score descending, then seeders descending as tiebreaker
-        result["results"].sort(
-            key=lambda x: (-(x.get("_score") or 0), -int(x.get("seeders") or 0))
-        )
-        result["total"] = len(result["results"])
-    except Exception as exc:
-        logger.debug("Learning score annotation failed: %s", exc)
-
-    return result
-
-
-@router.post("/jackett/add")
-async def jackett_add(body: dict):
-    """
-    Add a torrent found via Jackett to the download queue.
-    Accepts a magnet link or a .torrent URL.
-    Fires the Jackett webhook on success.
-    """
-    magnet      = (body.get("magnet")      or "").strip()
-    torrent_url = (body.get("torrent_url") or "").strip()
-    result_hash = (body.get("hash")        or "").strip().lower()
-    title       = (body.get("title")       or "").strip() or "Unknown"
-    indexer     = (body.get("indexer")     or "").strip()
-    size_bytes  = int(body.get("size_bytes") or 0)
-
-    if not magnet and not torrent_url:
-        raise HTTPException(400, "magnet or torrent_url is required")
-
-    try:
-        added_via = ""
-        if torrent_url:
-            from services.jackett import download_torrent_file
-            try:
-                payload = await download_torrent_file(torrent_url)
-                row = await manager.add_torrent_file_direct(
-                    payload["content"],
-                    payload.get("filename") or f"{title or 'jackett'}.torrent",
-                    source="jackett",
-                    preferred_hash=(result_hash or str(payload.get("infohash") or "").strip().lower() or None),
-                )
-                added_via = "torrent_file"
-            except Exception as torrent_exc:
-                if not magnet:
-                    raise
-                logger.warning(
-                    "Jackett add: torrent URL failed for torrent '%s', falling back to magnet: %s",
-                    sanitize_log_value(str(title or "")[:80]),
-                    sanitize_exception(torrent_exc),
-                )
-                row = await manager.add_magnet_direct(magnet, source="jackett")
-                added_via = "magnet_fallback"
-        else:
-            row = await manager.add_magnet_direct(magnet, source="jackett")
-            added_via = "magnet"
-    except Exception as exc:
-        # Sanitize error message — never expose raw magnet links as the error detail
-        raw = str(exc)
-        if raw.startswith("magnet:"):
-            detail = "Failed to add magnet to AllDebrid (invalid or rejected)"
-        else:
-            detail = raw
-        raise HTTPException(400, detail)
-
-    # Fire webhook (non-blocking, don't fail the request if it errors)
-    try:
-        from services.jackett import send_jackett_webhook
-        ad_id = str(row.get("alldebrid_id") or "") if row else ""
-        await send_jackett_webhook(
-            title=title,
-            indexer=indexer,
-            size_bytes=size_bytes,
-            magnet=magnet or torrent_url,
-            alldebrid_id=ad_id,
-        )
-    except Exception as exc:
-        import logging
-        logging.getLogger("alldebrid.jackett").warning("Webhook failed: %s", exc)
-
-    if row is not None:
-        row["added_via"] = added_via
-    return row
-
-
-@router.get("/jackett/categories")
-async def jackett_categories():
-    from services.jackett import CATEGORIES
-    return [{"id": v, "name": k} for k, v in CATEGORIES.items()]
 
 
 @router.get("/stats/comprehensive")
@@ -2229,214 +1836,6 @@ async def set_torrent_priority(torrent_id: int, body: dict):
     return {"ok": True, "torrent_id": torrent_id, "priority": priority}
 
 
-# ── Rule Engine ───────────────────────────────────────────────────────────────
-
-@router.post("/rules/test")
-async def test_rules(body: dict):
-    """Dry-run the rule engine against a test context without affecting any torrent.
-    Body: {"name": "...", "source": "...", "size_bytes": 0, "label": "..."}
-    """
-    from services.rules import evaluate as rules_evaluate, _load_rules
-    rules = _load_rules()
-    actions = rules_evaluate({
-        "name":       str(body.get("name") or ""),
-        "source":     str(body.get("source") or ""),
-        "size_bytes": int(body.get("size_bytes") or 0),
-        "label":      str(body.get("label") or ""),
-        "priority":   int(body.get("priority") or 0),
-    })
-    return {"rules_count": len(rules), "actions": actions}
-
-
-# ── Saved Searches ────────────────────────────────────────────────────────────
-
-@router.get("/saved-searches")
-async def list_saved_searches():
-    async with get_db() as db:
-        rows = await db.fetchall("SELECT * FROM saved_searches ORDER BY id DESC")
-    return [dict(r) for r in rows]
-
-
-@router.post("/saved-searches")
-async def create_saved_search(body: dict):
-    name  = (body.get("name") or "").strip()
-    query = (body.get("query") or "").strip()
-    if not name or not query:
-        raise HTTPException(400, "name and query are required")
-    async with get_db() as db:
-        row_id = await db.execute_returning_id(
-            """INSERT INTO saved_searches
-               (name, query, indexer, category, min_seeders, max_size_gb,
-                min_size_gb, regex_filter, auto_add, enabled, interval_minutes)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
-            (
-                name, query,
-                body.get("indexer", ""), body.get("category", ""),
-                int(body.get("min_seeders") or 1),
-                float(body.get("max_size_gb") or 0),
-                float(body.get("min_size_gb") or 0),
-                body.get("regex_filter", ""),
-                1 if body.get("auto_add") else 0,
-                1 if body.get("enabled", True) else 0,
-                int(body.get("interval_minutes") or 60),
-            ),
-        )
-        await db.commit()
-    return {"ok": True, "id": row_id}
-
-
-@router.put("/saved-searches/{search_id}")
-async def update_saved_search(search_id: int, body: dict):
-    async with get_db() as db:
-        row = await db.fetchone("SELECT id FROM saved_searches WHERE id=?", (search_id,))
-        if not row:
-            raise HTTPException(404, "Saved search not found")
-        await db.execute(
-            """UPDATE saved_searches SET
-               name=?, query=?, indexer=?, category=?, min_seeders=?,
-               max_size_gb=?, min_size_gb=?, regex_filter=?,
-               auto_add=?, enabled=?, interval_minutes=?
-               WHERE id=?""",
-            (
-                body.get("name", ""), body.get("query", ""),
-                body.get("indexer", ""), body.get("category", ""),
-                int(body.get("min_seeders") or 1),
-                float(body.get("max_size_gb") or 0),
-                float(body.get("min_size_gb") or 0),
-                body.get("regex_filter", ""),
-                1 if body.get("auto_add") else 0,
-                1 if body.get("enabled", True) else 0,
-                int(body.get("interval_minutes") or 60),
-                search_id,
-            ),
-        )
-        await db.commit()
-    return {"ok": True, "id": search_id}
-
-
-@router.delete("/saved-searches/{search_id}")
-async def delete_saved_search(search_id: int):
-    async with get_db() as db:
-        await db.execute("DELETE FROM saved_searches WHERE id=?", (search_id,))
-        await db.commit()
-    return {"ok": True}
-
-
-@router.post("/saved-searches/{search_id}/run")
-async def run_saved_search(search_id: int):
-    """Manually trigger a saved search run."""
-    async with get_db() as db:
-        row = await db.fetchone("SELECT * FROM saved_searches WHERE id=?", (search_id,))
-        if not row:
-            raise HTTPException(404, "Saved search not found")
-    results = await _execute_saved_search(dict(row))
-    return {"ok": True, "results": results}
-
-
-async def _execute_saved_search(search: dict) -> dict:
-    """Execute a single saved search via Jackett/Prowlarr and optionally auto-add."""
-    query = search.get("query", "")
-    results_count = 0
-    added_count = 0
-    try:
-        from core.config import get_settings
-        cfg = get_settings()
-        raw_results: list = []
-
-        # Try Prowlarr first if enabled
-        if getattr(cfg, "prowlarr_enabled", False):
-            try:
-                from services.prowlarr import search as pr_search
-                pr_payload = await pr_search(query, limit=50)
-                raw_results = pr_payload.get("results", []) if isinstance(pr_payload, dict) else (pr_payload or [])
-            except Exception as exc:
-                logger.debug("saved_search: Prowlarr failed: %s", exc)
-
-        # Fallback to Jackett
-        if not raw_results and getattr(cfg, "jackett_enabled", False):
-            try:
-                from services.jackett import search as jk_search
-                jk_payload = await jk_search(query)
-                raw_results = jk_payload.get("results", []) if isinstance(jk_payload, dict) else (jk_payload or [])
-            except Exception as exc:
-                logger.debug("saved_search: Jackett failed: %s", exc)
-
-        # Filter results (re already imported at module level)
-        min_seeders = int(search.get("min_seeders") or 1)
-        max_size = float(search.get("max_size_gb") or 0) * 1024 ** 3
-        min_size = float(search.get("min_size_gb") or 0) * 1024 ** 3
-        regex_filter = search.get("regex_filter") or ""
-
-        filtered = []
-        for r in raw_results:
-            if int(r.get("seeders") or 0) < min_seeders:
-                continue
-            size = int(r.get("size_bytes") or 0)
-            if max_size > 0 and size > max_size:
-                continue
-            if min_size > 0 and size < min_size:
-                continue
-            if regex_filter:
-                try:
-                    if not re.search(regex_filter, r.get("title", ""), re.I):
-                        continue
-                except re.error:
-                    pass
-            filtered.append(r)
-
-        results_count = len(filtered)
-
-        # Auto-add if configured
-        if search.get("auto_add") and filtered:
-            for result in filtered[:10]:  # max 10 per run to avoid spam
-                magnet = result.get("magnet", "")
-                torrent_url = (result.get("torrent_url") or "").strip()
-                added = False
-                if torrent_url and str(result.get("source") or "").lower() == "jackett":
-                    try:
-                        from services.jackett import download_torrent_file
-                        from services.manager_v2 import manager
-                        payload = await download_torrent_file(torrent_url)
-                        await manager.add_torrent_file_direct(
-                            payload["content"],
-                            payload.get("filename") or f"{result.get('title') or 'saved-search'}.torrent",
-                            source="saved_search",
-                            preferred_hash=(
-                                str(result.get("hash") or "").strip().lower()
-                                or str(payload.get("infohash") or "").strip().lower()
-                                or None
-                            ),
-                        )
-                        added_count += 1
-                        added = True
-                    except Exception as exc:
-                        logger.debug("saved_search torrent-file auto-add failed: %s", sanitize_exception(exc))
-                if added:
-                    continue
-                if not magnet:
-                    continue
-                try:
-                    from services.manager_v2 import manager
-                    await manager.add_magnet_direct(magnet, source="saved_search")
-                    added_count += 1
-                except Exception as exc:
-                    logger.debug("saved_search auto-add failed: %s", sanitize_exception(exc))
-
-        # Update last_run_at
-        from db.database import get_db as _gdb
-        async with _gdb() as db:
-            await db.execute(
-                "UPDATE saved_searches SET last_run_at=CURRENT_TIMESTAMP WHERE id=?",
-                (search["id"],),
-            )
-            await db.commit()
-
-    except Exception as exc:
-        logger.error("saved_search execution error: %s", sanitize_exception(exc))
-
-    return {"results_count": results_count, "added_count": added_count}
-
-
 # ── Queue Analytics ───────────────────────────────────────────────────────────
 
 @router.get("/analytics")
@@ -2449,34 +1848,6 @@ async def get_analytics(window_hours: int = Query(24, ge=1, le=720)):
         logger.debug("get_analytics error: %s", exc)
         raise HTTPException(500, "Analytics unavailable")
 
-# ── Download Profiles ─────────────────────────────────────────────────────────
-
-@router.get("/download-profiles")
-async def list_download_profiles():
-    """Return the list of configured download profiles."""
-    import json as _json
-    cfg = load_settings()
-    try:
-        profiles = _json.loads(getattr(cfg, "download_profiles", None) or "[]")
-    except Exception:
-        profiles = []
-    return {
-        "profiles":       profiles if isinstance(profiles, list) else [],
-        "active_profile": getattr(cfg, "active_profile", "") or "",
-    }
-
-
-@router.post("/download-profiles/activate")
-async def activate_download_profile(body: dict):
-    """Activate a profile by name ("" to clear)."""
-    name = str(body.get("name") or "")
-    current = load_settings()
-    updated = current.model_copy(update={"active_profile": name})
-    save_settings(updated)
-    apply_settings(updated)
-    return {"ok": True, "active_profile": name}
-
-
 # ── Recovery ──────────────────────────────────────────────────────────────────
 
 @router.post("/recovery/run")
@@ -2486,24 +1857,6 @@ async def run_recovery():
     result = await run_recovery_checks()
     return {"ok": True, "result": result}
 
-
-# ── Priority ──────────────────────────────────────────────────────────────────
-
-@router.patch("/torrents/{torrent_id}/priority")
-async def set_torrent_priority(torrent_id: int, body: dict):
-    """Set dispatch priority for a torrent. Higher = processed sooner. Default: 0."""
-    priority = int(body.get("priority") or 0)
-    async with get_db() as db:
-        row = await db.fetchone("SELECT id FROM torrents WHERE id=?", (torrent_id,))
-        if not row:
-            raise HTTPException(404, "Torrent not found")
-        await db.execute(
-            "UPDATE torrents SET priority=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
-            (priority, torrent_id),
-        )
-        await db.commit()
-    _sse_broadcast("torrent_updated", {"torrent_id": torrent_id, "priority": priority})
-    return {"ok": True, "torrent_id": torrent_id, "priority": priority}
 
 # ── MediaInfo ─────────────────────────────────────────────────────────────────
 
@@ -2525,40 +1878,6 @@ async def get_mediainfo_endpoint(path: str = Query(..., description="Local file 
         raise HTTPException(404, "File not found")
     from services.mediainfo import get_mediainfo
     return await get_mediainfo(resolved)
-
-# ── Generic Webhook ───────────────────────────────────────────────────────────
-
-@router.post("/webhooks/test")
-async def test_webhook(body: dict):
-    """
-    Send a test POST to a webhook URL and return the HTTP status.
-    Body: {"url": "https://...", "secret": "..."}
-    Read-only — does not modify any torrent data.
-    """
-    url    = str(body.get("url") or "")
-    secret = str(body.get("secret") or "")
-    if not url:
-        raise HTTPException(400, "url is required")
-    from services.webhook_actions import fire, EVENT_COMPLETE
-    ok = await fire(
-        EVENT_COMPLETE,
-        {"id": 0, "name": "Test Torrent", "status": "completed", "source": "manual", "size_bytes": 0},
-        url=url, secret=secret or None,
-    )
-    return {"ok": ok, "url": url}
-
-
-# ── Historical Learning ───────────────────────────────────────────────────────
-
-@router.get("/stats/learning")
-async def get_learning():
-    """Return indexer + release-group performance stats from the last 90 days."""
-    from services.learning import get_learning_stats
-    try:
-        return await get_learning_stats()
-    except Exception as exc:
-        logger.debug("get_learning error: %s", exc)
-        raise HTTPException(500, "Learning stats unavailable")
 
 # ── AllDebrid orphan cleanup ───────────────────────────────────────────────────
 

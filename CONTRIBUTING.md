@@ -1,4 +1,4 @@
-# Contributing to ACDC
+# Contributing to DebridPulse
 
 Thank you for considering contributing! Here's how to get involved.
 
@@ -8,8 +8,8 @@ Thank you for considering contributing! Here's how to get involved.
 
 1. **Fork** the repository and clone your fork:
    ```bash
-   git clone https://github.com/Xipher-Zero/alldebrid-client.git
-   cd alldebrid-client
+   git clone https://github.com/Xipher-Zero/debridpulse.git
+   cd debridpulse
    ```
 
 2. **Set up the development environment:**

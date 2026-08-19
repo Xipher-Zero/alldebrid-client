@@ -3305,7 +3305,7 @@ class TorrentManager:
             # download_files.updated_at should advance only for a real state/size change.
             sz = dl.total_length if dl.total_length > 0 else None
             current_file_status = str(row["status"] or "")
-            current_file_size = int(row["size_bytes"] or 0)
+            current_file_size = int(row.get("size_bytes") or 0)
             size_changed = sz is not None and int(sz) != current_file_size
 
             def file_state_needs_update(desired_status: str) -> bool:

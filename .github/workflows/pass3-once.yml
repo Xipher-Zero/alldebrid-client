@@ -21,7 +21,7 @@ jobs:
 
       - name: Verify exact baseline
         run: |
-          expected="28a48df9637a15ada5660fb19d552d6acec5267f"
+          expected="a3105ed50aae1f185423cd83845c4c5c79606b34"
           actual="$(git rev-parse HEAD)"
           echo "expected=$expected"
           echo "actual=$actual"
@@ -30,18 +30,16 @@ jobs:
             exit 1
           fi
 
-      - name: Materialize guarded patcher from automation base
+      - name: Materialize guarded follow-up from automation base
         run: |
           git fetch origin automation/pass3-base
-          git show origin/automation/pass3-base:.pass3_apply.py > .pass3_apply.py
+          git show origin/automation/pass3-base:.pass3_fix.py > .pass3_fix.py
 
-      - name: Apply guarded pass 3 patch
-        run: python .pass3_apply.py
+      - name: Apply guarded pass 3 follow-up
+        run: python .pass3_fix.py
 
-      - name: Normalize generated test EOF and remove local patcher
-        run: |
-          python -c "from pathlib import Path; p=Path('backend/tests/test_ui_responsiveness.py'); p.write_text(p.read_text(encoding='utf-8').rstrip() + '\n', encoding='utf-8')"
-          rm .pass3_apply.py
+      - name: Remove temporary local patcher
+        run: rm .pass3_fix.py
 
       - name: Static syntax checks
         run: |
@@ -50,11 +48,11 @@ jobs:
           node --check frontend/static/app.js
           git diff --check
 
-      - name: Commit pass 3 to work branch
+      - name: Commit follow-up to work branch
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add CHANGELOG.md backend/services/manager_v2.py backend/tests/test_ui_responsiveness.py frontend/static/app.js
+          git add backend/services/manager_v2.py backend/tests/test_ui_responsiveness.py
           git diff --cached --check
-          git commit -m "perf: reduce polling and UI refresh churn"
+          git commit -m "fix: preserve pass3 provider no-op semantics"
           git push origin HEAD:work/v1.0.2-ui-responsiveness

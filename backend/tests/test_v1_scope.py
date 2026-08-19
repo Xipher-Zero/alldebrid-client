@@ -155,7 +155,7 @@ def test_release_workflow_accepts_public_v1_tags():
     assert "- 'v*'" in workflow
     assert "startsWith(github.ref, 'refs/tags/v')" in workflow
     assert "DB_PATH=/app/data/debridpulse.db" in workflow
-    assert (REPO_ROOT / "VERSION").read_text().strip() == "1.0.0"
+    assert (REPO_ROOT / "VERSION").read_text().strip() == "1.0.1"
     assert 'tag = f"v{version}"' in release_helper
     assert "internal-v{version}" not in release_helper
 

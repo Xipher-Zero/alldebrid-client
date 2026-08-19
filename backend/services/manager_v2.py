@@ -2606,6 +2606,7 @@ class TorrentManager:
         # ── Dedupe and categorise files ───────────────────────────────────────
         # Build work list: filter out duplicates and immediately-blocked files
         work_items: List[Dict] = []
+        manifest_rows: List[tuple] = []
         for file_info in flat_files:
             relative_path = file_info.get("path") or file_info.get("name") or "download.bin"
             display_name = str(PurePosixPath(relative_path.replace("\\", "/")))
@@ -2637,7 +2638,20 @@ class TorrentManager:
 
             if blocked:
                 blocked_items.append({"filename": display_name, "size_bytes": file_size, "reason": reason})
-                await self._log_file(torrent_id, display_name, source_link, str(local_path), "blocked", reason, file_size)
+                manifest_rows.append(
+                    (
+                        torrent_id,
+                        display_name,
+                        file_size,
+                        source_link,
+                        source_link,
+                        str(local_path),
+                        "blocked",
+                        client_name,
+                        1,
+                        reason,
+                    )
+                )
                 continue
 
             work_items.append({
@@ -2647,92 +2661,66 @@ class TorrentManager:
                 "local_path": local_path,
             })
 
-        # ── Unlock links in parallel (rate-limited) ──────────────────────────
-        # Parallel calls are much faster than sequential, but firing hundreds
-        # of concurrent requests triggers AllDebrid HTTP 503 rate-limiting.
-        # A semaphore caps concurrent unlock calls to avoid overloading the API.
-        _unlock_sem = asyncio.Semaphore(3)
+        # ── Materialize the provider manifest without eager URL generation ───
+        # The dispatcher owns direct-URL generation because it knows which files
+        # actually have an aria2 slot. Eagerly unlocking every manifest entry here
+        # doubled provider API calls and made large cached torrents slow to queue.
+        for item in work_items:
+            display_name = item["display_name"]
+            file_size = item["file_size"]
+            source_link = item["source_link"]
+            local_path = item["local_path"]
 
-        async def _unlock_one(item: Dict) -> Dict:
-            async with _unlock_sem:
-                try:
-                    unlocked = await _retry_async(self.ad().unlock_link, item["source_link"])
-                    download_url = unlocked.get("link", "")
-                    if not download_url:
-                        raise Exception("Empty download URL from unlock")
-                    size = item["file_size"] if item["file_size"] > 0 else int(unlocked.get("filesize", 0) or 0)
-                    return {**item, "download_url": download_url, "file_size": size, "error": None}
-                except Exception as exc:
-                    return {**item, "download_url": "", "error": str(exc)}
-
-        unlock_results = await asyncio.gather(*[_unlock_one(w) for w in work_items])
-
-        for result in unlock_results:
-            display_name = result["display_name"]
-            file_size    = result["file_size"]
-            source_link  = result["source_link"]
-            local_path   = result["local_path"]
-
-            if result["error"]:
-                error_text = result["error"]
-
-                # AllDebrid can expose individual manifest entries whose backing
-                # host cannot be unlocked. Treat only this provider limitation
-                # as blocked so valid files can complete normally. All other
-                # unlock failures remain errors.
-                if "LINK_HOST_NOT_SUPPORTED" in error_text:
-                    logger.warning("File blocked [%s]: %s", display_name, error_text)
-                    blocked_items.append({
-                        "filename": display_name,
-                        "size_bytes": file_size,
-                        "reason": error_text,
-                    })
-                    await self._log_file(
+            if local_path.exists() and (
+                file_size <= 0
+                or local_path.stat().st_size >= max(file_size - 1024, 0)
+            ):
+                transferred_items.append(
+                    {"filename": display_name, "size_bytes": file_size}
+                )
+                manifest_rows.append(
+                    (
                         torrent_id,
                         display_name,
+                        file_size,
+                        source_link,
                         source_link,
                         str(local_path),
-                        "blocked",
-                        error_text,
-                        file_size,
-                        download_client=client_name,
+                        "completed",
+                        client_name,
+                        0,
+                        None,
                     )
-                else:
-                    logger.error("File failed [%s]: %s", display_name, error_text)
-                    failed_items.append({
-                        "filename": display_name,
-                        "size_bytes": file_size,
-                        "reason": error_text,
-                    })
-                    await self._log_file(
-                        torrent_id,
-                        display_name,
-                        source_link,
-                        str(local_path),
-                        "error",
-                        error_text,
-                        file_size,
-                        download_client=client_name,
-                    )
-                continue
-
-            download_url = result["download_url"]
-            if local_path.exists() and (file_size <= 0 or local_path.stat().st_size >= max(file_size - 1024, 0)):
-                transferred_items.append({"filename": display_name, "size_bytes": file_size})
-                await self._log_file(torrent_id, display_name, download_url, str(local_path), "completed", None, file_size)
+                )
                 continue
 
             queued_items.append({"filename": display_name, "size_bytes": file_size})
-            await self._log_file(
-                torrent_id,
-                display_name,
-                source_link,
-                str(local_path),
-                "pending",
-                None,
-                file_size,
-                download_client="aria2",
+            manifest_rows.append(
+                (
+                    torrent_id,
+                    display_name,
+                    file_size,
+                    source_link,
+                    source_link,
+                    str(local_path),
+                    "pending",
+                    "aria2",
+                    0,
+                    None,
+                )
             )
+
+        if manifest_rows:
+            async with get_db() as db:
+                await db.executemany(
+                    """INSERT INTO download_files
+                       (torrent_id, filename, size_bytes, source_url,
+                        download_url, local_path, status, download_id,
+                        download_client, blocked, block_reason, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, CURRENT_TIMESTAMP)""",
+                    manifest_rows,
+                )
+                await db.commit()
 
         blocked_count = len(blocked_items)
         failed_count = len(failed_items)
@@ -3093,8 +3081,39 @@ class TorrentManager:
             for row in unlocked_rows:
                 local_path = Path(row["local_path"])
                 if row["_err"]:
-                    logger.error("aria2 dispatch failed [%s]: %s", row["filename"], row["_err"])
-                    await self._update_file_state(row["file_id"], "error", row["local_path"], reason=str(row["_err"]))
+                    error = row["_err"]
+                    error_text = str(error)
+                    provider_code = str(getattr(error, "code", "") or "")
+                    if (
+                        provider_code == "LINK_HOST_NOT_SUPPORTED"
+                        or "LINK_HOST_NOT_SUPPORTED" in error_text
+                    ):
+                        logger.warning(
+                            "aria2 dispatch blocked unsupported provider file [%s]: %s",
+                            row["filename"],
+                            error_text,
+                        )
+                        async with get_db() as db:
+                            await db.execute(
+                                """UPDATE download_files
+                                   SET status='blocked', blocked=1, block_reason=?,
+                                       download_id=NULL, updated_at=CURRENT_TIMESTAMP
+                                   WHERE id=?""",
+                                (error_text, row["file_id"]),
+                            )
+                            await db.commit()
+                    else:
+                        logger.error(
+                            "aria2 dispatch failed [%s]: %s",
+                            row["filename"],
+                            error,
+                        )
+                        await self._update_file_state(
+                            row["file_id"],
+                            "error",
+                            row["local_path"],
+                            reason=error_text,
+                        )
                     await self._finalize_aria2_torrent(row["torrent_id"])
                     continue
                 try:

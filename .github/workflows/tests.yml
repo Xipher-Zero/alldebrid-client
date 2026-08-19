@@ -8,78 +8,94 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   test:
     runs-on: ubuntu-latest
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
         with:
           python-version: '3.12'
           cache: 'pip'
           cache-dependency-path: |
             backend/requirements.txt
             backend/requirements-dev.txt
-      - run: cd backend && pip install -r requirements-dev.txt
-      - run: cd backend && python -m pytest tests/ -v --tb=short
-      - run: |
+
+      - name: Install dependencies
+        run: |
           cd backend
-          python -m py_compile api/routes.py core/config.py core/config_validator.py core/scheduler.py db/database.py db/migration.py main.py services/alldebrid.py services/aria2.py services/backup.py services/db_maintenance.py services/manager_v2.py services/notifications.py services/stats.py
-      - run: node --check frontend/static/app.js
+          pip install -r requirements-dev.txt
+
+      - name: Run all tests
+        run: |
+          cd backend
+          python -m pytest tests/ -v --tb=short
+
+      - name: Check Python syntax (all service files)
+        run: |
+          cd backend
+          python -m py_compile \
+            api/routes.py \
+            core/config.py \
+            core/config_validator.py \
+            core/scheduler.py \
+            db/database.py \
+            db/migration.py \
+            main.py \
+            services/alldebrid.py \
+            services/aria2.py \
+            services/backup.py \
+            services/db_maintenance.py \
+            services/manager_v2.py \
+            services/notifications.py \
+            services/stats.py
+          echo "All files syntax OK"
+
+      - name: Check frontend JavaScript syntax
+        run: node --check frontend/static/app.js
 
   security:
     runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     needs: test
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-      - run: |
-          cd backend
-          pip install -r requirements.txt
-          pip install pip-audit bandit
-          pip-audit -r requirements.txt --progress-spinner off
-          bandit -r . --exclude ./tests --severity-level medium --confidence-level medium -f txt || true
 
-  slot-aware-unlock-refactor:
-    if: github.event_name == 'pull_request' && github.head_ref == 'work/v1.0.4-performance-pass-4' && github.actor != 'github-actions[bot]'
-    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: work/v1.0.4-performance-pass-4
-          fetch-depth: 0
-      - uses: actions/setup-python@v6
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
         with:
           python-version: '3.12'
           cache: 'pip'
-          cache-dependency-path: |
-            backend/requirements.txt
-            backend/requirements-dev.txt
-      - name: Apply refactor
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies + audit tools
         run: |
-          python .github/scripts/v104_phase4_refactor.py
-          python .github/scripts/v104_phase4_testfix.py
-      - name: Validate final tree
-        run: |
-          pip install -r backend/requirements-dev.txt
           cd backend
-          python -m pytest tests/ -q
-          cd ..
-          python -m compileall -q backend
-          node --check frontend/static/app.js
-          git diff --check
-      - name: Commit validated refactor
+          pip install -r requirements.txt
+          pip install pip-audit bandit
+
+      - name: pip-audit (known CVEs in dependencies)
         run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -A
-          git commit -m 'Defer provider unlocks until delivery slots are available'
-          git fetch origin work/v1.0.4-performance-pass-4
-          git rebase origin/work/v1.0.4-performance-pass-4
-          git push origin HEAD:work/v1.0.4-performance-pass-4
+          cd backend
+          pip-audit -r requirements.txt --progress-spinner off
+
+      - name: bandit (Python security linting)
+        run: |
+          cd backend
+          bandit -r . \
+            --exclude ./tests \
+            --severity-level medium \
+            --confidence-level medium \
+            -f txt \
+            || true   # advisory only — does not fail the build

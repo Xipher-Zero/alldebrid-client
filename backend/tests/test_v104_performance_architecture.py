@@ -186,3 +186,22 @@ def test_lifespan_closes_database_runtime_pool():
     )[0]
     assert "from db.database import close_db_runtime" in shutdown
     assert "await close_db_runtime()" in shutdown
+
+
+def test_magnet_materialization_defers_unlock_until_a_delivery_slot_exists():
+    manager = (REPO_ROOT / "backend/services/manager_v2.py").read_text()
+    download = manager.split("async def _download(self, torrent_id", 1)[1].split(
+        "async def _fetch_ready_files", 1
+    )[0]
+    assert "Materialize the provider manifest without eager URL generation" in download
+    assert "unlock_results = await asyncio.gather" not in download
+    assert "manifest_rows: List[tuple] = []" in download
+    assert "source_url," in download
+    assert download.count("await db.executemany(") >= 1
+
+    dispatcher = manager.split("async def _dispatch_pending_aria2_queue", 1)[1].split(
+        "async def _schedule_ready_aria2_parents", 1
+    )[0]
+    assert "await _retry_async(self.ad().unlock_link, sl)" in dispatcher
+    assert 'provider_code == "LINK_HOST_NOT_SUPPORTED"' in dispatcher
+    assert "SET status='blocked', blocked=1" in dispatcher

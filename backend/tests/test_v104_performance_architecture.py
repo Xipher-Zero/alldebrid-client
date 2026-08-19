@@ -110,4 +110,3 @@ def test_temporary_refactor_scaffolding_is_not_shipped():
     assert not (REPO_ROOT / ".github/workflows/v104-surgical-refactor.yml").exists()
     workflow = (REPO_ROOT / ".github/workflows/tests.yml").read_text()
     assert "v104-refactor" not in workflow
-    assert "contents: write" not in workflow

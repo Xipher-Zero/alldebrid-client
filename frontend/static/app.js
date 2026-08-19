@@ -6,6 +6,7 @@ let currentTorrentSearch = '';
 let torrentPage = 1;
 let torrentPageSize = 25;
 let torrentTotal = 0;
+let _torrentSearchTimer = null;
 let settingsData = {};
 let aria2DownloadsTimer = null;
 let pausedTransferCount = 0;
@@ -981,15 +982,24 @@ async function addDebridLinks() {
 
 // ── Torrents ───────────────────────────────────────────────────────────────
 function setFilter(el, status) {
-  document.querySelectorAll('.ftab').forEach(t=>t.classList.remove('active'));
+  document.querySelectorAll('#view-torrents .filter-tabs .ftab').forEach(t=>t.classList.remove('active'));
   el.classList.add('active');
   currentFilter = status; torrentPage = 1;
+  if (_torrentSearchTimer) {
+    clearTimeout(_torrentSearchTimer);
+    _torrentSearchTimer = null;
+  }
   loadTorrents();
 }
 
 function onTorrentSearchInput() {
   currentTorrentSearch = (document.getElementById('torrent-search')?.value || '').trim();
-  torrentPage = 1; loadTorrents();
+  torrentPage = 1;
+  if (_torrentSearchTimer) clearTimeout(_torrentSearchTimer);
+  _torrentSearchTimer = setTimeout(() => {
+    _torrentSearchTimer = null;
+    loadTorrents().catch(()=>{});
+  }, 250);
 }
 
 async function loadTorrents() {
@@ -2682,6 +2692,7 @@ function switchSettingsTab(id) {
   }
   if (id === 'tab-download') {
     loadAria2Runtime().catch(()=>{});
+    loadAria2Downloads().catch(()=>{});
     aria2DownloadsTimer = setInterval(() => {
       const panel = document.getElementById('tab-download');
       if (panel && panel.classList.contains('active')) loadAria2Downloads().catch(()=>{});
@@ -2963,7 +2974,6 @@ async function loadAria2Runtime() {
   try {
     const data = await api('GET', '/aria2/runtime');
     renderAria2Runtime(data);
-    loadAria2Downloads().catch(()=>{});
     const badge = document.getElementById('aria2-speed-badge');
     if (badge) {
       const isBuiltin = (data.mode || '') === 'builtin';

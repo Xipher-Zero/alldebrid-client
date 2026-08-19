@@ -329,3 +329,88 @@ def test_stats_operator_actions_acknowledge_before_network_completion():
         "setButtonPending(button, false);"
         in snapshot
     )
+
+
+def test_pass3_polling_noops_do_not_refresh_transfer_freshness():
+    manager = (REPO_ROOT / "backend/services/manager_v2.py").read_text()
+
+    provider = manager.split(
+        "async def _apply_provider_update", 1
+    )[1].split(
+        "async def _set_provider_missing", 1
+    )[0]
+
+    assert "meaningful_changed = (" in provider
+    assert "if meaningful_changed:" in provider
+    assert "if visible_changed:" in provider
+    assert "persisted_progress = current_progress if local_delivery_active else progress" in provider
+    assert "stable provider polling" in provider.lower()
+
+    aggregate = manager.split(
+        "async def _update_aria2_parent_progress", 1
+    )[1].split(
+        "async def _update_file_state", 1
+    )[0]
+
+    assert "persist_progress_changed = progress != current_progress" in aggregate
+    assert "broadcast_progress_changed = int(progress) != int(current_progress)" in aggregate
+    assert "await db.executemany(" in aggregate
+    assert "updates.append((progress, parent_status, torrent_id))" in aggregate
+
+    sync = manager.split(
+        "async def sync_aria2_downloads", 1
+    )[1].split(
+        "async def _reset_torrent_for_redownload", 1
+    )[0]
+
+    assert "f.download_id, f.status, f.blocked, f.size_bytes" in sync
+    assert "def file_state_needs_update(desired_status: str)" in sync
+
+
+def test_pass3_import_reconciliation_does_not_touch_stable_rows():
+    manager = (REPO_ROOT / "backend/services/manager_v2.py").read_text()
+    imported = manager.split(
+        "async def import_existing_magnets", 1
+    )[1].split(
+        "async def delete_torrent", 1
+    )[0]
+
+    assert "metadata_changed = (" in imported
+    assert imported.count("if metadata_changed:") == 2
+    assert "stuck-transfer watchdog" in imported
+    assert "Stable provider" in imported
+
+
+def test_pass3_frontend_queue_requests_search_and_filter_scope():
+    js = (REPO_ROOT / "frontend/static/app.js").read_text()
+
+    runtime = js.split(
+        "async function loadAria2Runtime()", 1
+    )[1].split(
+        "async function aria2RuntimeAction", 1
+    )[0]
+    assert "loadAria2Downloads" not in runtime
+
+    switcher = js.split(
+        "function switchSettingsTab", 1
+    )[1].split(
+        "function updateSettingsFooterActions", 1
+    )[0]
+    assert "loadAria2Runtime().catch(()=>{});" in switcher
+    assert "loadAria2Downloads().catch(()=>{});" in switcher
+
+    search = js.split(
+        "function onTorrentSearchInput()", 1
+    )[1].split(
+        "async function loadTorrents()", 1
+    )[0]
+    assert "_torrentSearchTimer" in search
+    assert "}, 250);" in search
+
+    filter_fn = js.split(
+        "function setFilter(el, status)", 1
+    )[1].split(
+        "function onTorrentSearchInput", 1
+    )[0]
+    assert "#view-torrents .filter-tabs .ftab" in filter_fn
+    assert "document.querySelectorAll('.ftab')" not in filter_fn

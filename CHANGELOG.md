@@ -10,6 +10,8 @@
 - Added incremental SSE progress updates so progress-only events no longer rebuild entire clickable tables.
 - Returned authoritative settings from `PUT /settings` and removed redundant follow-up settings reads.
 - Added frontend cache-busting and regression coverage for the responsiveness contract.
+- Reduced no-op provider/aria2 database writes and SSE churn so transfer freshness reflects real progress.
+- Removed redundant aria2 queue fetches, debounced download search input, and scoped download filters to their own view.
 
 ## [1.0.1] — 2026-08-19
 

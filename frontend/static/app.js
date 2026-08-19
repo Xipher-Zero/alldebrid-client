@@ -3581,52 +3581,47 @@ async function testPostgres(button) {
           }
         );
 
+        var progressStatsTimer = null;
+
         es.addEventListener(
           'torrent_updated',
           function(e) {
             let payload = {};
 
             try {
-              payload =
-                JSON.parse(
-                  e.data || '{}'
-                );
+              payload = JSON.parse(e.data || '{}');
             } catch (_) {}
 
             const patchedProgress =
-              patchProgressOnlyTransferEvent(
-                payload
-              );
+              patchProgressOnlyTransferEvent(payload);
 
             if (!patchedProgress) {
               if (
                 document
-                  .getElementById(
-                    'view-torrents'
-                  )
-                  ?.classList.contains(
-                    'active'
-                  )
+                  .getElementById('view-torrents')
+                  ?.classList.contains('active')
               ) {
-                loadTorrents()
-                  .catch(()=>{});
+                loadTorrents().catch(()=>{});
               }
 
               if (
                 document
-                  .getElementById(
-                    'view-dashboard'
-                  )
-                  ?.classList.contains(
-                    'active'
-                  )
+                  .getElementById('view-dashboard')
+                  ?.classList.contains('active')
               ) {
-                loadRecent()
-                  .catch(()=>{});
+                loadRecent().catch(()=>{});
               }
-            }
 
-            loadStats().catch(()=>{});
+              loadStats().catch(()=>{});
+            } else if (!progressStatsTimer) {
+              progressStatsTimer = setTimeout(
+                ()=>{
+                  progressStatsTimer = null;
+                  loadStats().catch(()=>{});
+                },
+                1500
+              );
+            }
           }
         );
 

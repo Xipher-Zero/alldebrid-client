@@ -987,6 +987,9 @@ class TorrentManager:
             missing = 0
             total_size = 0
             resolved_names: List[str] = []
+            failed_updates: List[tuple] = []
+            success_updates: List[tuple] = []
+            generation_events: List[tuple] = []
 
             for position, result in enumerate(results, start=1):
                 if result["error"]:
@@ -1000,22 +1003,16 @@ class TorrentManager:
                         if is_missing
                         else result["error"]
                     )
-                    async with get_db() as db:
-                        await db.execute(
-                            """UPDATE download_files
-                               SET status=?, block_reason=?,
-                                   updated_at=CURRENT_TIMESTAMP
-                               WHERE id=?""",
-                            (failure_status, failure_reason, result["file_id"]),
+                    failed_updates.append(
+                        (failure_status, failure_reason, result["file_id"])
+                    )
+                    generation_events.append(
+                        (
+                            torrent_id,
+                            "error",
+                            f"AllDebrid could not generate link {position}: {failure_reason}",
                         )
-                        await db.execute(
-                            "INSERT INTO events (torrent_id, level, message) VALUES (?, 'error', ?)",
-                            (
-                                torrent_id,
-                                f"AllDebrid could not generate link {position}: {failure_reason}",
-                            ),
-                        )
-                        await db.commit()
+                    )
                 else:
                     succeeded += 1
                     total_size += int(result["size_bytes"] or 0)
@@ -1028,22 +1025,41 @@ class TorrentManager:
                             result["source_url"] in reusable_source_urls
                         ),
                     )
-                    async with get_db() as db:
-                        await db.execute(
+                    success_updates.append(
+                        (
+                            result["filename"],
+                            result["size_bytes"],
+                            result["generated_url"],
+                            str(local_path),
+                            result["file_id"],
+                        )
+                    )
+
+            if failed_updates or success_updates or generation_events:
+                async with get_db() as db:
+                    if failed_updates:
+                        await db.executemany(
+                            """UPDATE download_files
+                               SET status=?, block_reason=?,
+                                   updated_at=CURRENT_TIMESTAMP
+                               WHERE id=?""",
+                            failed_updates,
+                        )
+                    if success_updates:
+                        await db.executemany(
                             """UPDATE download_files
                                SET filename=?, size_bytes=?, download_url=?,
                                    local_path=?, status='pending', block_reason=NULL,
                                    updated_at=CURRENT_TIMESTAMP
                                WHERE id=?""",
-                            (
-                                result["filename"],
-                                result["size_bytes"],
-                                result["generated_url"],
-                                str(local_path),
-                                result["file_id"],
-                            ),
+                            success_updates,
                         )
-                        await db.commit()
+                    if generation_events:
+                        await db.executemany(
+                            "INSERT INTO events (torrent_id, level, message) VALUES (?, ?, ?)",
+                            generation_events,
+                        )
+                    await db.commit()
 
             final_name = direct_link_collection_name(
                 resolved_names, normalized
@@ -1431,7 +1447,6 @@ class TorrentManager:
             ).fetchall()
 
         if not rows:
-            await self.sync_download_clients()
             return
 
         # Attempt a single bulk call first.
@@ -1482,7 +1497,6 @@ class TorrentManager:
                     logger.error("Status poll failed for %s: %s", row["alldebrid_id"], exc)
                     await self._increment_poll_failure(row["id"], row["name"], str(exc))
 
-        await self.sync_download_clients()
 
     async def deep_sync_aria2_finished(self):
         async with self._aria2_state_lock:

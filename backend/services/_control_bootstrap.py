@@ -2,8 +2,8 @@
 
 The package initializer installs this hook before ``services.manager_v2`` is
 loaded. The normal module loader runs first; once the singleton manager exists
-we attach the v1.0.3 transfer-control reliability layer and its parent-status
-guard.
+we attach the v1.0.3 transfer-control reliability layer, parent-status guard,
+and mixed global/selective pause semantics.
 """
 from __future__ import annotations
 
@@ -19,9 +19,11 @@ _HOOK_MARKER = "_debridpulse_transfer_control_import_hook"
 def _install_manager_control(manager) -> None:
     from services.transfer_control import install_transfer_control
     from services.pause_parent_status import install_parent_progress_guard
+    from services.global_pause_semantics import install_global_pause_semantics
 
     install_transfer_control(manager)
     install_parent_progress_guard(manager)
+    install_global_pause_semantics(manager)
 
 
 class _PostLoadManagerLoader(Loader):

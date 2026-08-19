@@ -8,8 +8,11 @@ parent-status calculation captured by the v1.0.3 transfer-control coordinator.
 """
 from __future__ import annotations
 
+import logging
+
 from db.database import get_db
 
+logger = logging.getLogger("alldebrid.pause_parent_status")
 _RUNNABLE_FILE_STATES = frozenset({"pending", "queued", "downloading", "paused"})
 
 
@@ -204,9 +207,9 @@ def install_parent_progress_guard(manager) -> None:
                     },
                 )
             except Exception as exc:
-                manager.logger.debug(
+                logger.debug(
                     "Aggregate aria2 progress SSE broadcast failed: %s", exc
-                ) if hasattr(manager, "logger") else None
+                )
 
     coordinator._orig_parent_progress = aggregate_parent_progress
     coordinator._parent_progress_guard_installed = True

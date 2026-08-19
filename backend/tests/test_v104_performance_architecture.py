@@ -108,8 +108,11 @@ def test_performance_diagnostics_endpoint_exposes_only_runtime_counters():
 def test_temporary_refactor_scaffolding_is_not_shipped():
     assert not (REPO_ROOT / ".github/scripts/v104_surgical_refactor.py").exists()
     assert not (REPO_ROOT / ".github/workflows/v104-surgical-refactor.yml").exists()
+    assert not (REPO_ROOT / ".github/scripts/v104_phase2_refactor.py").exists()
     workflow = (REPO_ROOT / ".github/workflows/tests.yml").read_text()
     assert "v104-refactor" not in workflow
+    assert "v104-phase2" not in workflow
+    assert "contents: write" not in workflow
 
 
 def test_external_aria2_ownership_is_cached_after_durable_bootstrap():
@@ -139,3 +142,4 @@ def test_manager_control_bootstrap_is_explicit_not_import_hooked():
     assert "_install_parent_progress_guard(manager)" in manager
     assert "_install_global_pause_semantics(manager)" in manager
     assert "install_import_hook" not in services_init
+    assert not (REPO_ROOT / "backend/services/_control_bootstrap.py").exists()

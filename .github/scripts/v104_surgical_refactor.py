@@ -28,6 +28,7 @@ def replace_between(path: Path, start: str, end: str, replacement: str) -> None:
 manager = ROOT / "backend/services/manager_v2.py"
 routes = ROOT / "backend/api/routes.py"
 app = ROOT / "frontend/static/app.js"
+scope_test = ROOT / "backend/tests/test_v1_scope.py"
 
 # Provider polling and download-client reconciliation already have independent
 # scheduler loops. Keep each domain responsible for its own state instead of
@@ -294,5 +295,19 @@ sse_replacement = '''        var progressStatsTimer = null;
         );
 '''
 replace_between(app, sse_start, sse_end, sse_replacement)
+
+# The tab-title contract still requires an equal-weight average of active parent
+# progress; update the static assertion to the equivalent conditional aggregate.
+replace_once(
+    scope_test,
+    '''    assert "AVG(COALESCE(progress, 0)) AS average_progress" in routes
+    assert "AS weighted_progress" not in routes
+    assert "WHERE status='downloading'" in routes
+''',
+    '''    assert "AVG(CASE WHEN status='downloading' THEN COALESCE(progress, 0)" in routes
+    assert "AS operator_active_progress_pct" in routes
+    assert "AS weighted_progress" not in routes
+''',
+)
 
 print("v1.0.4 surgical refactor applied")

@@ -22,9 +22,16 @@ class _Coordinator:
         self._pause_intents = set()
         self.dispatch_snapshot = None
         self.initialized = False
+        self.confirm_calls = 0
 
     async def ensure_initialized(self) -> None:
         self.initialized = True
+
+    async def confirm_gid(self, gid: str, **kwargs):
+        self.confirm_calls += 1
+        if gid == "missing":
+            return None
+        return _Download(gid)
 
     async def _owned(self, downloads):
         return list(downloads)
@@ -112,6 +119,20 @@ async def test_scheduler_snapshot_context_never_leaks_into_child_task():
     assert manager.raw_calls == 1
 
 
+@pytest.mark.asyncio
+async def test_confirm_gid_metrics_wrapper_is_transparent():
+    coordinator = _Coordinator()
+    reconcile_cycle._install_confirm_gid_metrics(coordinator)
+
+    present = await coordinator.confirm_gid("present", attempts=3)
+    missing = await coordinator.confirm_gid("missing", attempts=3)
+
+    assert present.gid == "present"
+    assert missing is None
+    assert coordinator.confirm_calls == 2
+    assert coordinator._dp_confirm_gid_metrics_installed is True
+
+
 def test_scheduler_uses_reconciliation_cycle_instead_of_legacy_sync_wrapper():
     source = inspect.getsource(scheduler.sync_download_clients_loop)
     assert "reconcile_download_client_cycle(manager)" in source
@@ -124,3 +145,14 @@ def test_reconciliation_cycle_keeps_operator_confirmation_paths_out_of_scope():
     assert "_strict_pause_gid" not in source
     assert "_strict_resume_gid" not in source
     assert "tell_status" not in source
+
+
+def test_reconciliation_cycle_profiles_individual_phases():
+    source = inspect.getsource(reconcile_cycle.reconcile_download_client_cycle)
+    for name in (
+        "reconcile.sync_downloads",
+        "reconcile.resume_parked",
+        "reconcile.dispatch",
+        "reconcile.ready_parent",
+    ):
+        assert name in source

@@ -12,7 +12,7 @@ import logging
 from typing import Optional
 
 from core.config import get_settings
-from core.performance import increment
+from core.performance import async_timer, increment
 from db.database import get_db
 from services.aria2_runtime import is_builtin_mode
 
@@ -47,10 +47,34 @@ def install_scheduler_snapshot_reuse(manager) -> None:
     manager._dp_scheduler_snapshot_reuse_installed = True
 
 
+def _install_confirm_gid_metrics(coordinator) -> None:
+    """Instrument strict GID confirmation without changing its semantics."""
+    if getattr(coordinator, "_dp_confirm_gid_metrics_installed", False):
+        return
+
+    original_confirm_gid = coordinator.confirm_gid
+
+    async def profiled_confirm_gid(*args, **kwargs):
+        increment("aria2.confirm_gid_calls")
+        try:
+            async with async_timer("aria2.confirm_gid"):
+                result = await original_confirm_gid(*args, **kwargs)
+        except Exception:
+            increment("aria2.confirm_gid_errors")
+            raise
+        if result is None:
+            increment("aria2.confirm_gid_missing")
+        return result
+
+    coordinator.confirm_gid = profiled_confirm_gid
+    coordinator._dp_confirm_gid_metrics_installed = True
+
+
 async def _raw_snapshot(manager):
     install_scheduler_snapshot_reuse(manager)
     increment("aria2.scheduler_snapshot_fetch")
-    return await manager._dp_scheduler_raw_aria2_get_all()
+    async with async_timer("reconcile.snapshot"):
+        return await manager._dp_scheduler_raw_aria2_get_all()
 
 
 async def _has_unintended_paused_children(coordinator) -> bool:
@@ -82,6 +106,7 @@ async def reconcile_download_client_cycle(manager) -> None:
         return
 
     install_scheduler_snapshot_reuse(manager)
+    _install_confirm_gid_metrics(coordinator)
     await coordinator.ensure_initialized()
     globally_paused = bool(get_settings().paused)
 
@@ -91,23 +116,26 @@ async def reconcile_download_client_cycle(manager) -> None:
         # sync_aria2_downloads() was written to fetch its own snapshot. Reuse the
         # cycle snapshot inside this task without changing its public contract.
         owner = asyncio.current_task()
-        if owner is None:
-            await manager.sync_aria2_downloads()
-        else:
-            token = _cycle_snapshot.set((owner, snapshot))
-            try:
+        async with async_timer("reconcile.sync_downloads"):
+            if owner is None:
                 await manager.sync_aria2_downloads()
-            finally:
-                _cycle_snapshot.reset(token)
+            else:
+                token = _cycle_snapshot.set((owner, snapshot))
+                try:
+                    await manager.sync_aria2_downloads()
+                finally:
+                    _cycle_snapshot.reset(token)
 
         if globally_paused:
-            await coordinator._enforce_global_pause()
+            async with async_timer("reconcile.global_pause"):
+                await coordinator._enforce_global_pause()
             return
 
         # Selective pause enforcement may physically pause a newly-created GID.
         # Keep the strict reliability behavior and refresh only when intents exist.
         if coordinator._pause_intents:
-            await coordinator._enforce_selective_pauses()
+            async with async_timer("reconcile.selective_pause"):
+                await coordinator._enforce_selective_pauses()
             snapshot = await _raw_snapshot(manager)
 
         owned = await coordinator._owned(snapshot)
@@ -119,20 +147,30 @@ async def reconcile_download_client_cycle(manager) -> None:
         # slots are occupied. Avoid a new daemon snapshot merely to discover
         # there is no capacity. When capacity exists, retain the proven resume
         # path and refresh only if it actually changed daemon state.
-        if available > 0 and await _has_unintended_paused_children(coordinator):
-            resumed = await coordinator._resume_unintended_paused()
-            if resumed:
-                snapshot = await _raw_snapshot(manager)
+        async with async_timer("reconcile.resume_parked"):
+            should_resume = (
+                available > 0
+                and await _has_unintended_paused_children(coordinator)
+            )
+            if should_resume:
+                resumed = await coordinator._resume_unintended_paused()
+            else:
+                resumed = 0
+        if resumed:
+            snapshot = await _raw_snapshot(manager)
 
         # dispatch_queue already accepts an authoritative snapshot. Passing this
         # one avoids its own get_all() while preserving ownership and slot checks.
-        await coordinator.dispatch_queue(snapshot)
-        await manager._schedule_ready_aria2_parents()
+        async with async_timer("reconcile.dispatch"):
+            await coordinator.dispatch_queue(snapshot)
+        async with async_timer("reconcile.ready_parent"):
+            await manager._schedule_ready_aria2_parents()
 
     # External aria2 history is daemon-owned, so orphan cleanup is already a
     # no-op there. Keep the dedicated built-in cleanup behavior unchanged.
     if is_builtin_mode():
         try:
-            await manager._cleanup_aria2_orphans()
+            async with async_timer("reconcile.cleanup"):
+                await manager._cleanup_aria2_orphans()
         except Exception as exc:
             logger.debug("aria2 orphan cleanup deferred: %s", exc)

@@ -1330,7 +1330,7 @@ class TorrentManager:
         # Fetch all torrents that have an alldebrid_id (any status)
         async with get_db() as db:
             rows = await db.fetchall(
-                """SELECT id, name, alldebrid_id, status, provider_status, provider_status_code, polling_failures, magnet, source
+                """SELECT id, name, alldebrid_id, status, provider_status, provider_status_code, polling_failures, progress, size_bytes, magnet, source
                    FROM torrents
                    WHERE alldebrid_id IS NOT NULL AND alldebrid_id != ''
                      AND COALESCE(provider_status, '') NOT IN ('failed', 'missing')"""
@@ -1421,7 +1421,7 @@ class TorrentManager:
         async with get_db() as db:
             rows = await (
                 await db.execute(
-                    """SELECT id, name, alldebrid_id, status, provider_status, provider_status_code, polling_failures, magnet, source
+                    """SELECT id, name, alldebrid_id, status, provider_status, provider_status_code, polling_failures, progress, size_bytes, magnet, source
                        FROM torrents
                        WHERE alldebrid_id IS NOT NULL AND alldebrid_id != ''
                          AND COALESCE(provider_status, '') NOT IN ('failed', 'missing')
@@ -2046,44 +2046,103 @@ class TorrentManager:
         size_bytes = int(normalized["size_bytes"])
         provider_message = str(normalized["message"])
         current_status = row["status"]
-        provider_state_changed = provider_status != (row["provider_status"] or "") or status_code != int(row["provider_status_code"] or -1)
-        persisted_status = current_status if current_status in {"queued", "downloading", "paused"} and provider_status == "ready" else local_status
-
-        async with get_db() as db:
-            if provider_state_changed:
-                await db.execute(
-                    "INSERT INTO events (torrent_id, level, message) VALUES (?, ?, ?)",
-                    (row["id"], "info", f"AllDebrid status -> {provider_status} [{status_code}] {provider_message}".strip()),
-                )
-            await db.execute(
-                """UPDATE torrents
-                   SET status=?, provider_status=?, provider_status_code=?, progress=?, size_bytes=?,
-                       polling_failures=0, updated_at=CURRENT_TIMESTAMP
-                   WHERE id=?""",
-                (persisted_status, provider_status, status_code, progress, size_bytes, row["id"]),
+        current_progress = float(row.get("progress") or 0.0)
+        current_size_bytes = int(row.get("size_bytes") or 0)
+        current_provider_code = row.get("provider_status_code")
+        provider_state_changed = (
+            provider_status != (row["provider_status"] or "")
+            or status_code != int(
+                current_provider_code
+                if current_provider_code is not None
+                else -1
             )
-            await db.commit()
+        )
+        local_delivery_active = (
+            current_status in {"queued", "downloading", "paused"}
+            and provider_status == "ready"
+        )
+        persisted_status = current_status if local_delivery_active else local_status
+        # Once provider preparation is complete, aria2 owns local transfer
+        # progress/size. A full provider reconciliation must not overwrite that
+        # live local telemetry with AllDebrid's already-ready 100% state.
+        persisted_progress = current_progress if local_delivery_active else progress
+        persisted_size_bytes = (
+            current_size_bytes
+            if local_delivery_active and current_size_bytes > 0
+            else size_bytes
+        )
+        status_changed = persisted_status != current_status
+        progress_changed = abs(persisted_progress - current_progress) > 1e-6
+        size_changed = persisted_size_bytes != current_size_bytes
+        polling_failures_present = int(row.get("polling_failures") or 0) != 0
+        meaningful_changed = (
+            provider_state_changed
+            or status_changed
+            or progress_changed
+            or size_changed
+            or polling_failures_present
+        )
 
-        # SSE: provider progress update
-        # The dashboard already listens for torrent_updated and reloads the
-        # Recent Activity row. Emit after every provider poll that was applied.
-        try:
-            from api.routes import _sse_broadcast
-            await _sse_broadcast(
-                "torrent_updated",
-                {
+        if meaningful_changed:
+            async with get_db() as db:
+                if provider_state_changed:
+                    await db.execute(
+                        "INSERT INTO events (torrent_id, level, message) VALUES (?, ?, ?)",
+                        (row["id"], "info", f"AllDebrid status -> {provider_status} [{status_code}] {provider_message}".strip()),
+                    )
+                await db.execute(
+                    """UPDATE torrents
+                       SET status=?, provider_status=?, provider_status_code=?, progress=?, size_bytes=?,
+                           polling_failures=0, updated_at=CURRENT_TIMESTAMP
+                       WHERE id=?""",
+                    (
+                        persisted_status,
+                        provider_status,
+                        status_code,
+                        persisted_progress,
+                        persisted_size_bytes,
+                        row["id"],
+                    ),
+                )
+                await db.commit()
+
+        visible_changed = (
+            provider_state_changed
+            or status_changed
+            or progress_changed
+            or size_changed
+        )
+
+        # SSE is emitted only for a visible change. Stable provider polling no
+        # longer generates a write + broadcast cycle merely to say nothing changed.
+        if visible_changed:
+            try:
+                from api.routes import _sse_broadcast
+                progress_item = {
                     "id": row["id"],
                     "status": persisted_status,
                     "name": str(row["name"] or ""),
-                    "progress": progress,
-                },
-            )
-        except Exception as exc:
-            logger.debug(
-                "Provider progress SSE broadcast failed for torrent %s: %s",
-                row["id"],
-                exc,
-            )
+                    "progress": persisted_progress,
+                    "status_changed": status_changed,
+                }
+                await _sse_broadcast(
+                    "torrent_updated",
+                    {
+                        **progress_item,
+                        "progress_only": not (
+                            status_changed
+                            or provider_state_changed
+                            or size_changed
+                        ),
+                        "items": [progress_item],
+                    },
+                )
+            except Exception as exc:
+                logger.debug(
+                    "Provider progress SSE broadcast failed for torrent %s: %s",
+                    row["id"],
+                    exc,
+                )
 
         if provider_status == "ready" and current_status in {"pending", "uploading", "processing", "ready", "error"}:
             # Also restart if local status is 'error' but AllDebrid reports ready —
@@ -2100,7 +2159,13 @@ class TorrentManager:
             self._schedule_ready_parent_download(
                 row["id"], str(row["alldebrid_id"]), str(name)
             )
-        elif provider_status == "ready" and current_status not in (TorrentStatus.DOWNLOADING, TorrentStatus.QUEUED, TorrentStatus.COMPLETED, TorrentStatus.DELETED):
+        elif provider_status == "ready" and current_status not in (
+            TorrentStatus.DOWNLOADING,
+            TorrentStatus.QUEUED,
+            TorrentStatus.PAUSED,
+            TorrentStatus.COMPLETED,
+            TorrentStatus.DELETED,
+        ):
             # AllDebrid reports the torrent as ready — start the download.
             logger.info(
                 "sync: torrent %s (id=%s) is ready on AllDebrid → starting download",
@@ -3162,7 +3227,7 @@ class TorrentManager:
                 await db.execute(
                     """SELECT t.id AS torrent_id, t.name, t.alldebrid_id, t.status AS torrent_status,
                               f.id AS file_id, f.filename, f.local_path, f.download_url,
-                              f.download_id, f.status, f.blocked
+                              f.download_id, f.status, f.blocked, f.size_bytes
                        FROM torrents t
                        JOIN download_files f ON f.torrent_id = t.id
                        WHERE f.download_client='aria2'
@@ -3236,14 +3301,25 @@ class TorrentManager:
                     reset_on_sync.add(row["torrent_id"])
                     continue
 
-            # Status sync from aria2
+            # Status sync from aria2. Avoid rewriting stable rows every poll;
+            # download_files.updated_at should advance only for a real state/size change.
             sz = dl.total_length if dl.total_length > 0 else None
+            current_file_status = str(row["status"] or "")
+            current_file_size = int(row.get("size_bytes") or 0)
+            size_changed = sz is not None and int(sz) != current_file_size
+
+            def file_state_needs_update(desired_status: str) -> bool:
+                return desired_status != current_file_status or size_changed
+
             if dl.status == "paused":
-                await self._update_file_state(row["file_id"], "paused", row["local_path"], size_bytes=sz)
+                if file_state_needs_update("paused"):
+                    await self._update_file_state(row["file_id"], "paused", row["local_path"], size_bytes=sz)
             elif dl.status == "waiting":
-                await self._update_file_state(row["file_id"], "queued", row["local_path"], size_bytes=sz)
+                if file_state_needs_update("queued"):
+                    await self._update_file_state(row["file_id"], "queued", row["local_path"], size_bytes=sz)
             elif dl.status == "active":
-                await self._update_file_state(row["file_id"], "downloading", row["local_path"], size_bytes=sz)
+                if file_state_needs_update("downloading"):
+                    await self._update_file_state(row["file_id"], "downloading", row["local_path"], size_bytes=sz)
             elif dl.status == "complete":
                 if row["status"] != "completed":
                     await self._update_file_state(row["file_id"], "completed", row["local_path"], size_bytes=sz)
@@ -3648,6 +3724,7 @@ class TorrentManager:
             grouped.setdefault(row["torrent_id"], []).append(row)
 
         updates = []
+        changed_updates = []
         broadcast_needed = False
 
         for torrent_id, files in grouped.items():
@@ -3720,26 +3797,38 @@ class TorrentManager:
                 files[0]["torrent_status"] or ""
             )
 
-            if (
-                int(progress) != int(current_progress)
-                or parent_status != current_status
-            ):
-                broadcast_needed = True
+            # Persist any real progress movement so updated_at continues to
+            # represent transfer activity. SSE remains integer-boundary based to
+            # avoid UI churn for sub-percent movement.
+            persist_progress_changed = progress != current_progress
+            broadcast_progress_changed = int(progress) != int(current_progress)
+            status_changed = parent_status != current_status
 
-            updates.append((progress, parent_status, torrent_id))
+            if persist_progress_changed or status_changed:
+                updates.append((progress, parent_status, torrent_id))
+
+            if broadcast_progress_changed or status_changed:
+                broadcast_needed = True
+                changed_updates.append(
+                    {
+                        "id": int(torrent_id),
+                        "progress": progress,
+                        "status": parent_status,
+                        "status_changed": status_changed,
+                    }
+                )
 
         if not updates:
             return
 
         async with get_db() as db:
-            for progress, parent_status, torrent_id in updates:
-                await db.execute(
-                    """UPDATE torrents
-                       SET progress=?, status=?, updated_at=CURRENT_TIMESTAMP
-                       WHERE id=?
-                         AND status IN ('queued', 'downloading', 'paused')""",
-                    (progress, parent_status, torrent_id),
-                )
+            await db.executemany(
+                """UPDATE torrents
+                   SET progress=?, status=?, updated_at=CURRENT_TIMESTAMP
+                   WHERE id=?
+                     AND status IN ('queued', 'downloading', 'paused')""",
+                updates,
+            )
             await db.commit()
 
         logger.debug(
@@ -3751,7 +3840,16 @@ class TorrentManager:
         if broadcast_needed:
             try:
                 from api.routes import _sse_broadcast
-                await _sse_broadcast("torrent_updated", {})
+                await _sse_broadcast(
+                    "torrent_updated",
+                    {
+                        "progress_only": not any(
+                        item["status_changed"]
+                        for item in changed_updates
+                    ),
+                        "items": changed_updates,
+                    },
+                )
             except Exception as exc:
                 logger.debug(
                     "Aggregate aria2 progress SSE broadcast failed: %s",
@@ -4904,12 +5002,28 @@ class TorrentManager:
                 hash_value = magnet.get("hash", ad_id).lower()
                 name = magnet.get("filename") or magnet.get("name") or hash_value
                 normalized = normalize_provider_state(magnet)
-                cur = await db.execute("SELECT id, status FROM torrents WHERE hash=?", (hash_value,))
+                cur = await db.execute(
+                    "SELECT id, status, name, alldebrid_id, provider_status, "
+                    "provider_status_code, download_client FROM torrents WHERE hash=?",
+                    (hash_value,),
+                )
                 existing = await cur.fetchone()
                 should_queue = True
                 if existing:
                     torrent_id = existing["id"]
                     local_status = existing["status"]
+                    current_download_client = self.download_client_name()
+                    current_provider_code = existing.get("provider_status_code")
+                    metadata_changed = (
+                        str(existing.get("name") or "") != str(name or "")
+                        or str(existing.get("alldebrid_id") or "") != ad_id
+                        or str(existing.get("provider_status") or "")
+                        != str(normalized["provider_status"] or "")
+                        or int(current_provider_code if current_provider_code is not None else -1)
+                        != int(normalized["status_code"])
+                        or str(existing.get("download_client") or "")
+                        != current_download_client
+                    )
                     if local_status == "completed":
                         # Successfully completed local content remains terminal.
                         should_queue = False
@@ -4977,23 +5091,28 @@ class TorrentManager:
                         should_queue = False
                     elif local_status in ("queued", "downloading", "paused"):
                         # Already actively downloading — do not re-dispatch;
-                        # sync_aria2_downloads / _dispatch_pending_aria2_queue handle it
+                        # sync_aria2_downloads / _dispatch_pending_aria2_queue handle it.
+                        # A metadata no-op must not refresh updated_at because the
+                        # stuck-transfer watchdog uses that timestamp as real activity.
                         should_queue = False
-                        await db.execute(
-                            """UPDATE torrents
-                               SET name=?, alldebrid_id=?, provider_status=?, provider_status_code=?, download_client=?, updated_at=CURRENT_TIMESTAMP
-                               WHERE id=?""",
-                            (name, ad_id, normalized["provider_status"], normalized["status_code"], self.download_client_name(), torrent_id),
-                        )
+                        if metadata_changed:
+                            await db.execute(
+                                """UPDATE torrents
+                                   SET name=?, alldebrid_id=?, provider_status=?, provider_status_code=?, download_client=?, updated_at=CURRENT_TIMESTAMP
+                                   WHERE id=?""",
+                                (name, ad_id, normalized["provider_status"], normalized["status_code"], current_download_client, torrent_id),
+                            )
                     else:
                         # Non-terminal, not actively downloading (uploading/processing/ready/error/pending)
-                        # → update and allow re-dispatch if AllDebrid says ready
-                        await db.execute(
-                            """UPDATE torrents
-                               SET name=?, alldebrid_id=?, provider_status=?, provider_status_code=?, download_client=?, updated_at=CURRENT_TIMESTAMP
-                               WHERE id=?""",
-                            (name, ad_id, normalized["provider_status"], normalized["status_code"], self.download_client_name(), torrent_id),
-                        )
+                        # → update metadata only when it actually changed. Stable provider
+                        # polling must not keep a stuck transfer artificially fresh.
+                        if metadata_changed:
+                            await db.execute(
+                                """UPDATE torrents
+                                   SET name=?, alldebrid_id=?, provider_status=?, provider_status_code=?, download_client=?, updated_at=CURRENT_TIMESTAMP
+                                   WHERE id=?""",
+                                (name, ad_id, normalized["provider_status"], normalized["status_code"], current_download_client, torrent_id),
+                            )
                 else:
                     torrent_id = await db.execute_returning_id(
                         """INSERT INTO torrents

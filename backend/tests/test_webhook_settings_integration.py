@@ -92,7 +92,8 @@ class SettingsSaveTests(unittest.IsolatedAsyncioTestCase):
                 routes.AppSettings(discord_avatar_url="data:image/png;base64,abc123")
             )
 
-        self.assertEqual(result, {"ok": True})
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["discord_avatar_url"], "")
         self.assertEqual(saved["cfg"].discord_avatar_url, "")
         self.assertEqual(saved["applied"].discord_avatar_url, "")
 
@@ -117,7 +118,13 @@ class SettingsSaveTests(unittest.IsolatedAsyncioTestCase):
                 )
             )
 
-        self.assertEqual(result, {"ok": True})
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["stats_report_interval_hours"], 12)
+        self.assertEqual(result["stats_report_window_hours"], 168)
+        self.assertEqual(
+            result["stats_report_webhook_url"],
+            "https://discord.com/api/webhooks/test",
+        )
         self.assertEqual(saved["cfg"].stats_report_interval_hours, 12)
         self.assertEqual(saved["cfg"].stats_report_window_hours, 168)
 

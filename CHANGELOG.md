@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.0.2] — 2026-08-19
+
+### Responsiveness
+
+- Kept top-bar Pause/Resume controls as stable DOM nodes so live refreshes cannot replace them during a click.
+- Added immediate pressed/pending feedback for queue controls and opened transfer details before the API round trip completes.
+- Coalesced overlapping stats, recent-activity, and download-list refreshes.
+- Added incremental SSE progress updates so progress-only events no longer rebuild entire clickable tables.
+- Returned authoritative settings from `PUT /settings` and removed redundant follow-up settings reads.
+- Added frontend cache-busting and regression coverage for the responsiveness contract.
+- Reduced no-op provider/aria2 database writes and SSE churn so transfer freshness reflects real progress.
+- Preserved local aria2 transfer status, progress, and size while AllDebrid is already in the ready state so provider reconciliation cannot overwrite live local telemetry.
+- Removed redundant aria2 queue fetches, debounced download search input, and scoped download filters to their own view.
+
 ## [1.0.1] — 2026-08-19
 
 ### Hotfix

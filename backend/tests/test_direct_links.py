@@ -272,7 +272,10 @@ class DashboardContractTests(unittest.TestCase):
         self.assertNotIn('id="t-magnet"', html)
         self.assertIn('<span class="nav-label">Downloads</span>', html)
         self.assertIn('id="torrent-card-title">All Downloads</span>', html)
-        self.assertIn('<script src="/app.js?v=9" defer></script>', html)
+        self.assertRegex(
+            html,
+            r'<script src="/app\.js\?v=\d+" defer></script>',
+        )
         self.assertIn("'/links/add'", js)
         self.assertIn("button.textContent = 'Adding…'", js)
         self.assertIn("🔗 Direct link", js)
@@ -325,7 +328,10 @@ class DashboardContractTests(unittest.TestCase):
         self.assertIn("btn.setAttribute('aria-label', action);", js)
         self.assertIn(".sidebar-theme-control", css)
         self.assertNotIn("position:fixed; bottom:16px; right:16px", css)
-        self.assertIn('<link rel="stylesheet" href="/style.css?v=9">', html)
+        self.assertRegex(
+            html,
+            r'<link rel="stylesheet" href="/style\.css\?v=\d+">',
+        )
 
     def test_theme_branding_and_semantic_colors_are_separated(self):
         repo_root = Path(__file__).resolve().parents[2]

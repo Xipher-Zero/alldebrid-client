@@ -155,7 +155,9 @@ def test_release_workflow_accepts_public_v1_tags():
     assert "- 'v*'" in workflow
     assert "startsWith(github.ref, 'refs/tags/v')" in workflow
     assert "DB_PATH=/app/data/debridpulse.db" in workflow
-    assert (REPO_ROOT / "VERSION").read_text().strip() == "1.0.1"
+    version = (REPO_ROOT / "VERSION").read_text().strip()
+    parts = version.split(".")
+    assert len(parts) == 3 and all(part.isdigit() for part in parts)
     assert 'tag = f"v{version}"' in release_helper
     assert "internal-v{version}" not in release_helper
 
@@ -185,15 +187,30 @@ def test_dashboard_recent_activity_exposes_pause_resume_but_not_remove():
         "</table>", 1
     )[0]
 
-    assert "pauseT(${t.id})" in recent_renderer
-    assert "resumeT(${t.id})" in recent_renderer
+    assert "pauseT(${t.id},this)" in recent_renderer
+    assert "resumeT(${t.id},this)" in recent_renderer
     assert "Pause this download" in recent_renderer
     assert "Resume this download" in recent_renderer
     assert "deleteT(" not in recent_renderer
     assert "Remove" not in recent_markup
     assert 'colspan="6"' in recent_markup
 
-    assert frontend.count("loadTorrents(); loadStats(); loadRecent();") == 2
+    pause_item_handler = frontend.split(
+        "async function pauseT(id, button)", 1
+    )[1].split(
+        "async function resumeT(id, button)", 1
+    )[0]
+
+    resume_item_handler = frontend.split(
+        "async function resumeT(id, button)", 1
+    )[1].split(
+        "// ── Detail Modal", 1
+    )[0]
+
+    for handler in (pause_item_handler, resume_item_handler):
+        assert "loadTorrents();" in handler
+        assert "loadStats();" in handler
+        assert "loadRecent();" in handler
 
 
 def test_global_pause_control_exposes_mixed_selective_pause_state():
@@ -204,11 +221,21 @@ def test_global_pause_control_exposes_mixed_selective_pause_state():
 
     assert "Resume Paused (${selectivelyPaused})" in frontend
     assert 'onclick="resumePausedDownloads()"' in frontend
-    assert 'onclick="pauseProcessing()">Pause All</button>' in frontend
-    assert 'onclick="resumeProcessing()">Resume All</button>' in frontend
+    assert 'id="btn-pause-all"' in frontend
+    assert 'onclick="pauseProcessing()"' in frontend
+    assert 'id="btn-resume-all"' in frontend
+    assert 'onclick="resumeProcessing()"' in frontend
+    assert "el.dataset.initialized !== '1'" in frontend
     assert "pausedTransferCount = Math.max(0, Number(bs.paused) || 0)" in frontend
-    assert "settingsData.paused = result.paused" in frontend
-    assert "pausedTransferCount = Math.max(0, pausedTransferCount - 1)" in frontend
+    resume_handler = frontend.split(
+        "async function resumeT(id, button)", 1
+    )[1].split(
+        "// ── Detail Modal", 1
+    )[0]
+
+    assert "settingsData.paused = result.paused" in resume_handler
+    assert "pausedTransferCount" in resume_handler
+    assert "Math.max(0, pausedTransferCount - 1)" in resume_handler
     assert index.index('id="topbar-actions"') < index.index('id="aria2-speed-badge"')
     assert "#aria2-speed-badge" in styles
     assert "white-space: nowrap" in styles
@@ -333,3 +360,29 @@ def test_dashboard_kpi_strip_omits_duplicate_database_tile_and_stays_centered():
     assert "setDot('db'" in frontend
     assert ".dash-kpi-strip--dashboard" in styles
     assert "width: 85.7142857%;" in styles
+
+
+def test_v102_minor_ui_cleanup_contract():
+    index = (REPO_ROOT / "frontend/static/index.html").read_text()
+    frontend = (REPO_ROOT / "frontend/static/app.js").read_text()
+    styles = (REPO_ROOT / "frontend/static/style.css").read_text()
+
+    assert '<div class="metric-label">Downloads</div>' in frontend
+    assert '<div class="metric-label">Torrents</div>' not in frontend
+    assert '<span class="card-title">Download Status</span>' in index
+    assert '<span class="card-title">Torrent Status</span>' not in index
+
+    assert '<textarea class="input direct-link-input" id="q-magnet" rows="1"' in index
+    assert 'oninput="resizeDebridLinkInput(this)"' in index
+    assert "(event.ctrlKey||event.metaKey)&&event.key==='Enter'" in index
+    quick_add = frontend.split("async function quickAdd()", 1)[1].split(
+        "function resizeDebridLinkInput", 1
+    )[0]
+    assert "input.value = '';\n    resizeDebridLinkInput(input);" in quick_add
+
+    assert '.aria2-queue { display: flex; flex-direction: column; gap: 10px; min-width: 0; width: 100%; }' in styles
+    assert 'max-width: 100%' in styles.split('.aria2-job {', 1)[1].split('}', 1)[0]
+    assert 'overflow-wrap: anywhere' in styles.split('.aria2-job-name {', 1)[1].split('}', 1)[0]
+    assert 'overflow-wrap: anywhere' in styles.split('.aria2-job-meta {', 1)[1].split('}', 1)[0]
+    assert '/style.css?v=11' in index
+    assert '/app.js?v=11' in index

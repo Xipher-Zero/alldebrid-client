@@ -9,12 +9,15 @@ Improvements over the original:
 - Clear error classes: Aria2RPCError (RPC logic) vs Aria2ConnectionError (network)
 - Retry logic with backoff for connection errors
 - get_all() returns an empty list on connection error instead of raising
+- Hot state snapshots use system.multicall so active/waiting/stopped state is
+  collected in one HTTP transaction without reintroducing keep-alive failures
 """
 import asyncio
 import logging
+import time
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import aiohttp
 from core.config import get_settings
@@ -122,8 +125,15 @@ class Aria2Service:
         self.timeout = aiohttp.ClientTimeout(total=max(5, int(timeout_seconds or 15)))
         self._request_id = 0
         self._uri_locks: Dict[str, asyncio.Lock] = {}
-        self._rpc_lock = asyncio.Lock()   # serialises concurrent RPC calls
-        self._last_call_time: float = 0.0 # for min-interval enforcement
+        # Only the pacing timestamp is serialized. HTTP operations are allowed
+        # to overlap; the previous name/comment implied stronger serialization
+        # than the implementation actually provided.
+        self._rpc_pace_lock = asyncio.Lock()
+        self._last_call_time: float = 0.0
+        self._rpc_http_requests = 0
+        self._rpc_method_calls = 0
+        self._rpc_multicall_requests = 0
+        self._rpc_total_seconds = 0.0
 
     # ─────────────────────────────────────────────────────────────────────────
     # Public API
@@ -193,12 +203,14 @@ class Aria2Service:
     ) -> Dict[str, Any]:
         waiting_limit = self._bounded_window(waiting_limit)
         stopped_limit = self._bounded_window(stopped_limit)
-        active, waiting, stopped = await asyncio.gather(
-            self._call("aria2.tellActive", [self._keys()]),
-            self._call("aria2.tellWaiting", [0, waiting_limit, self._keys()]),
-            self._call("aria2.tellStopped", [0, stopped_limit, self._keys()]),
+        active, waiting, stopped, options = await self._multicall(
+            [
+                ("aria2.tellActive", [self._keys()]),
+                ("aria2.tellWaiting", [0, waiting_limit, self._keys()]),
+                ("aria2.tellStopped", [0, stopped_limit, self._keys()]),
+                ("aria2.getGlobalOption", []),
+            ]
         )
-        options = await self.get_global_options()
         return {
             "active_count": len(active or []),
             "waiting_count": len(waiting or []),
@@ -219,18 +231,24 @@ class Aria2Service:
         stopped_limit: int = 100,
     ) -> List[Aria2DownloadStatus]:
         """
-        Fetches active, waiting and stopped downloads.
+        Fetch active, waiting and stopped downloads in one HTTP transaction.
 
-        On connection errors an empty list is returned and the error
-        is logged as WARNING so the scheduler keeps running.
+        aria2's system.multicall retains the transport-safety property of the
+        one-session-per-request client while removing the three-connection cost
+        of a normal state snapshot.
+
+        On connection errors an empty list is returned and the error is logged
+        as WARNING so the scheduler keeps running.
         """
         waiting_limit = self._bounded_window(waiting_limit)
         stopped_limit = self._bounded_window(stopped_limit)
         try:
-            results = await asyncio.gather(
-                self._call("aria2.tellActive", [self._keys()]),
-                self._call("aria2.tellWaiting", [0, waiting_limit, self._keys()]),
-                self._call("aria2.tellStopped", [0, stopped_limit, self._keys()]),
+            results = await self._multicall(
+                [
+                    ("aria2.tellActive", [self._keys()]),
+                    ("aria2.tellWaiting", [0, waiting_limit, self._keys()]),
+                    ("aria2.tellStopped", [0, stopped_limit, self._keys()]),
+                ]
             )
         except Aria2ConnectionError as exc:
             logger.warning("aria2 unreachable (get_all): %s", exc)
@@ -331,7 +349,7 @@ class Aria2Service:
                         attempt, max_retries, delay, exc,
                     )
                     await asyncio.sleep(delay)
-                except Aria2RPCError as exc:
+                except Aria2RPCError:
                     # RPC errors cannot be resolved by retrying
                     raise
                 except Exception as exc:
@@ -434,8 +452,23 @@ class Aria2Service:
         if _is_builtin_mode():
             await self._best_effort("aria2.removeDownloadResult", [gid])
 
+    def rpc_metrics(self) -> Dict[str, Any]:
+        """Return lightweight process-local RPC instrumentation."""
+        requests = int(self._rpc_http_requests)
+        return {
+            "http_requests": requests,
+            "method_calls": int(self._rpc_method_calls),
+            "multicall_requests": int(self._rpc_multicall_requests),
+            "total_seconds": round(float(self._rpc_total_seconds), 6),
+            "average_http_ms": (
+                round((self._rpc_total_seconds / requests) * 1000.0, 3)
+                if requests
+                else 0.0
+            ),
+        }
+
     # ─────────────────────────────────────────────────────────────────────────
-    # Interne RPC-Implementierung
+    # Internal RPC implementation
     # ─────────────────────────────────────────────────────────────────────────
 
     async def _best_effort(self, method: str, params: List[Any]):
@@ -446,28 +479,87 @@ class Aria2Service:
         except Exception as exc:
             logger.debug("aria2 %s failed for %s: %s", method, params, exc)
 
-    async def _call(self, method: str, params: Optional[List[Any]] = None) -> Any:
-        """
-        Executes a single JSON-RPC call.
+    def _authorized_params(self, params: Optional[Sequence[Any]] = None) -> List[Any]:
+        rpc_params = list(params or [])
+        if self.secret:
+            rpc_params.insert(0, f"token:{self.secret}")
+        return rpc_params
 
-        Creates a new ClientSession with force_close=True for each call
-        to ensure no transport is written to while closing.
-        Serialises concurrent calls via _rpc_lock and enforces a minimum
-        50ms inter-request interval to prevent aria2 from dropping requests
-        under rapid sequential load.
+    async def _multicall(
+        self,
+        calls: Sequence[Tuple[str, Sequence[Any]]],
+    ) -> List[Any]:
+        """Execute several aria2 methods through one system.multicall request.
+
+        aria2 requires the RPC secret on each nested method, not on the
+        system.multicall wrapper itself. Successful entries are one-element
+        arrays; a fault object aborts the snapshot rather than returning a
+        silently partial view of daemon state.
         """
-        import time as _time
-        async with self._rpc_lock:
-            # Enforce minimum interval between aria2 RPC calls
-            now = _time.monotonic()
+        if not calls:
+            return []
+        methods = [
+            {
+                "methodName": str(method),
+                "params": self._authorized_params(params),
+            }
+            for method, params in calls
+        ]
+        self._rpc_multicall_requests += 1
+        # _call accounts for the wrapper method; count the nested calls instead
+        # so instrumentation reflects useful daemon operations.
+        result = await self._call(
+            "system.multicall",
+            [methods],
+            inject_token=False,
+            method_call_weight=len(methods),
+        )
+        if not isinstance(result, list) or len(result) != len(methods):
+            raise Aria2RPCError("aria2 system.multicall returned an invalid response")
+
+        values: List[Any] = []
+        for index, entry in enumerate(result):
+            if isinstance(entry, dict) and (
+                "faultCode" in entry or "faultString" in entry
+            ):
+                method_name = methods[index]["methodName"]
+                raise Aria2RPCError(
+                    f"aria2 multicall {method_name} failed: "
+                    f"{entry.get('faultString', entry.get('faultCode', 'unknown fault'))}"
+                )
+            if not isinstance(entry, list) or len(entry) != 1:
+                raise Aria2RPCError(
+                    f"aria2 multicall {methods[index]['methodName']} returned "
+                    "an invalid result wrapper"
+                )
+            values.append(entry[0])
+        return values
+
+    async def _call(
+        self,
+        method: str,
+        params: Optional[List[Any]] = None,
+        *,
+        inject_token: bool = True,
+        method_call_weight: int = 1,
+    ) -> Any:
+        """Execute one HTTP JSON-RPC transaction.
+
+        A fresh force-closed session is intentionally retained because the
+        target daemon may close keep-alive transports unexpectedly. Only the
+        request-start pacing timestamp is serialized; network I/O may overlap.
+        Snapshot callers should prefer _multicall() to reduce connection churn.
+        """
+        async with self._rpc_pace_lock:
+            now = time.monotonic()
             gap = now - self._last_call_time
-            if gap < 0.02:  # 20ms minimum (reduced from 50ms for faster dispatch)
+            if gap < 0.02:
                 await asyncio.sleep(0.02 - gap)
-            self._last_call_time = _time.monotonic()
+            self._last_call_time = time.monotonic()
 
         self._request_id += 1
         rpc_params = list(params or [])
-        if self.secret:
+        if inject_token and self.secret:
             rpc_params.insert(0, f"token:{self.secret}")
 
         payload = {
@@ -477,9 +569,10 @@ class Aria2Service:
             "params": rpc_params,
         }
 
-        # force_close=True: each session closes the connection after the request.
-        # This prevents 'Cannot write to closing transport' on subsequent calls.
         connector = aiohttp.TCPConnector(force_close=True)
+        started = time.monotonic()
+        self._rpc_http_requests += 1
+        self._rpc_method_calls += max(1, int(method_call_weight or 1))
         try:
             async with aiohttp.ClientSession(
                 timeout=self.timeout,
@@ -504,6 +597,7 @@ class Aria2Service:
                         ) from exc
                     raise Aria2RPCError(f"Network error communicating with aria2: {exc}") from exc
         finally:
+            self._rpc_total_seconds += max(0.0, time.monotonic() - started)
             await connector.close()
 
         if "error" in data:

@@ -1,4 +1,4 @@
-name: Apply v1.0.2 performance pass 3 once
+name: Apply v1.0.2 UI cleanup once
 
 on:
   pull_request:
@@ -21,52 +21,162 @@ jobs:
 
       - name: Verify exact baseline
         run: |
-          expected="04261b0e3ed2849a04a4329ca5f9cd259a5ff551"
+          expected="eee05ff969c38f8026b3af4b7de575aed886f42f"
           actual="$(git rev-parse HEAD)"
           echo "expected=$expected"
           echo "actual=$actual"
           if [ "$actual" != "$expected" ]; then
-            echo "Refusing to repair an unexpected baseline"
+            echo "Refusing to patch an unexpected baseline"
             exit 1
           fi
 
-      - name: Restore full changelog and insert v1.0.2 clarification
+      - name: Apply guarded UI cleanup
         run: |
-          git show 67be9289e9117475ad590522d9229b42cd6ad132:CHANGELOG.md > /tmp/changelog-before
-          cp /tmp/changelog-before CHANGELOG.md
           python - <<'PY'
           from pathlib import Path
-          p = Path('CHANGELOG.md')
-          text = p.read_text(encoding='utf-8')
-          marker = '- Reduced no-op provider/aria2 database writes and SSE churn so transfer freshness reflects real progress.\n'
-          addition = '- Preserved local aria2 transfer status, progress, and size while AllDebrid is already in the ready state so provider reconciliation cannot overwrite live local telemetry.\n'
-          if text.count(marker) != 1:
-              raise SystemExit(f'expected one changelog marker, found {text.count(marker)}')
-          if addition in text:
-              raise SystemExit('clarification already present')
-          p.write_text(text.replace(marker, marker + addition, 1), encoding='utf-8')
+
+          def replace_once(path, old, new, label):
+              p = Path(path)
+              text = p.read_text(encoding='utf-8')
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected 1 match, found {count}')
+              p.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          index = 'frontend/static/index.html'
+          app = 'frontend/static/app.js'
+          style = 'frontend/static/style.css'
+          tests = 'backend/tests/test_v1_scope.py'
+
+          replace_once(
+              index,
+              '<div style="display:flex;gap:8px">\n            <input class="input" id="q-magnet" placeholder="magnet:?xt=urn:btih:… or paste multiple lines" style="flex:1" onkeydown="if(event.key===\'Enter\')quickAdd()"/>\n            <button class="btn btn-primary" id="btn-add-magnet" onclick="quickAdd()" style="padding:9px 20px" title="Add entered magnet links, or choose a .torrent file when the field is empty">Add</button>\n          </div>',
+              '<div class="direct-link-entry">\n            <textarea class="input direct-link-input" id="q-magnet" rows="1" placeholder="magnet:?xt=urn:btih:… or paste multiple lines, one per line" oninput="resizeDebridLinkInput(this)" onkeydown="if((event.ctrlKey||event.metaKey)&&event.key===\'Enter\')quickAdd()"></textarea>\n            <button class="btn btn-primary" id="btn-add-magnet" onclick="quickAdd()" style="padding:9px 20px" title="Add entered magnet links, or choose a .torrent file when the field is empty">Add</button>\n          </div>',
+              'dashboard magnet textarea',
+          )
+
+          replace_once(
+              index,
+              '<span class="card-title">Torrent Status</span>',
+              '<span class="card-title">Download Status</span>',
+              'statistics status label',
+          )
+
+          replace_once(index, '/style.css?v=10', '/style.css?v=11', 'stylesheet cache key')
+          replace_once(index, '/app.js?v=10', '/app.js?v=11', 'script cache key')
+
+          replace_once(
+              app,
+              '<div class="metric-card"><div class="metric-label">Torrents</div><div class="metric-value">'+(t.torrent_total||0)+'</div><div class="metric-sub">Added in '+pLabel+'.</div></div>',
+              '<div class="metric-card"><div class="metric-label">Downloads</div><div class="metric-value">'+(t.torrent_total||0)+'</div><div class="metric-sub">Added in '+pLabel+'.</div></div>',
+              'statistics download label',
+          )
+
+          replace_once(
+              app,
+              "    input.value = '';\n    input.focus();\n    loadStats(); loadRecent();",
+              "    input.value = '';\n    resizeDebridLinkInput(input);\n    input.focus();\n    loadStats(); loadRecent();",
+              'magnet textarea reset',
+          )
+
+          replace_once(
+              style,
+              '.aria2-queue { display: flex; flex-direction: column; gap: 10px; }',
+              '.aria2-queue { display: flex; flex-direction: column; gap: 10px; min-width: 0; width: 100%; }',
+              'aria2 queue bounds',
+          )
+          replace_once(
+              style,
+              '.aria2-job { border: 1px solid var(--border); border-radius: 10px; background: linear-gradient(180deg,var(--surface),var(--bg)); padding: 10px; display: grid; gap: 8px; }',
+              '.aria2-job { border: 1px solid var(--border); border-radius: 10px; background: linear-gradient(180deg,var(--surface),var(--bg)); padding: 10px; display: grid; gap: 8px; min-width: 0; max-width: 100%; }',
+              'aria2 job bounds',
+          )
+          replace_once(
+              style,
+              '.aria2-job-top { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; }',
+              '.aria2-job-top { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; min-width: 0; }',
+              'aria2 job header bounds',
+          )
+          replace_once(
+              style,
+              '.aria2-job-name { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }',
+              '.aria2-job-name { font-weight: 700; min-width: 0; white-space: normal; overflow-wrap: anywhere; word-break: break-word; }',
+              'aria2 job name wrapping',
+          )
+          replace_once(
+              style,
+              '.aria2-job-meta { margin-top: 3px; font-family: var(--mono); font-size: 10px; color: var(--text3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }',
+              '.aria2-job-meta { margin-top: 3px; font-family: var(--mono); font-size: 10px; color: var(--text3); min-width: 0; white-space: normal; overflow-wrap: anywhere; word-break: break-word; }',
+              'aria2 metadata wrapping',
+          )
+
+          test_path = Path(tests)
+          test_text = test_path.read_text(encoding='utf-8')
+          marker = '\n\ndef test_v102_minor_ui_cleanup_contract():\n'
+          if marker in test_text:
+              raise SystemExit('UI cleanup regression test already present')
+          test_text += '''\n\ndef test_v102_minor_ui_cleanup_contract():
+              index = (REPO_ROOT / "frontend/static/index.html").read_text()
+              frontend = (REPO_ROOT / "frontend/static/app.js").read_text()
+              styles = (REPO_ROOT / "frontend/static/style.css").read_text()
+
+              assert '<div class="metric-label">Downloads</div>' in frontend
+              assert '<div class="metric-label">Torrents</div>' not in frontend
+              assert '<span class="card-title">Download Status</span>' in index
+              assert '<span class="card-title">Torrent Status</span>' not in index
+
+              assert '<textarea class="input direct-link-input" id="q-magnet" rows="1"' in index
+              assert 'oninput="resizeDebridLinkInput(this)"' in index
+              assert "(event.ctrlKey||event.metaKey)&&event.key==='Enter'" in index
+              quick_add = frontend.split("async function quickAdd()", 1)[1].split(
+                  "function resizeDebridLinkInput", 1
+              )[0]
+              assert "input.value = '';\\n    resizeDebridLinkInput(input);" in quick_add
+
+              assert '.aria2-queue { display: flex; flex-direction: column; gap: 10px; min-width: 0; width: 100%; }' in styles
+              assert 'max-width: 100%' in styles.split('.aria2-job {', 1)[1].split('}', 1)[0]
+              assert 'overflow-wrap: anywhere' in styles.split('.aria2-job-name {', 1)[1].split('}', 1)[0]
+              assert 'overflow-wrap: anywhere' in styles.split('.aria2-job-meta {', 1)[1].split('}', 1)[0]
+              assert '/style.css?v=11' in index
+              assert '/app.js?v=11' in index
+          '''
+          # Dedent only the appended function body while preserving the existing file verbatim.
+          import textwrap
+          prefix, addition = test_text.rsplit('\n\ndef test_v102_minor_ui_cleanup_contract():\n', 1)
+          addition = 'def test_v102_minor_ui_cleanup_contract():\n' + addition
+          test_path.write_text(prefix + '\n\n' + textwrap.dedent(addition), encoding='utf-8')
+
+          print('V1.0.2 UI CLEANUP PATCH: PASS')
           PY
 
-      - name: Validate repair scope and exact restored history
+      - name: Validate patch
         run: |
-          test "$(git diff --name-only | tr -d '\r')" = "CHANGELOG.md"
-          python - <<'PY'
-          from pathlib import Path
-          old = Path('/tmp/changelog-before').read_text(encoding='utf-8')
-          new = Path('CHANGELOG.md').read_text(encoding='utf-8')
-          addition = '- Preserved local aria2 transfer status, progress, and size while AllDebrid is already in the ready state so provider reconciliation cannot overwrite live local telemetry.\n'
-          if new.count(addition) != 1:
-              raise SystemExit(f'expected one clarification, found {new.count(addition)}')
-          if new.replace(addition, '', 1) != old:
-              raise SystemExit('restored changelog differs from prior full history beyond the intended clarification')
-          print('CHANGELOG RESTORE CONTRACT: PASS')
-          PY
+          git diff --check
+          rc=$?
+          if [ $rc -ne 0 ]; then exit $rc; fi
+          node --check frontend/static/app.js
+          rc=$?
+          if [ $rc -ne 0 ]; then exit $rc; fi
+          python -m py_compile backend/tests/test_v1_scope.py
+          rc=$?
+          if [ $rc -ne 0 ]; then exit $rc; fi
+          cd backend
+          python -m pytest tests/test_v1_scope.py tests/test_ui_responsiveness.py -q
+          rc=$?
+          if [ $rc -ne 0 ]; then exit $rc; fi
+          python -m pytest tests/ -q
+          rc=$?
+          if [ $rc -ne 0 ]; then exit $rc; fi
 
-      - name: Commit changelog repair to work branch
+      - name: Commit UI cleanup to work branch
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add CHANGELOG.md
-          test "$(git diff --cached --name-only | tr -d '\r')" = "CHANGELOG.md"
-          git commit -m "fix: restore full v1.0.2 changelog history"
+          git add frontend/static/index.html frontend/static/app.js frontend/static/style.css backend/tests/test_v1_scope.py
+          git diff --cached --check
+          rc=$?
+          if [ $rc -ne 0 ]; then exit $rc; fi
+          git commit -m "fix: polish v1.0.2 UI surfaces"
+          rc=$?
+          if [ $rc -ne 0 ]; then exit $rc; fi
           git push origin HEAD:work/v1.0.2-ui-responsiveness

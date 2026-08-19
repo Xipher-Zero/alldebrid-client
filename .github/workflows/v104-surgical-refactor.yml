@@ -51,3 +51,5 @@ jobs:
           git add backend/services/manager_v2.py backend/api/routes.py frontend/static/app.js
           git commit -m 'Optimize polling, stats, and batch persistence'
           git push origin HEAD:work/v1.0.4-performance-pass-4
+
+# One-shot branch-only refactor runner; removed after the validated commit lands.

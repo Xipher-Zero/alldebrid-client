@@ -110,3 +110,32 @@ def test_temporary_refactor_scaffolding_is_not_shipped():
     assert not (REPO_ROOT / ".github/workflows/v104-surgical-refactor.yml").exists()
     workflow = (REPO_ROOT / ".github/workflows/tests.yml").read_text()
     assert "v104-refactor" not in workflow
+
+
+def test_external_aria2_ownership_is_cached_after_durable_bootstrap():
+    manager = (REPO_ROOT / "backend/services/manager_v2.py").read_text()
+    assert "self._aria2_owned_gid_cache: Set[str] = set()" in manager
+    assert "self._aria2_owned_gid_cache.add(gid)" in manager
+    owned = manager.split("async def _aria2_owned_gids", 1)[1].split(
+        "async def _aria2_owned_downloads", 1
+    )[0]
+    assert "return set(self._aria2_owned_gid_cache)" in owned
+    assert "SELECT gid" not in owned
+
+
+def test_dispatch_reuses_initial_owned_aria2_snapshot():
+    manager = (REPO_ROOT / "backend/services/manager_v2.py").read_text()
+    dispatch = manager.split("async def _dispatch_pending_aria2_queue", 1)[1].split(
+        "async def _schedule_ready_aria2_parents", 1
+    )[0]
+    assert "dispatch_snapshot = list(owned_downloads)" in dispatch
+    assert dispatch.count("await self._aria2_get_all()") == 1
+
+
+def test_manager_control_bootstrap_is_explicit_not_import_hooked():
+    manager = (REPO_ROOT / "backend/services/manager_v2.py").read_text()
+    services_init = (REPO_ROOT / "backend/services/__init__.py").read_text()
+    assert "_install_transfer_control(manager)" in manager
+    assert "_install_parent_progress_guard(manager)" in manager
+    assert "_install_global_pause_semantics(manager)" in manager
+    assert "install_import_hook" not in services_init

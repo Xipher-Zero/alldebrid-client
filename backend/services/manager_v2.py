@@ -373,6 +373,7 @@ class TorrentManager:
         self._aria2_dispatch_lock = asyncio.Lock()
         self._aria2_ownership_lock = asyncio.Lock()
         self._aria2_ownership_ready = False
+        self._aria2_owned_gid_cache: Set[str] = set()
         # Disk-space guard state
         self._disk_guard_active: bool = False          # True = guard triggered, downloads paused
         self._disk_guard_paused: set[str] = set()     # aria2 GIDs paused by the guard
@@ -384,6 +385,10 @@ class TorrentManager:
         self._ad = None
         self._aria2 = None
         self._sem = None
+        # A settings/database transition may change the durable ownership
+        # source. Rebuild the cache lazily on the next external aria2 access.
+        self._aria2_ownership_ready = False
+        self._aria2_owned_gid_cache.clear()
 
     def ad(self) -> AllDebridService:
         if self._ad is None:
@@ -425,7 +430,22 @@ class TorrentManager:
                           AND download_id IS NOT NULL
                        ON CONFLICT(gid) DO NOTHING"""
                 )
+                rows = await db.fetchall(
+                    """SELECT gid
+                         FROM adc_aria2_owned_gids
+                        WHERE gid IS NOT NULL
+                       UNION
+                       SELECT download_id AS gid
+                         FROM download_files
+                        WHERE download_client='aria2'
+                          AND download_id IS NOT NULL"""
+                )
                 await db.commit()
+            self._aria2_owned_gid_cache = {
+                str(row["gid"]).strip()
+                for row in rows
+                if str(row.get("gid") or "").strip()
+            }
             self._aria2_ownership_ready = True
 
     async def _record_aria2_owned_gid(
@@ -451,28 +471,12 @@ class TorrentManager:
                 (gid, download_file_id, torrent_id),
             )
             await db.commit()
+        self._aria2_owned_gid_cache.add(gid)
 
     async def _aria2_owned_gids(self) -> Set[str]:
-        """Return every GID ADC has recorded, including current legacy rows."""
+        """Return a copy of the durable DebridPulse aria2 ownership cache."""
         await self._ensure_aria2_ownership_table()
-        async with get_db() as db:
-            rows = await (
-                await db.execute(
-                    """SELECT gid
-                         FROM adc_aria2_owned_gids
-                        WHERE gid IS NOT NULL
-                       UNION
-                       SELECT download_id AS gid
-                         FROM download_files
-                        WHERE download_client='aria2'
-                          AND download_id IS NOT NULL"""
-                )
-            ).fetchall()
-        return {
-            str(row["gid"]).strip()
-            for row in rows
-            if str(row["gid"] or "").strip()
-        }
+        return set(self._aria2_owned_gid_cache)
 
     async def _aria2_owned_downloads(self, downloads) -> List:
         if is_builtin_mode():
@@ -2967,6 +2971,9 @@ class TorrentManager:
                         await db.commit()
                 for dl in excess:
                     await self._remove_owned_aria2_gid(dl.gid)
+                owned_downloads = [
+                    dl for dl in owned_downloads if dl.gid not in excess_gids
+                ]
                 in_flight = in_flight[:limit]
 
             # ── Step 4: fill available slots ─────────────────────────────────
@@ -3016,17 +3023,11 @@ class TorrentManager:
                 available_slots, len(pending_rows),
             )
 
-            # Snapshot of aria2 state for the whole dispatch batch.
-            # Passing this to ensure_download() avoids one get_all() call per
-            # file, which would cause a burst of rapid RPC requests that aria2
-            # may drop or answer inconsistently.
-            dispatch_snapshot = await self._aria2_get_all()
-            if not is_builtin_mode():
-                owned_gids = await self._aria2_owned_gids()
-                dispatch_snapshot = [
-                    dl for dl in dispatch_snapshot
-                    if str(dl.gid) in owned_gids
-                ]
+            # Reuse the authoritative ownership-filtered snapshot from the
+            # start of this serialized dispatch pass. ensure_download() receives
+            # the same view used for slot accounting, eliminating a redundant
+            # active/waiting/stopped snapshot immediately before addUri.
+            dispatch_snapshot = list(owned_downloads)
 
             # ── Unlock all pending links in parallel (rate-limited) ──────────
             # Semaphore caps concurrent AllDebrid API calls to avoid 503 errors
@@ -5305,3 +5306,18 @@ class TorrentManager:
 
 
 manager = TorrentManager()
+
+# Install singleton-only reliability coordinators explicitly after construction.
+# TorrentManager instances created by unit tests or future backend adapters remain
+# unmodified unless they opt into these coordinators themselves.
+from services.transfer_control import install_transfer_control as _install_transfer_control
+from services.pause_parent_status import install_parent_progress_guard as _install_parent_progress_guard
+from services.global_pause_semantics import install_global_pause_semantics as _install_global_pause_semantics
+
+_install_transfer_control(manager)
+_install_parent_progress_guard(manager)
+_install_global_pause_semantics(manager)
+
+del _install_transfer_control
+del _install_parent_progress_guard
+del _install_global_pause_semantics

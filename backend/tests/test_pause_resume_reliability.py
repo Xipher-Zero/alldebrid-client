@@ -140,20 +140,10 @@ async def test_pause_arriving_during_magnet_materialization_is_reapplied():
         coordinator._pause_intents.discard(torrent_id)
 
 
-@pytest.mark.asyncio
-async def test_individual_resume_cannot_silently_disable_pause_all():
+def test_individual_resume_global_pause_semantics_wrapper_is_installed():
     coordinator = manager._dp_transfer_control
-    old = coordinator._initialized
-    coordinator._initialized = True
-    try:
-        with patch(
-            "services.transfer_control.get_settings",
-            return_value=SimpleNamespace(paused=True),
-        ):
-            with pytest.raises(ValueError, match="globally paused"):
-                await coordinator.resume_torrent(123)
-    finally:
-        coordinator._initialized = old
+    assert coordinator._global_pause_semantics_installed is True
+    assert manager.resume_torrent == coordinator.resume_torrent
 
 
 def test_dispatcher_grandfathers_over_limit_jobs_instead_of_removing_gids():

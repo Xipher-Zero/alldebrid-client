@@ -21,37 +21,45 @@ jobs:
 
       - name: Verify exact baseline
         run: |
-          expected="414074eadee8792450cc7e45b15171d1ef2de7b9"
+          expected="04261b0e3ed2849a04a4329ca5f9cd259a5ff551"
           actual="$(git rev-parse HEAD)"
           echo "expected=$expected"
           echo "actual=$actual"
           if [ "$actual" != "$expected" ]; then
-            echo "Refusing to patch an unexpected baseline"
+            echo "Refusing to repair an unexpected baseline"
             exit 1
           fi
 
-      - name: Materialize guarded CI fix from automation base
+      - name: Restore full changelog and insert v1.0.2 clarification
         run: |
-          git fetch origin automation/pass3-base
-          git show origin/automation/pass3-base:.pass3_ci_fix.py > .pass3_ci_fix.py
+          git show 67be9289e9117475ad590522d9229b42cd6ad132:CHANGELOG.md > CHANGELOG.md
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('CHANGELOG.md')
+          text = p.read_text(encoding='utf-8')
+          marker = '- Reduced no-op provider/aria2 database writes and SSE churn so transfer freshness reflects real progress.\n'
+          addition = '- Preserved local aria2 transfer status, progress, and size while AllDebrid is already in the ready state so provider reconciliation cannot overwrite live local telemetry.\n'
+          if text.count(marker) != 1:
+              raise SystemExit(f'expected one changelog marker, found {text.count(marker)}')
+          if addition in text:
+              raise SystemExit('clarification already present')
+          p.write_text(text.replace(marker, marker + addition, 1), encoding='utf-8')
+          PY
 
-      - name: Apply guarded pass 3 CI compatibility fix
-        run: python .pass3_ci_fix.py
-
-      - name: Remove temporary local patcher
-        run: rm .pass3_ci_fix.py
-
-      - name: Static syntax checks
+      - name: Validate repair scope
         run: |
-          python -m py_compile backend/services/manager_v2.py
-          node --check frontend/static/app.js
           git diff --check
+          test "$(git diff --name-only | tr -d '\r')" = "CHANGELOG.md"
+          old_lines="$(git show 67be9289e9117475ad590522d9229b42cd6ad132:CHANGELOG.md | wc -l)"
+          new_lines="$(wc -l < CHANGELOG.md)"
+          echo "old_lines=$old_lines new_lines=$new_lines"
+          test "$new_lines" -eq $((old_lines + 1))
 
-      - name: Commit CI fix to work branch
+      - name: Commit changelog repair to work branch
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add backend/services/manager_v2.py
+          git add CHANGELOG.md
           git diff --cached --check
-          git commit -m "fix: tolerate legacy aria2 sync row fixtures"
+          git commit -m "fix: restore full v1.0.2 changelog history"
           git push origin HEAD:work/v1.0.2-ui-responsiveness

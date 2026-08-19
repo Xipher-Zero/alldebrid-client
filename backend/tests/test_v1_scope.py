@@ -384,5 +384,5 @@ def test_v102_minor_ui_cleanup_contract():
     assert 'max-width: 100%' in styles.split('.aria2-job {', 1)[1].split('}', 1)[0]
     assert 'overflow-wrap: anywhere' in styles.split('.aria2-job-name {', 1)[1].split('}', 1)[0]
     assert 'overflow-wrap: anywhere' in styles.split('.aria2-job-meta {', 1)[1].split('}', 1)[0]
-    assert '/style.css?v=12' in index
+    assert '/style.css?v=13' in index
     assert '/app.js?v=11' in index

@@ -1152,6 +1152,7 @@ textarea.input { resize: vertical; }
   min-width: 0;
   justify-content: flex-start;
 }
+#aria2-speed-badge.external-control #aria2-badge-speed,
 #aria2-speed-badge.external-control #aria2-badge-limit {
   width: auto;
   text-align: left;

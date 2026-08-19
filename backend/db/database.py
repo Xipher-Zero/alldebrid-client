@@ -5,9 +5,11 @@ Supports two modes (controlled by db_type in AppSettings):
   sqlite   -> Default, fully backward compatible, no setup needed
   postgres -> External PostgreSQL instance
 
-Both modes use the same _DbConnection abstraction. Runtime connections are
-pooled so the scheduler/API hot paths do not repeatedly create and tear down
-SQLite worker threads or PostgreSQL TCP/TLS sessions.
+Both modes use the same _DbConnection abstraction. PostgreSQL uses an
+application-lifetime asyncpg pool so scheduler/API hot paths do not repeatedly
+create and tear down network sessions. SQLite keeps short-lived aiosqlite
+connections because that preserves its simple transaction/isolation model, but
+all connection-local performance pragmas are now applied to every connection.
 
 Usage:
     async with get_db() as db:
@@ -20,7 +22,6 @@ DB_PATH is exported for backward compatibility with existing code.
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 import time
@@ -202,6 +203,7 @@ class _DbConnection:
     async def fetchall(self, sql: str, params: Sequence[Any] = ()) -> List[Dict[str, Any]]:
         sql = self._adapt(sql)
         if self._backend == "sqlite":
+            self._raw.row_factory = aiosqlite.Row
             cur = await self._raw.execute(sql, params)
             rows = await cur.fetchall()
             return [dict(r) for r in rows]
@@ -211,6 +213,7 @@ class _DbConnection:
     async def fetchone(self, sql: str, params: Sequence[Any] = ()) -> Optional[Dict[str, Any]]:
         sql = self._adapt(sql)
         if self._backend == "sqlite":
+            self._raw.row_factory = aiosqlite.Row
             cur = await self._raw.execute(sql, params)
             row = await cur.fetchone()
             return dict(row) if row else None
@@ -242,9 +245,9 @@ class _DbConnection:
 async def _configure_sqlite_connection(conn: aiosqlite.Connection) -> None:
     """Apply connection-local performance/reliability settings.
 
-    Several SQLite pragmas are connection scoped. The old one-connection-at-a-
-    time implementation configured them only during schema initialisation, so
-    normal API/scheduler connections silently ran without those settings.
+    Several SQLite pragmas are connection scoped. Older code configured them
+    only during schema initialisation, so normal API/scheduler connections did
+    not consistently receive the same settings.
     """
     conn.row_factory = aiosqlite.Row
     await conn.execute("PRAGMA synchronous=NORMAL")
@@ -255,83 +258,14 @@ async def _configure_sqlite_connection(conn: aiosqlite.Connection) -> None:
     await conn.execute("PRAGMA foreign_keys=ON")
 
 
-class _SQLitePool:
-    """Small persistent pool of aiosqlite worker-thread connections."""
-
-    def __init__(self, path: Path, size: int):
-        self.path = path
-        self.size = max(1, min(16, int(size)))
-        self._queue: asyncio.Queue[aiosqlite.Connection] = asyncio.Queue(self.size)
-        self._started = False
-        self._start_lock = asyncio.Lock()
-        self._connections: List[aiosqlite.Connection] = []
-
-    async def start(self) -> None:
-        if self._started:
-            return
-        async with self._start_lock:
-            if self._started:
-                return
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            created: List[aiosqlite.Connection] = []
-            try:
-                for _ in range(self.size):
-                    conn = await aiosqlite.connect(self.path, timeout=30)
-                    await _configure_sqlite_connection(conn)
-                    created.append(conn)
-                    await self._queue.put(conn)
-            except Exception:
-                for conn in created:
-                    try:
-                        await conn.close()
-                    except Exception:
-                        pass
-                raise
-            self._connections = created
-            self._started = True
-            logger.info("SQLite runtime pool ready (%d connections)", self.size)
-
-    async def acquire(self) -> aiosqlite.Connection:
-        await self.start()
-        return await self._queue.get()
-
-    async def release(self, conn: aiosqlite.Connection) -> None:
-        await self._queue.put(conn)
-
-    async def close(self) -> None:
-        async with self._start_lock:
-            connections = list(self._connections)
-            self._connections.clear()
-            self._started = False
-            while not self._queue.empty():
-                try:
-                    self._queue.get_nowait()
-                except asyncio.QueueEmpty:
-                    break
-            for conn in connections:
-                try:
-                    await conn.close()
-                except Exception:
-                    pass
-
-
-_sqlite_pool: Optional[_SQLitePool] = None
-_sqlite_pool_lock = asyncio.Lock()
 _pg_pool = None
 _pg_pool_dsn = ""
-_pg_pool_lock = asyncio.Lock()
+_pg_pool_lock = None
 _db_metrics: Dict[str, float] = {
     "sqlite_acquires": 0,
     "postgres_acquires": 0,
     "wait_seconds": 0.0,
 }
-
-
-def _sqlite_pool_size() -> int:
-    try:
-        return max(1, min(16, int(os.getenv("DEBRIDPULSE_SQLITE_POOL_SIZE", "4"))))
-    except Exception:
-        return 4
 
 
 def _postgres_pool_size() -> int:
@@ -341,31 +275,16 @@ def _postgres_pool_size() -> int:
         return 8
 
 
-async def _get_sqlite_pool() -> _SQLitePool:
-    global _sqlite_pool
-    pool = _sqlite_pool
-    if pool is not None and pool.path == DB_PATH and pool.size == _sqlite_pool_size():
-        await pool.start()
-        return pool
-    async with _sqlite_pool_lock:
-        pool = _sqlite_pool
-        desired = _sqlite_pool_size()
-        if pool is not None and (pool.path != DB_PATH or pool.size != desired):
-            await pool.close()
-            pool = None
-        if pool is None:
-            pool = _SQLitePool(DB_PATH, desired)
-            _sqlite_pool = pool
-        await pool.start()
-        return pool
-
-
 async def _get_postgres_pool():
-    global _pg_pool, _pg_pool_dsn
+    global _pg_pool, _pg_pool_dsn, _pg_pool_lock
     try:
+        import asyncio
         import asyncpg
     except ImportError:
         raise RuntimeError("asyncpg is not installed. Run: pip install asyncpg")
+
+    if _pg_pool_lock is None:
+        _pg_pool_lock = asyncio.Lock()
 
     dsn = _build_dsn()
     pool = _pg_pool
@@ -391,17 +310,13 @@ async def _get_postgres_pool():
 
 
 async def close_db_runtime() -> None:
-    """Close persistent DB runtime pools; safe to call repeatedly."""
-    global _sqlite_pool, _pg_pool, _pg_pool_dsn
-    async with _sqlite_pool_lock:
-        if _sqlite_pool is not None:
-            await _sqlite_pool.close()
-            _sqlite_pool = None
-    async with _pg_pool_lock:
-        if _pg_pool is not None:
-            await _pg_pool.close()
-            _pg_pool = None
-            _pg_pool_dsn = ""
+    """Close the persistent PostgreSQL runtime pool; safe to call repeatedly."""
+    global _pg_pool, _pg_pool_dsn, _pg_pool_lock
+    if _pg_pool is not None:
+        await _pg_pool.close()
+        _pg_pool = None
+        _pg_pool_dsn = ""
+    _pg_pool_lock = None
 
 
 def db_runtime_metrics() -> Dict[str, Any]:
@@ -417,7 +332,6 @@ def db_runtime_metrics() -> Dict[str, Any]:
             if total
             else 0.0
         ),
-        "sqlite_pool_size": _sqlite_pool_size(),
         "postgres_pool_size": _postgres_pool_size(),
     }
 
@@ -434,21 +348,11 @@ async def get_db() -> AsyncIterator[_DbConnection]:
                 yield _DbConnection("postgres", conn)
         return
 
-    pool = await _get_sqlite_pool()
-    conn = await pool.acquire()
-    _db_metrics["sqlite_acquires"] += 1
-    _db_metrics["wait_seconds"] += max(0.0, time.monotonic() - started)
-    try:
+    async with aiosqlite.connect(DB_PATH, timeout=30) as conn:
+        await _configure_sqlite_connection(conn)
+        _db_metrics["sqlite_acquires"] += 1
+        _db_metrics["wait_seconds"] += max(0.0, time.monotonic() - started)
         yield _DbConnection("sqlite", conn)
-    finally:
-        # Closing the old per-use connection implicitly discarded uncommitted
-        # work. Preserve that contract before returning a persistent connection
-        # to the pool so one request cannot leak a transaction into another.
-        try:
-            await conn.rollback()
-        except Exception:
-            pass
-        await pool.release(conn)
 
 
 async def _ensure_column(db: aiosqlite.Connection, table: str, column: str, definition: str):

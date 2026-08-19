@@ -51,6 +51,9 @@ class _Manager:
     def __init__(self) -> None:
         self._aria2_state_lock = asyncio.Lock()
         self._dp_transfer_control = _Coordinator()
+        # Match the production TransferControlCoordinator install semantics:
+        # the manager stores the bound method object that exists at install time.
+        self._aria2_confirm_gid = self._dp_transfer_control.confirm_gid
         self.raw_calls = 0
         self.sync_snapshot = None
         self.ready_scheduled = 0
@@ -120,17 +123,22 @@ async def test_scheduler_snapshot_context_never_leaks_into_child_task():
 
 
 @pytest.mark.asyncio
-async def test_confirm_gid_metrics_wrapper_is_transparent():
-    coordinator = _Coordinator()
-    reconcile_cycle._install_confirm_gid_metrics(coordinator)
+async def test_confirm_gid_metrics_wraps_bound_manager_path_transparently():
+    manager = _Manager()
+    coordinator = manager._dp_transfer_control
 
-    present = await coordinator.confirm_gid("present", attempts=3)
-    missing = await coordinator.confirm_gid("missing", attempts=3)
+    reconcile_cycle._install_confirm_gid_metrics(manager)
+
+    present = await manager._aria2_confirm_gid("present", attempts=3)
+    missing = await manager._aria2_confirm_gid("missing", attempts=3)
 
     assert present.gid == "present"
     assert missing is None
     assert coordinator.confirm_calls == 2
-    assert coordinator._dp_confirm_gid_metrics_installed is True
+    assert manager._dp_confirm_gid_metrics_installed is True
+    # The operator-facing coordinator method remains untouched; the scheduler
+    # manager reference is the path sync_aria2_downloads actually invokes.
+    assert coordinator.confirm_gid.__name__ == "confirm_gid"
 
 
 def test_scheduler_uses_reconciliation_cycle_instead_of_legacy_sync_wrapper():

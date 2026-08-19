@@ -62,7 +62,9 @@ jobs:
             backend/requirements.txt
             backend/requirements-dev.txt
       - name: Apply refactor
-        run: python .github/scripts/v104_phase4_refactor.py
+        run: |
+          python .github/scripts/v104_phase4_refactor.py
+          python .github/scripts/v104_phase4_testfix.py
       - name: Validate final tree
         run: |
           pip install -r backend/requirements-dev.txt

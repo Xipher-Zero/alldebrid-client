@@ -171,9 +171,9 @@ def test_operator_tab_title_uses_short_active_identity_and_queue_average():
     assert "document.title = `DebridPulse | (${active} Active)" not in frontend
     assert "renderOperatorTitle();" in frontend
 
-    assert "AVG(COALESCE(progress, 0)) AS average_progress" in routes
+    assert "AVG(CASE WHEN status='downloading' THEN COALESCE(progress, 0)" in routes
+    assert "AS operator_active_progress_pct" in routes
     assert "AS weighted_progress" not in routes
-    assert "WHERE status='downloading'" in routes
 
 
 def test_dashboard_recent_activity_exposes_pause_resume_but_not_remove():

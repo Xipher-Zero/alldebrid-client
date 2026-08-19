@@ -1,0 +1,42 @@
+name: Apply v1.0.2 performance pass 3 once
+
+on:
+  push:
+    branches:
+      - automation/pass3-runner
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout automation branch
+        uses: actions/checkout@v5
+        with:
+          ref: automation/pass3-runner
+          fetch-depth: 0
+
+      - name: Apply guarded pass 3 patch
+        run: python .pass3_apply.py
+
+      - name: Compile changed backend module
+        run: python -m py_compile backend/services/manager_v2.py
+
+      - name: Verify static responsiveness tests parse
+        run: python -m py_compile backend/tests/test_ui_responsiveness.py
+
+      - name: Remove one-shot patch machinery
+        run: |
+          git rm .pass3_apply.py .github/workflows/pass3-once.yml
+
+      - name: Commit pass 3
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md backend/services/manager_v2.py backend/tests/test_ui_responsiveness.py frontend/static/app.js
+          git diff --cached --check
+          git commit -m "perf: reduce polling and UI refresh churn"
+          git push origin HEAD:automation/pass3-runner

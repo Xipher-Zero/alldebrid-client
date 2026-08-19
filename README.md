@@ -8,6 +8,9 @@
   [![Image](https://img.shields.io/github/actions/workflow/status/Xipher-Zero/debridpulse/fork-image.yml?style=flat-square&label=image)](https://github.com/Xipher-Zero/debridpulse/actions/workflows/fork-image.yml)
 </div>
 
+> [!IMPORTANT]
+> **License and attribution:** DebridPulse modifications are Copyright © 2026 Chris Moore and are licensed under **GPL-2.0-or-later**. DebridPulse is derived from [`kroeberd/alldebrid-client` v1.9.9](https://github.com/kroeberd/alldebrid-client/tree/c0f7a5bfeba4f259fb2acc62ac6eed27e8ac4d5c), Copyright © 2026 kroeberd, originally licensed under MIT. See [LICENSE](LICENSE), [NOTICE](NOTICE), and [LICENSES/MIT.txt](LICENSES/MIT.txt).
+
 ---
 
 ## What is DebridPulse?
@@ -145,10 +148,10 @@ Go to **Settings → General** and configure your AllDebrid API key.
 
 Fork-owned images are published to GHCR.
 
-Current version:
+Versioned V1 images use the release tag:
 
 ```text
-ghcr.io/xipher-zero/debridpulse:internal-v0.9.4
+ghcr.io/xipher-zero/debridpulse:v1.0.0
 ```
 
 Example:
@@ -162,11 +165,11 @@ docker run -d \
   -e PGID=1000 \
   -e TZ=America/Phoenix \
   -e CONFIG_PATH=/app/config/config.json \
-  -e DB_PATH=/app/data/alldebrid.db \
+  -e DB_PATH=/app/data/debridpulse.db \
   -v /path/to/debridpulse/config:/app/config \
   -v /path/to/debridpulse/data:/app/data \
-  -v /path/to/downloads:/downloads \
-  ghcr.io/xipher-zero/debridpulse:internal-v0.9.4
+  -v /path/to/downloads:/download \
+  ghcr.io/xipher-zero/debridpulse:v1.0.0
 ```
 
 Adjust the paths and UID/GID for your system.
@@ -293,9 +296,9 @@ Their routes, services, scheduler jobs, configuration, UI, database tables, and 
 
 ---
 
-## Fork history
+## Upstream provenance
 
-DebridPulse is derived from upstream `kroeberd/alldebrid-client` release **v1.9.9**, commit:
+DebridPulse is derived from upstream [`kroeberd/alldebrid-client`](https://github.com/kroeberd/alldebrid-client) release **v1.9.9**, commit:
 
 ```text
 c0f7a5bfeba4f259fb2acc62ac6eed27e8ac4d5c
@@ -303,7 +306,7 @@ c0f7a5bfeba4f259fb2acc62ac6eed27e8ac4d5c
 
 The fork initially preserved production corrections around AllDebrid processing and shared external aria2 operation, then added tracked direct-link downloading and began simplifying the user interface around the actual AllDebrid download workflow.
 
-See [`INTERNAL_FORK.md`](INTERNAL_FORK.md) for historical notes about the initial divergence.
+See [`INTERNAL_FORK.md`](INTERNAL_FORK.md) for historical notes about the initial divergence and [`NOTICE`](NOTICE) for the retained upstream attribution.
 
 See [`CHANGELOG.md`](CHANGELOG.md) for current DebridPulse changes.
 
@@ -365,4 +368,5 @@ DebridPulse modifications are copyright © 2026 Chris Moore and are distributed 
 [`GPL-2.0-or-later`](LICENSE). The upstream MIT copyright and permission notice
 are preserved in [`NOTICE`](NOTICE) and [`LICENSES/MIT.txt`](LICENSES/MIT.txt).
 Runtime dependency licensing is inventoried in
-[`docs/DEPENDENCY_LICENSES.md`](docs/DEPENDENCY_LICENSES.md).
+[`docs/DEPENDENCY_LICENSES.md`](docs/DEPENDENCY_LICENSES.md). The container source
+offer is documented in [`SOURCE_OFFER.md`](SOURCE_OFFER.md).

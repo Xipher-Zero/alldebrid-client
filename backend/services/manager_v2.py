@@ -4261,14 +4261,14 @@ class TorrentManager:
         - Fetches the ready-file list from AllDebrid (same as aria2 mode).
         - Unlocks each link in parallel.
         - Creates <symlink_path>/<torrent_name>/<filename>.url files containing
-          the unlocked HTTPS URL (compatible with Kodi, Plex via strm plugin, etc.)
+          the unlocked HTTPS URL for consumers that can follow remote media links.
         - If ``symlink_path`` is empty, falls back to ``download_folder``.
         - Marks the torrent as completed immediately — no aria2 involvement.
         """
         cfg = get_settings()
         base_dir = Path(
             str(getattr(cfg, "symlink_path", "") or "").strip()
-            or str(getattr(cfg, "download_folder", "/downloads") or "/downloads")
+            or str(getattr(cfg, "download_folder", "/download") or "/download")
         )
         torrent_dir = base_dir / safe_name(name or f"torrent_{torrent_id}")
 

@@ -103,6 +103,63 @@ def test_frontend_and_runtime_lock_have_no_legacy_surface():
     assert "bencodepy" not in requirements
 
 
+def test_release_surfaces_do_not_advertise_removed_watch_folder_workflow():
+    release_surfaces = "\n".join(
+        (REPO_ROOT / path).read_text().casefold()
+        for path in (
+            "README.md",
+            "index.html",
+            "Dockerfile",
+            "docker-compose.yml",
+            "entrypoint.sh",
+            "frontend/static/index.html",
+        )
+    )
+    assert "watch folder" not in release_surfaces
+    assert "/app/data/watch" not in release_surfaces
+    assert "/app/data/processed" not in release_surfaces
+
+
+def test_v1_does_not_ship_the_broken_internal_postgres_sidecar_mode():
+    assert not (REPO_ROOT / "docker-compose.postgres.yml").exists()
+    surfaces = "\n".join(
+        (REPO_ROOT / path).read_text().casefold()
+        for path in (
+            "backend/api/routes.py",
+            "backend/core/config.py",
+            "frontend/static/app.js",
+            "docs/postgresql.md",
+        )
+    )
+    assert "postgres_internal" not in surfaces
+    assert "external postgresql" in (REPO_ROOT / "docs/postgresql.md").read_text().casefold()
+
+
+def test_direct_link_input_expands_to_five_lines_and_resets_after_submit():
+    frontend = (REPO_ROOT / "frontend/static/index.html").read_text()
+    scripts = (REPO_ROOT / "frontend/static/app.js").read_text()
+    styles = (REPO_ROOT / "frontend/static/style.css").read_text()
+
+    assert 'id="q-debrid-links" rows="1"' in frontend
+    assert 'oninput="resizeDebridLinkInput(this)"' in frontend
+    assert "function resizeDebridLinkInput(input)" in scripts
+    assert "const maximum = Math.ceil((lineHeight * 5) + chrome);" in scripts
+    assert "resizeDebridLinkInput(input);" in scripts
+    assert ".direct-link-input" in styles
+    assert "overflow-y: hidden" in styles
+
+
+def test_release_workflow_accepts_public_v1_tags():
+    workflow = (REPO_ROOT / ".github/workflows/fork-image.yml").read_text()
+    release_helper = (REPO_ROOT / "release.py").read_text()
+    assert "- 'v*'" in workflow
+    assert "startsWith(github.ref, 'refs/tags/v')" in workflow
+    assert "DB_PATH=/app/data/debridpulse.db" in workflow
+    assert (REPO_ROOT / "VERSION").read_text().strip() == "1.0.0"
+    assert 'tag = f"v{version}"' in release_helper
+    assert "internal-v{version}" not in release_helper
+
+
 def test_operator_tab_title_uses_short_active_identity_and_queue_average():
     frontend = (REPO_ROOT / "frontend/static/app.js").read_text()
     routes = (REPO_ROOT / "backend/api/routes.py").read_text()

@@ -9,7 +9,7 @@ the lock file and `licenses/python-runtime.json`.
 |---|---:|---|
 | aiofiles | 25.1.0 | Apache-2.0 |
 | aiohappyeyeballs | 2.6.1 | PSF-2.0 |
-| aiohttp | 3.13.5 | Apache-2.0 AND MIT |
+| aiohttp | 3.14.3 | Apache-2.0 AND MIT |
 | aiosignal | 1.4.0 | Apache-2.0 |
 | aiosqlite | 0.22.1 | MIT |
 | annotated-doc | 0.0.4 | MIT |
@@ -17,7 +17,7 @@ the lock file and `licenses/python-runtime.json`.
 | anyio | 4.13.0 | MIT |
 | asyncpg | 0.31.0 | Apache-2.0 |
 | attrs | 26.1.0 | MIT |
-| bencode2 | 0.3.33 | MIT |
+| bencode2 | 0.3.33 | MIT ([bundled notice](../licenses/bencode2-MIT.txt)) |
 | click | 8.3.3 | BSD-3-Clause |
 | fastapi | 0.136.1 | MIT |
 | frozenlist | 1.8.0 | Apache-2.0 |
@@ -30,9 +30,9 @@ the lock file and `licenses/python-runtime.json`.
 | pycryptodome | 3.23.0 | BSD-2-Clause and public-domain components |
 | pydantic | 2.13.4 | MIT |
 | pydantic_core | 2.46.4 | MIT |
-| pydantic-settings | 2.14.1 | MIT |
+| pydantic-settings | 2.14.2 | MIT |
 | python-dotenv | 1.2.2 | BSD-3-Clause |
-| python-multipart | 0.0.29 | Apache-2.0 |
+| python-multipart | 0.0.31 | Apache-2.0 |
 | PyYAML | 6.0.3 | MIT |
 | starlette | 1.3.1 | BSD-3-Clause |
 | typing_extensions | 4.15.0 | PSF-2.0 |
@@ -62,6 +62,11 @@ recorded in the image's SBOM attestation.
 Package copyright files and common license texts remain installed in the
 image. `SOURCE_OFFER.md` explains how to request corresponding source for
 copyleft-covered binaries.
+
+Python packages retain their installed `.dist-info` license and notice files.
+`bencode2` 0.3.33 is the exception: its wheel omits the upstream MIT text, so
+DebridPulse explicitly packages that tagged notice at
+`licenses/bencode2-MIT.txt`.
 
 ## Browser-loaded resources
 

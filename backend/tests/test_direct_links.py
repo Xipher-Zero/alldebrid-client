@@ -263,7 +263,7 @@ class DashboardContractTests(unittest.TestCase):
         repo_root = Path(__file__).resolve().parents[2]
         html = (repo_root / "frontend/static/index.html").read_text()
         js = (repo_root / "frontend/static/app.js").read_text()
-        direct_heading = "⬇️ Add Links to Generate and Download DeBrid links"
+        direct_heading = "⬇️ Add Links to Generate and Download Debrid Links"
         magnet_heading = "🧲 Add Magnet Links or a Torrent File"
         self.assertIn(direct_heading, html)
         self.assertLess(html.index(direct_heading), html.index(magnet_heading))
@@ -299,8 +299,9 @@ class DashboardContractTests(unittest.TestCase):
         css = (repo_root / "frontend/static/style.css").read_text()
 
         sidebar_nav = html.split("<nav>", 1)[1].split("</nav>", 1)[0]
-        for removed_view in ("learning", "saved-searches", "changelog", "support", "help"):
+        for removed_view in ("learning", "saved-searches", "changelog", "support"):
             self.assertNotIn(f'data-view="{removed_view}"', sidebar_nav)
+        self.assertIn('data-view="help"', sidebar_nav)
         self.assertNotIn('<div class="nav-group">Project</div>', sidebar_nav)
         self.assertIn('class="sidebar-theme-control"', sidebar_nav)
         self.assertIn('aria-label="Switch to light mode"', sidebar_nav)

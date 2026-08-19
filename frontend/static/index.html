@@ -44,6 +44,9 @@
     <div class="nav-item" data-view="settings" onclick="nav(this)">
       <span class="icon">&#x2699;&#xFE0E;</span><span class="nav-label">Settings</span>
     </div>
+    <div class="nav-item" data-view="help" onclick="nav(this)">
+      <span class="icon">&#x003F;&#xFE0E;</span><span class="nav-label">Help &amp; License</span>
+    </div>
     <div class="sidebar-theme-control">
       <button type="button" class="theme-toggle" id="theme-toggle" onclick="toggleTheme()"
               title="Switch to light mode" aria-label="Switch to light mode">&#x263E;&#xFE0E;</button>
@@ -229,11 +232,11 @@
       <!-- ── Add Direct Debrid Links ──────────────────────────────────────── -->
       <div class="card" style="margin-bottom:14px">
         <div class="card-header">
-          <span class="card-title">⬇️ Add Links to Generate and Download DeBrid links</span>
+          <span class="card-title">⬇️ Add Links to Generate and Download Debrid Links</span>
         </div>
         <div style="padding:12px 16px">
-          <div style="display:flex;gap:8px;align-items:stretch">
-            <textarea class="input" id="q-debrid-links" rows="1" placeholder="https://example-hoster.com/file/… or paste multiple links, one per line" style="flex:1;resize:none;min-height:38px;font-family:'JetBrains Mono',monospace" onkeydown="if((event.ctrlKey||event.metaKey)&&event.key==='Enter')addDebridLinks()"></textarea>
+          <div class="direct-link-entry">
+            <textarea class="input direct-link-input" id="q-debrid-links" rows="1" placeholder="https://example-hoster.com/file/… or paste multiple links, one per line" oninput="resizeDebridLinkInput(this)" onkeydown="if((event.ctrlKey||event.metaKey)&&event.key==='Enter')addDebridLinks()"></textarea>
             <button class="btn btn-primary" id="btn-add-debrid-links" onclick="addDebridLinks()" style="padding:9px 20px" title="Generate each link through AllDebrid and queue the resulting downloads in aria2">Add</button>
           </div>
         </div>
@@ -531,6 +534,7 @@
         <div class="stab"         data-htab="integrations" onclick="switchHelpTab(this)">&#128268; Integrations</div>
         <div class="stab"         data-htab="settings"     onclick="switchHelpTab(this)">&#9881;&#65039; Settings</div>
         <div class="stab"         data-htab="trouble"      onclick="switchHelpTab(this)">&#128295; Troubleshooting</div>
+        <div class="stab"         data-htab="license"      onclick="switchHelpTab(this)">&#9878;&#65039; License</div>
       </div>
 
       <div class="help-panels-wrap">
@@ -558,7 +562,7 @@
                 <div style="background:var(--accent);color:#000;border-radius:50%;min-width:30px;height:30px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;flex-shrink:0">2</div>
                 <div>
                   <div style="font-weight:600;margin-bottom:3px">Set the download folder</div>
-                  <div style="color:var(--text2);font-size:13px">Go to <b>Settings → Download</b> and set the <b>Built-in aria2 Download Folder</b> to an existing path accessible by the container (e.g. <code>/downloads</code>).</div>
+                  <div style="color:var(--text2);font-size:13px">Go to <b>Settings → Download</b> and set the <b>Built-in aria2 Download Folder</b> to an existing path accessible by the container (the documented container mount is <code>/download</code>).</div>
                 </div>
               </div>
 
@@ -786,6 +790,46 @@
               </details>
 
             </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── License ───────────────────────────────────────────────────────── -->
+      <div class="help-panel" id="htab-license">
+        <div class="card" style="margin-top:0;border-radius:0 0 var(--radius) var(--radius)">
+          <div class="card-body" style="max-width:820px;display:flex;flex-direction:column;gap:18px">
+            <div>
+              <h3 style="margin:0 0 8px;color:var(--accent);font-size:15px">DebridPulse licensing</h3>
+              <p style="margin:0;color:var(--text2);font-size:13px;line-height:1.7">
+                DebridPulse modifications are Copyright &copy; 2026 Chris Moore and are
+                distributed under the <b style="color:var(--text1)">GNU General Public License v2.0 or later</b>
+                (<code>GPL-2.0-or-later</code>).
+              </p>
+              <p style="margin:8px 0 0;color:var(--text2);font-size:13px;line-height:1.7">
+                You may redistribute and modify DebridPulse under those terms. It is provided
+                without warranty; see the complete license for the governing conditions and disclaimer.
+              </p>
+            </div>
+
+            <div style="border:1px solid var(--border);border-radius:var(--radius-sm);padding:14px 16px;background:var(--surface2);font-size:13px;color:var(--text2);line-height:1.7">
+              This application is derived from
+              <a href="https://github.com/kroeberd/alldebrid-client/tree/c0f7a5bfeba4f259fb2acc62ac6eed27e8ac4d5c" target="_blank" rel="noopener" style="color:var(--accent)">kroeberd/alldebrid-client v1.9.9</a>
+              (commit <code>c0f7a5bfeba4f259fb2acc62ac6eed27e8ac4d5c</code>),
+              Copyright &copy; 2026 kroeberd, originally distributed under the MIT License.
+              The upstream copyright and permission notice are retained with DebridPulse.
+            </div>
+
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <a class="btn btn-primary" href="https://github.com/Xipher-Zero/debridpulse/blob/main/LICENSE" target="_blank" rel="noopener">Read GPL-2.0-or-later</a>
+              <a class="btn btn-ghost" href="https://github.com/Xipher-Zero/debridpulse/blob/main/NOTICE" target="_blank" rel="noopener">Attribution notice</a>
+              <a class="btn btn-ghost" href="https://github.com/Xipher-Zero/debridpulse/blob/main/LICENSES/MIT.txt" target="_blank" rel="noopener">Upstream MIT license</a>
+              <a class="btn btn-ghost" href="https://github.com/Xipher-Zero/debridpulse/blob/main/SOURCE_OFFER.md" target="_blank" rel="noopener">Source offer</a>
+              <a class="btn btn-ghost" href="https://github.com/Xipher-Zero/debridpulse/blob/main/docs/DEPENDENCY_LICENSES.md" target="_blank" rel="noopener">Third-party licenses</a>
+            </div>
+
+            <p style="margin:0;color:var(--text3);font-size:12px;line-height:1.6">
+              The complete license, notices, dependency inventory, and source offer are also packaged in the DebridPulse container image.
+            </p>
           </div>
         </div>
       </div>

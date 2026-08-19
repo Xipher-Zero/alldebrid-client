@@ -6,6 +6,7 @@ on:
       - main
       - 'staging/**'
     tags:
+      - 'v*'
       - 'internal-v*'
   pull_request:
     branches:
@@ -86,7 +87,7 @@ jobs:
             --env PUID=0 \
             --env PGID=0 \
             --env CONFIG_PATH=/app/config/config.json \
-            --env DB_PATH=/app/data/alldebrid.db \
+            --env DB_PATH=/app/data/debridpulse.db \
             "local/debridpulse:${GITHUB_SHA}"
 
           healthy=0
@@ -137,6 +138,8 @@ jobs:
 
           docker exec "$container_name" test -f /app/LICENSE
           docker exec "$container_name" test -f /app/NOTICE
+          docker exec "$container_name" test -f /app/licenses/python-runtime.json
+          docker exec "$container_name" test -f /app/licenses/bencode2-MIT.txt
           docker exec "$container_name" grep -q "Chris Moore" /app/NOTICE
 
           if [ "$health_version" != "$expected_version" ]; then
@@ -195,7 +198,7 @@ jobs:
             latest=false
           tags: |
             type=sha,prefix=sha-,format=short,enable=${{ !startsWith(github.ref, 'refs/tags/') }}
-            type=ref,event=tag,enable=${{ startsWith(github.ref, 'refs/tags/internal-v') }}
+            type=ref,event=tag,enable=${{ startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/internal-v') }}
           labels: |
             org.opencontainers.image.title=DebridPulse — Multi-provider Debrid Download Manager
             org.opencontainers.image.description=Multi-provider debrid download manager for direct links, magnets, and torrent files

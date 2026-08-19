@@ -26,3 +26,7 @@ their package-specific notices remain installed under /usr/share/doc and their
 common license texts under /usr/share/common-licenses. See SOURCE_OFFER.md for
 corresponding-source information. Browser-loaded CDN resources and their
 licenses are also inventoried in docs/DEPENDENCY_LICENSES.md.
+
+The bencode2 0.3.33 wheel omits its declared MIT license file. Its upstream
+copyright and permission notice is therefore bundled explicitly at
+licenses/bencode2-MIT.txt.

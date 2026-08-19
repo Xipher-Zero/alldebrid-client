@@ -824,6 +824,24 @@ td { padding: 11px 16px; vertical-align: middle; }
 #view-help .view-header { flex-shrink: 0; }
 #help-tabs { flex-shrink: 0; margin-bottom: 0; overflow-x: auto; scrollbar-width: none; }
 #help-tabs::-webkit-scrollbar { display: none; }
+
+.direct-link-entry {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+}
+.direct-link-input {
+  flex: 1;
+  resize: none;
+  min-height: 38px;
+  max-height: 110px;
+  overflow-y: hidden;
+  line-height: 18px;
+  font-family: 'JetBrains Mono', monospace;
+}
+@media (max-width: 640px) {
+  .direct-link-entry { align-items: stretch; flex-direction: column; }
+}
 .help-panels-wrap { flex: 1; overflow-y: auto; min-height: 0; }
 .help-panels-wrap .help-panel { display: none; }
 .help-panels-wrap .help-panel.active { display: block; }

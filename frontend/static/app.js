@@ -62,6 +62,7 @@ function nav(el) {
     stats:'Statistics',
     analytics:'Analytics',
     settings:'Settings',
+    help:'Help & License',
   };
   document.getElementById('page-title').textContent = titles[v] || v;
   if (v === 'dashboard') { loadStats(); loadRecent(); }
@@ -738,6 +739,22 @@ async function quickAdd() {
   finally { if (btn) btn.disabled = false; }
 }
 
+function resizeDebridLinkInput(input) {
+  if (!input) return;
+  const styles = window.getComputedStyle(input);
+  const lineHeight = parseFloat(styles.lineHeight) || 18;
+  const chrome = (parseFloat(styles.paddingTop) || 0) +
+    (parseFloat(styles.paddingBottom) || 0) +
+    (parseFloat(styles.borderTopWidth) || 0) +
+    (parseFloat(styles.borderBottomWidth) || 0);
+  const minimum = 38;
+  const maximum = Math.ceil((lineHeight * 5) + chrome);
+  input.style.height = `${minimum}px`;
+  const target = Math.max(minimum, Math.min(input.scrollHeight, maximum));
+  input.style.height = `${target}px`;
+  input.style.overflowY = input.scrollHeight > maximum ? 'auto' : 'hidden';
+}
+
 async function addDebridLinks() {
   const input = document.getElementById('q-debrid-links');
   const button = document.getElementById('btn-add-debrid-links');
@@ -759,6 +776,7 @@ async function addDebridLinks() {
     const count = result.accepted_links || links.length;
     toast(`${count} debrid link${count === 1 ? '' : 's'} submitted`, 'success');
     input.value = '';
+    resizeDebridLinkInput(input);
     input.focus();
     loadStats();
     loadRecent();
@@ -1892,7 +1910,7 @@ function renderSettings() {
         <div class="form-group">
           <label class="form-label">Database Type</label>
           <select class="input" id="s-db_type"
-            onchange="document.getElementById('pg-settings').style.display=(this.value==='postgres'||this.value==='postgres_internal')?'block':'none';updateSettingsFooterActions('tab-database')"
+            onchange="document.getElementById('pg-settings').style.display=this.value==='postgres'?'block':'none';updateSettingsFooterActions('tab-database')"
             ${s._db_type_locked?'disabled':''}>
             <option value="sqlite" ${(s.db_type||'sqlite')==='sqlite'?'selected':''}>SQLite (default)</option>
             <option value="postgres" ${s.db_type==='postgres'?'selected':''}>PostgreSQL (external)</option>
@@ -1902,7 +1920,7 @@ function renderSettings() {
         <div id="pg-settings" style="display:${s.db_type==='postgres'?'block':'none'}">
           <div class="form-group">
             <label class="form-label">Host</label>
-            <input class="input" id="s-postgres_host" value="${s.postgres_host||'localhost'}" ${s.db_type==='postgres_internal'?'readonly style="opacity:.5"':''}/>
+            <input class="input" id="s-postgres_host" value="${s.postgres_host||'localhost'}"/>
           </div>
           <div class="form-group">
             <label class="form-label">Port</label>
@@ -1910,11 +1928,11 @@ function renderSettings() {
           </div>
           <div class="form-group">
             <label class="form-label">Database</label>
-            <input class="input" id="s-postgres_db" value="${s.postgres_db||'alldebrid'}"/>
+            <input class="input" id="s-postgres_db" value="${s.postgres_db||'debridpulse'}"/>
           </div>
           <div class="form-group">
             <label class="form-label">User</label>
-            <input class="input" id="s-postgres_user" value="${s.postgres_user||'alldebrid'}"/>
+            <input class="input" id="s-postgres_user" value="${s.postgres_user||'debridpulse'}"/>
           </div>
           <div class="form-group">
             <label class="form-label">Password</label>
@@ -2204,7 +2222,7 @@ function updateSettingsFooterActions(activeTab) {
     let visible = button.dataset.settingsTestTab === activeTab;
     if (button.id === 'btn-test-postgres') {
       const dbType = document.getElementById('s-db_type')?.value || settingsData.db_type || 'sqlite';
-      visible = visible && (dbType === 'postgres' || dbType === 'postgres_internal');
+      visible = visible && dbType === 'postgres';
     }
     button.hidden = !visible;
   });

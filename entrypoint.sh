@@ -2,7 +2,7 @@
 # DebridPulse container entrypoint.
 #
 # Supports PUID / PGID environment variables so that downloaded files are owned
-# by the same user as the host process (e.g. Sonarr, Radarr, Plex).
+# by the same user as other host processes that consume downloaded files.
 #
 # Usage:
 #   environment:
@@ -50,7 +50,7 @@ UMASK="${UMASK:-002}"
 umask "${UMASK}" 2>/dev/null || true
 
 # ── Fix ownership of app directories ─────────────────────────────────────────
-# /app/data    — SQLite DB, backups, aria2 session/log, watch/processed folders
+# /app/data    — SQLite DB, backups, and aria2 session/log files
 # /app/config  — config.json
 # /download    — the mounted download target (most important for other containers)
 for DIR in /app/data /app/config /download; do

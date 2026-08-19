@@ -49,6 +49,8 @@ nav{position:fixed;top:0;left:0;right:0;z-index:100;padding:0 5vw;height:64px;di
 .hero-title{font-family:var(--disp);font-size:clamp(46px,8vw,90px);font-weight:800;line-height:1.02;letter-spacing:-2px;color:#fff;margin-bottom:24px;animation:fadeUp .7s .1s ease both}
 .hero-title span{color:var(--acc)}
 .hero-sub{font-size:clamp(15px,2vw,18px);color:var(--mu2);max-width:620px;margin-bottom:48px;animation:fadeUp .8s .2s ease both}
+.hero-license{font-size:11px;color:var(--mu2);max-width:760px;margin-top:24px;animation:fadeUp .95s .35s ease both}
+.hero-license a{color:var(--acc);text-decoration:none}
 .hero-ctas{display:flex;gap:14px;flex-wrap:wrap;justify-content:center;animation:fadeUp .9s .3s ease both}
 .btn{display:inline-flex;align-items:center;gap:8px;padding:12px 28px;border-radius:10px;font-family:var(--mono);font-size:14px;font-weight:500;text-decoration:none;transition:all .2s;cursor:pointer;border:none}
 .btn-primary{background:var(--acc);color:#fff}
@@ -185,6 +187,7 @@ footer{padding:48px 5vw;border-top:1px solid var(--brd);display:flex;align-items
     </a>
     <a href="https://github.com/Xipher-Zero/debridpulse/pkgs/container/debridpulse" target="_blank" class="btn btn-ghost">🐳 GHCR</a>
   </div>
+  <p class="hero-license">GPL-2.0-or-later · DebridPulse modifications © 2026 Chris Moore · Derived from <a href="https://github.com/kroeberd/alldebrid-client/tree/c0f7a5bfeba4f259fb2acc62ac6eed27e8ac4d5c" target="_blank">kroeberd/alldebrid-client v1.9.9</a> (MIT, © 2026 kroeberd)</p>
   <div class="hero-stats">
     <div class="hero-stat"><div class="hero-stat-num">3</div><div class="hero-stat-label">Input types</div></div>
     <div class="hero-stat"><div class="hero-stat-num">2</div><div class="hero-stat-label">aria2 modes</div></div>
@@ -225,7 +228,7 @@ footer{padding:48px 5vw;border-top:1px solid var(--brd);display:flex;align-items
     <p class="section-sub reveal">Built for self-hosters who want reliable debrid downloads with full visibility into what is happening.</p>
     <div class="features-grid">
       <div class="feat-card reveal"><div class="feat-icon">🖥️</div><div class="feat-title">Web UI</div><div class="feat-text">Clean single-page dashboard: all torrents, status, progress, events, file list. Dark tech aesthetic, mobile-friendly.</div></div>
-      <div class="feat-card reveal"><div class="feat-icon">📁</div><div class="feat-title">Watch folder</div><div class="feat-text">Drop a .torrent or .magnet file and it's automatically imported. Processed files are moved to a separate folder.</div></div>
+      <div class="feat-card reveal"><div class="feat-icon">⏯️</div><div class="feat-title">Pause-aware queue</div><div class="feat-text">Pause individual transfers without consuming active slots. The queue advances around paused work and resumes cleanly.</div></div>
       <div class="feat-card reveal"><div class="feat-icon">🔗</div><div class="feat-title">Direct debrid links</div><div class="feat-text">Submit up to 100 hoster links in one tracked transaction, including delayed link generation and recovery.</div></div>
       <div class="feat-card reveal"><div class="feat-icon">🌐</div><div class="feat-title">REST API</div><div class="feat-text">Full REST API for adding magnets, querying status, triggering syncs and webhooks. Swagger UI at /api/docs.</div></div>
       <div class="feat-card reveal"><div class="feat-icon">⬇️</div><div class="feat-title">aria2 integration</div><div class="feat-text">Slot-based queue with configurable concurrency. Existing downloads detected on restart — no duplicates, no orphans.</div></div>
@@ -267,7 +270,7 @@ footer{padding:48px 5vw;border-top:1px solid var(--brd);display:flex;align-items
           <div class="step-num">3</div>
           <div class="step-body">
             <strong>Add your first magnet</strong>
-            <p>Paste a direct link or magnet, upload a .torrent file, or drop supported input into the watch folder.</p>
+            <p>Paste one or more direct links or magnets, or upload a .torrent file from the Dashboard.</p>
           </div>
         </div>
         <div class="install-step reveal">
@@ -287,7 +290,7 @@ footer{padding:48px 5vw;border-top:1px solid var(--brd);display:flex;align-items
         </div>
         <pre id="cc1"><span class="kw">services</span>:
   <span class="kw">debridpulse</span>:
-    <span class="cm">image</span>: <span class="str">ghcr.io/xipher-zero/debridpulse:internal-v0.9.4</span>
+    <span class="cm">image</span>: <span class="str">ghcr.io/xipher-zero/debridpulse:v1.0.0</span>
     <span class="cm">container_name</span>: <span class="str">debridpulse</span>
     <span class="cm">restart</span>: <span class="str">unless-stopped</span>
     <span class="cm">network_mode</span>: <span class="str">host</span>
@@ -295,11 +298,9 @@ footer{padding:48px 5vw;border-top:1px solid var(--brd);display:flex;align-items
       - <span class="str">TZ=Europe/Berlin</span>
       - <span class="str">LOG_LEVEL=INFO</span>
     <span class="cm">volumes</span>:
-      - <span class="str">/mnt/appdata/alldebrid/config:/app/config</span>
-      - <span class="str">/mnt/appdata/alldebrid/data:/app/data</span>
-      - <span class="str">/mnt/data/torrents/watch:/app/data/watch</span>
-      - <span class="str">/mnt/data/torrents/processed:/app/data/processed</span>
-      - <span class="str">/mnt/downloads/alldebrid:/download</span></pre>
+      - <span class="str">/mnt/appdata/debridpulse/config:/app/config</span>
+      - <span class="str">/mnt/appdata/debridpulse/data:/app/data</span>
+      - <span class="str">/mnt/downloads/debridpulse:/download</span></pre>
       </div>
       <div class="code-block reveal">
         <div class="code-header">
@@ -311,10 +312,12 @@ footer{padding:48px 5vw;border-top:1px solid var(--brd);display:flex;align-items
   --restart unless-stopped \
   --network host \
   -e TZ=Europe/Berlin \
-  -v /mnt/appdata/alldebrid/config:/app/config \
-  -v /mnt/appdata/alldebrid/data:/app/data \
-  -v /mnt/downloads/alldebrid:/download \
-  ghcr.io/xipher-zero/debridpulse:internal-v0.9.4</span></pre>
+  -e CONFIG_PATH=/app/config/config.json \
+  -e DB_PATH=/app/data/debridpulse.db \
+  -v /mnt/appdata/debridpulse/config:/app/config \
+  -v /mnt/appdata/debridpulse/data:/app/data \
+  -v /mnt/downloads/debridpulse:/download \
+  ghcr.io/xipher-zero/debridpulse:v1.0.0</span></pre>
       </div>
     </div>
   </div>
@@ -382,7 +385,7 @@ footer{padding:48px 5vw;border-top:1px solid var(--brd);display:flex;align-items
 <!-- FOOTER -->
 <footer>
   <a href="#" class="footer-logo">Debrid<span>Pulse</span></a>
-  <div class="footer-copy">DebridPulse · GPL-2.0-or-later</div>
+  <div class="footer-copy">DebridPulse · GPL-2.0-or-later · © 2026 Chris Moore</div>
   <div class="footer-links">
     <a href="https://github.com/Xipher-Zero/debridpulse" target="_blank">GitHub</a>
     <a href="https://github.com/Xipher-Zero/debridpulse/pkgs/container/debridpulse" target="_blank">GHCR</a>

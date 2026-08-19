@@ -3,6 +3,7 @@ import asyncio
 import gzip
 import io
 import os
+import stat
 import tarfile
 import zipfile
 from pathlib import Path
@@ -158,6 +159,40 @@ async def test_extract_zip(tmp_path):
     ok, msg = await extractor.extract_archive(archive, dest, delete_after=False)
     assert ok, msg
     assert (dest / "file.txt").read_bytes() == b"zip content"
+
+
+@pytest.mark.asyncio
+async def test_extract_zip_rejects_parent_traversal(tmp_path):
+    archive = tmp_path / "traversal.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("../../escaped.txt", b"not allowed")
+
+    dest = tmp_path / "out"
+    extractor = Extractor(max_concurrent=1)
+    ok, msg = await extractor.extract_archive(archive, dest, delete_after=False)
+
+    assert ok is False
+    assert "traversal.zip" in msg
+    assert not (tmp_path / "escaped.txt").exists()
+    assert archive.exists()
+
+
+@pytest.mark.asyncio
+async def test_extract_zip_rejects_symlink_members(tmp_path):
+    archive = tmp_path / "symlink.zip"
+    member = zipfile.ZipInfo("outside-link")
+    member.create_system = 3
+    member.external_attr = (stat.S_IFLNK | 0o777) << 16
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr(member, "../outside")
+
+    dest = tmp_path / "out"
+    extractor = Extractor(max_concurrent=1)
+    ok, msg = await extractor.extract_archive(archive, dest, delete_after=False)
+
+    assert ok is False
+    assert "symlink.zip" in msg
+    assert not (dest / "outside-link").exists()
 
 
 @pytest.mark.asyncio

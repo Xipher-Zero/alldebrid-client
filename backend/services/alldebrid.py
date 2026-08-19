@@ -314,6 +314,8 @@ def extract_hash_from_torrent(data: bytes) -> str:
         if not isinstance(info, dict):
             return ""
         info_bytes = bencode2.bencode(info)
-        return hashlib.sha1(info_bytes).hexdigest()  # noqa: S324
+        # SHA-1 is mandated by the BitTorrent v1 info-hash protocol and is not
+        # used here for a security decision.
+        return hashlib.sha1(info_bytes, usedforsecurity=False).hexdigest()
     except Exception:
         return ""

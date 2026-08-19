@@ -12,8 +12,9 @@ third party for no more than the reasonable cost of physically providing the
 source. This offer is valid for three years after the last distribution of the
 applicable image version.
 
-Request source by opening an issue at
-<https://github.com/Xipher-Zero/debridpulse/issues> with:
+Request source using the repository's dedicated source-request form:
+<https://github.com/Xipher-Zero/debridpulse/issues/new?template=source_request.yml>.
+Include:
 
 - the full container image name and digest;
 - the target architecture;

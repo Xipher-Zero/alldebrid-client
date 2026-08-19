@@ -28,7 +28,24 @@ import aiosqlite
 
 logger = logging.getLogger("alldebrid.db")
 
-DB_PATH = Path(os.getenv("DB_PATH", "/app/data/alldebrid.db"))
+def _default_sqlite_path() -> Path:
+    """Use the DebridPulse filename for new installs without stranding upgrades."""
+    configured = os.getenv("DB_PATH", "").strip()
+    if configured:
+        return Path(configured)
+    current = Path("/app/data/debridpulse.db")
+    legacy = Path("/app/data/alldebrid.db")
+    if legacy.exists() and not current.exists():
+        logger.warning(
+            "Using legacy SQLite path %s; set DB_PATH=%s to migrate explicitly",
+            legacy,
+            current,
+        )
+        return legacy
+    return current
+
+
+DB_PATH = _default_sqlite_path()
 
 
 def _get_settings():

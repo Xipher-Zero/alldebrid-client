@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""
-release.py — Erstellt ein GitHub Release mit dem aktuellen CHANGELOG-Eintrag.
-Aufruf: python3 release.py <version>  z.B.: python3 release.py 0.9.1
+"""Create or update a public GitHub release from the matching changelog entry.
+
+Usage: python3 release.py <version>  (for example: python3 release.py 1.0.0)
 """
 import sys, re, json, subprocess, pathlib
 
@@ -10,7 +10,7 @@ if len(sys.argv) < 2:
     sys.exit(1)
 
 version = sys.argv[1].lstrip('v')
-tag = f"internal-v{version}"
+tag = f"v{version}"
 
 # 1. CHANGELOG-Eintrag extrahieren
 changelog = pathlib.Path("CHANGELOG.md").read_text()

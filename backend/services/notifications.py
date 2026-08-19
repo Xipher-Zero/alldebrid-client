@@ -412,7 +412,8 @@ class NotificationService:
         # Deduplication: same content within 30s → skip
         # Key includes description to avoid suppressing different torrents with same event type
         dedup_key = hashlib.md5(
-            f"{url}|{title}|{description[:200]}".encode()
+            f"{url}|{title}|{description[:200]}".encode(),
+            usedforsecurity=False,
         ).hexdigest()
 
         async with self._get_lock():

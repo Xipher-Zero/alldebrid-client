@@ -125,7 +125,7 @@ class SettingsFrontendContractTests(unittest.TestCase):
         self.assertEqual(html.count('data-settings-test-tab="tab-notifications"'), 1)
         self.assertIn("updateSettingsFooterActions(id);", js)
         self.assertIn("button.hidden = !visible;", js)
-        self.assertIn("dbType === 'postgres' || dbType === 'postgres_internal'", js)
+        self.assertIn("visible = visible && dbType === 'postgres'", js)
 
     def test_stalled_download_recovery_is_download_scoped_and_type_agnostic(self):
         js = (

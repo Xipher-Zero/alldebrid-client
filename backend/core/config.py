@@ -21,10 +21,10 @@ class AppSettings(BaseModel):
 
     # Database
     db_type: str = "sqlite"
-    postgres_host: str = "alldebrid-postgres"
+    postgres_host: str = "localhost"
     postgres_port: int = 5432
-    postgres_db: str = "alldebrid"
-    postgres_user: str = "alldebrid"
+    postgres_db: str = "debridpulse"
+    postgres_user: str = "debridpulse"
     postgres_password: str = ""
     postgres_schema: str = "public"
     postgres_ssl: bool = False
@@ -266,8 +266,6 @@ def load_settings() -> AppSettings:
 def save_settings(s: AppSettings):
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     data = s.model_dump()
-    if os.getenv("DB_TYPE") == "postgres_internal":
-        data.pop("postgres_password", None)
     with open(CONFIG_PATH, "w") as f:
         json.dump(data, f, indent=2)
 

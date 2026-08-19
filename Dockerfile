@@ -30,6 +30,7 @@ COPY CHANGELOG.md /app/CHANGELOG.md
 COPY VERSION /app/VERSION
 COPY LICENSE NOTICE SOURCE_OFFER.md /app/
 COPY LICENSES/ /app/LICENSES/
+COPY licenses/ /app/licenses/
 COPY docs/DEPENDENCY_LICENSES.md /app/docs/DEPENDENCY_LICENSES.md
 
 # Entrypoint (handles PUID/PGID + chown)
@@ -38,7 +39,7 @@ RUN chmod +x /entrypoint.sh
 
 # Directories — owned by nobody:users (65534:100) by default
 # Override at runtime via PUID / PGID environment variables
-RUN mkdir -p /app/data/watch /app/data/processed /app/data/downloads /app/config /download && \
+RUN mkdir -p /app/data /app/config /download && \
     chown -R 99:100 /app /download
 
 EXPOSE 8080

@@ -164,8 +164,7 @@ def _is_public_url(url: str) -> bool:
 async def get_settings_ep():
     data = get_settings().model_dump()
     env_db_type = os.getenv("DB_TYPE", "").strip()
-    if env_db_type == "postgres_internal":
-        data["db_type"] = "postgres_internal"
+    if env_db_type in ("sqlite", "postgres"):
         data["_db_type_locked"] = True
     return data
 
@@ -233,8 +232,8 @@ async def version_check():
 async def update_settings(new: AppSettings):
     previous = get_settings()
     env_db_type = os.getenv("DB_TYPE", "").strip()
-    if env_db_type == "postgres_internal":
-        new = new.model_copy(update={"db_type": "postgres"})
+    if env_db_type in ("sqlite", "postgres"):
+        new = new.model_copy(update={"db_type": env_db_type})
     clean = validate_and_sanitise(new)
     # ── Sync derived fields before saving ───────────────────────────────────
     # max_concurrent_downloads is the application-level source of truth for
@@ -1100,7 +1099,7 @@ async def get_stats():
 
         env_db  = os.getenv("DB_TYPE", "").strip()
         act_db  = getattr(get_settings(), "db_type", "sqlite")
-        db_type = ("sqlite_fallback" if act_db == "sqlite" and env_db in ("postgres", "postgres_internal")
+        db_type = ("sqlite_fallback" if act_db == "sqlite" and env_db == "postgres"
                    else act_db)
 
         return {

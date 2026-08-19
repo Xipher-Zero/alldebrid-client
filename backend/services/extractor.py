@@ -186,7 +186,10 @@ def _extract_zip(archive: Path, dest: Path) -> None:
             if target.is_symlink():
                 raise ValueError(f"ZIP file replaces a symlink: {member.filename!r}")
             flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | no_follow
-            fd = os.open(target, flags, 0o666)
+            # Create regular extracted files with standard non-writable group/
+            # other permissions.  Do not rely on the process umask to remove
+            # potentially dangerous write bits from a permissive mode.
+            fd = os.open(target, flags, 0o644)
             with zf.open(member, "r") as source, os.fdopen(fd, "wb") as output:
                 shutil.copyfileobj(source, output)
 

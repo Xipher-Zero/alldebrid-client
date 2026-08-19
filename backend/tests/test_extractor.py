@@ -159,6 +159,7 @@ async def test_extract_zip(tmp_path):
     ok, msg = await extractor.extract_archive(archive, dest, delete_after=False)
     assert ok, msg
     assert (dest / "file.txt").read_bytes() == b"zip content"
+    assert stat.S_IMODE((dest / "file.txt").stat().st_mode) & 0o022 == 0
 
 
 @pytest.mark.asyncio

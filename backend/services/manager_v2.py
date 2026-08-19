@@ -2294,7 +2294,7 @@ class TorrentManager:
             try:
                 done.result()
             except asyncio.CancelledError:
-                pass
+                logger.debug("Ready-parent task cancelled for transfer %s", torrent_id)
             except Exception as exc:
                 logger.error(
                     "Ready-parent task failed for transfer %s: %s",
@@ -4538,8 +4538,12 @@ class TorrentManager:
                 "name": str(row["name"] if row else ""),
             })
             await _sse_broadcast("stats_changed", {})
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug(
+                "Unable to broadcast missing-provider state for transfer %s: %s",
+                torrent_id,
+                sanitize_exception(exc, max_length=200),
+            )
 
     async def _handle_expired_reimport(self, row: dict, magnet_link: str) -> None:
         """Re-upload a magnet whose AllDebrid entry expired (statusCode 3).

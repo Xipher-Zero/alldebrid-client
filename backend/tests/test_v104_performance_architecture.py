@@ -43,3 +43,71 @@ def test_hot_queue_indexes_cover_pending_dispatch_and_gid_lookup():
     assert "idx_dlfiles_queue" in database
     assert "idx_dlfiles_download_id" in database
     assert "idx_torrents_status_priority" in database
+
+
+def test_provider_polling_no_longer_nests_download_client_reconciliation():
+    manager = (REPO_ROOT / "backend/services/manager_v2.py").read_text()
+    sync = manager.split("async def sync_alldebrid_status(self):", 1)[1].split(
+        "async def deep_sync_aria2_finished", 1
+    )[0]
+    assert "sync_download_clients" not in sync
+
+
+def test_direct_link_generation_batches_result_persistence():
+    manager = (REPO_ROOT / "backend/services/manager_v2.py").read_text()
+    direct = manager.split("async def _prepare_direct_link_collection", 1)[1].split(
+        "async def retry_direct_link_collection", 1
+    )[0]
+    result_loop = direct.split(
+        "for position, result in enumerate(results, start=1):", 1
+    )[1].split("final_name = direct_link_collection_name", 1)[0]
+
+    assert "failed_updates" in result_loop
+    assert "success_updates" in result_loop
+    assert "generation_events" in result_loop
+    assert result_loop.count("await db.executemany(") == 3
+    assert result_loop.count("await db.commit()") == 1
+
+
+def test_stats_hot_path_uses_conditional_aggregation_and_timing():
+    routes = (REPO_ROOT / "backend/api/routes.py").read_text()
+    stats = routes.split("async def get_stats():", 1)[1].split(
+        '@router.get("/stats/detail")', 1
+    )[0]
+
+    assert "SUM(CASE WHEN status='completed'" in stats
+    assert "AS operator_active_progress_pct" in stats
+    assert 'observe("api.stats"' in stats
+    assert "SELECT COUNT(*) as c FROM torrents WHERE status='error'" not in stats
+
+
+def test_progress_only_sse_throttles_aggregate_stats_refresh():
+    frontend = (REPO_ROOT / "frontend/static/app.js").read_text()
+    sse = frontend.split("var progressStatsTimer = null;", 1)[1].split(
+        "es.addEventListener(\n          'ping'", 1
+    )[0]
+
+    assert "if (!patchedProgress)" in sse
+    assert "else if (!progressStatsTimer)" in sse
+    assert "progressStatsTimer = setTimeout(" in sse
+    assert "1500" in sse
+
+
+def test_performance_diagnostics_endpoint_exposes_only_runtime_counters():
+    routes = (REPO_ROOT / "backend/api/routes.py").read_text()
+    perf = routes.split(
+        '@router.get("/admin/performance")', 1
+    )[1].split("# ── Statistics", 1)[0]
+
+    assert "performance_snapshot()" in perf
+    assert "db_runtime_metrics()" in perf
+    assert "manager.aria2().rpc_metrics()" in perf
+    assert "get_settings()" not in perf
+
+
+def test_temporary_refactor_scaffolding_is_not_shipped():
+    assert not (REPO_ROOT / ".github/scripts/v104_surgical_refactor.py").exists()
+    assert not (REPO_ROOT / ".github/workflows/v104-surgical-refactor.yml").exists()
+    workflow = (REPO_ROOT / ".github/workflows/tests.yml").read_text()
+    assert "v104-refactor" not in workflow
+    assert "contents: write" not in workflow

@@ -3,20 +3,20 @@ name: Apply v1.0.2 performance pass 3 once
 on:
   push:
     branches:
-      - work/v1.0.2-ui-responsiveness
+      - automation/pass3-runner
 
 permissions:
   contents: write
 
 jobs:
   apply:
-    if: github.event.head_commit.message == 'chore: trigger v1.0.2 performance pass 3'
+    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout working branch
+      - name: Checkout automation branch
         uses: actions/checkout@v5
         with:
-          ref: work/v1.0.2-ui-responsiveness
+          ref: automation/pass3-runner
           fetch-depth: 0
 
       - name: Apply guarded pass 3 patch
@@ -39,4 +39,4 @@ jobs:
           git add CHANGELOG.md backend/services/manager_v2.py backend/tests/test_ui_responsiveness.py frontend/static/app.js
           git diff --cached --check
           git commit -m "perf: reduce polling and UI refresh churn"
-          git push origin HEAD:work/v1.0.2-ui-responsiveness
+          git push origin HEAD:automation/pass3-runner

@@ -394,8 +394,35 @@ async def aria2_runtime_status():
 
 @router.get("/aria2/global-stat")
 async def aria2_global_stat():
-    """Return the lightweight live counters used by the topbar indicator."""
-    return {"ok": True, **await manager.aria2().get_global_stat()}
+    """Return ownership-safe live counters used by the topbar indicator."""
+    cfg = get_settings()
+    external = getattr(cfg, "aria2_mode", "external") != "builtin"
+
+    if not external:
+        return {
+            "ok": True,
+            "mode": "builtin",
+            "external_control": False,
+            **await manager.aria2().get_global_stat(),
+        }
+
+    # External aria2 may be shared with unrelated applications. Observe only
+    # jobs whose GIDs DebridPulse has recorded as its own.
+    active_downloads = await manager.aria2().get_active()
+    owned_active = await manager._aria2_owned_downloads(active_downloads)
+
+    return {
+        "ok": True,
+        "mode": "external",
+        "external_control": True,
+        "download_speed": sum(
+            int(getattr(download, "download_speed", 0) or 0)
+            for download in owned_active
+        ),
+        "upload_speed": 0,
+        "active": len(owned_active),
+        "waiting": 0,
+    }
 
 
 @router.post("/aria2/runtime/start")
@@ -437,6 +464,7 @@ async def aria2_downloads():
             getattr(cfg, "aria2_waiting_window", 100),
             getattr(cfg, "aria2_stopped_window", 100),
         )
+        downloads = await manager._aria2_owned_downloads(downloads)
     except Exception as e:
         raise HTTPException(502, _sanitize_error(e))
     items = [aria2_download_to_dict(download) for download in downloads]

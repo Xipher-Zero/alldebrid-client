@@ -1126,3 +1126,18 @@ textarea.input { resize: vertical; }
   /* Stat label text-size adjustment */
   .stat-label { font-size: 9px !important; letter-spacing: .06em !important; }
 }
+
+
+/* External aria2 read-only topbar state */
+#aria2-speed-badge.external-control {
+  flex-basis: 300px;
+  width: 300px;
+  min-width: 300px;
+}
+@media (max-width: 760px) {
+  #aria2-speed-badge.external-control {
+    flex-basis: 280px;
+    width: 280px;
+    min-width: 280px;
+  }
+}

@@ -267,20 +267,72 @@ class ProcessingPauseRouteTests(unittest.IsolatedAsyncioTestCase):
 
 
 class Aria2LiveStatRouteTests(unittest.IsolatedAsyncioTestCase):
-    async def test_global_stat_route_returns_live_rpc_counters(self):
+    async def test_global_stat_route_returns_live_rpc_counters_in_builtin_mode(self):
         stat = {
             "download_speed": 42_000_000,
             "upload_speed": 0,
             "active": 2,
             "waiting": 1,
         }
-        fake_aria2 = SimpleNamespace(get_global_stat=AsyncMock(return_value=stat))
+        fake_aria2 = SimpleNamespace(
+            get_global_stat=AsyncMock(return_value=stat)
+        )
+        cfg = SimpleNamespace(aria2_mode="builtin")
 
-        with patch.object(routes.manager, "aria2", return_value=fake_aria2):
+        with patch("api.routes.get_settings", return_value=cfg), \
+             patch.object(routes.manager, "aria2", return_value=fake_aria2):
             result = await routes.aria2_global_stat()
 
-        self.assertEqual(result, {"ok": True, **stat})
+        self.assertEqual(
+            result,
+            {
+                "ok": True,
+                "mode": "builtin",
+                "external_control": False,
+                **stat,
+            },
+        )
         fake_aria2.get_global_stat.assert_awaited_once_with()
+
+    async def test_global_stat_route_filters_external_daemon_to_owned_jobs(self):
+        foreign = SimpleNamespace(
+            gid="foreign-gid",
+            download_speed=90_000_000,
+        )
+        owned = SimpleNamespace(
+            gid="owned-gid",
+            download_speed=12_500_000,
+        )
+
+        fake_aria2 = SimpleNamespace(
+            get_active=AsyncMock(return_value=[foreign, owned])
+        )
+        ownership_filter = AsyncMock(return_value=[owned])
+        cfg = SimpleNamespace(aria2_mode="external")
+
+        with patch("api.routes.get_settings", return_value=cfg), \
+             patch.object(routes.manager, "aria2", return_value=fake_aria2), \
+             patch.object(
+                 routes.manager,
+                 "_aria2_owned_downloads",
+                 ownership_filter,
+             ):
+            result = await routes.aria2_global_stat()
+
+        self.assertEqual(
+            result,
+            {
+                "ok": True,
+                "mode": "external",
+                "external_control": True,
+                "download_speed": 12_500_000,
+                "upload_speed": 0,
+                "active": 1,
+                "waiting": 0,
+            },
+        )
+        fake_aria2.get_active.assert_awaited_once_with()
+        ownership_filter.assert_awaited_once_with([foreign, owned])
 
 
 class DatabaseMaintenanceRouteTests(unittest.IsolatedAsyncioTestCase):

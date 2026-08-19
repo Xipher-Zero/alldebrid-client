@@ -149,6 +149,18 @@ class Aria2Service:
         except Exception:
             return {"download_speed": 0, "upload_speed": 0, "active": 0, "waiting": 0}
 
+    async def get_active(self) -> List[Aria2DownloadStatus]:
+        """Return active aria2 jobs with per-job speed for live telemetry."""
+        try:
+            result = await self._call("aria2.tellActive", [self._keys()])
+            return [self._normalize(raw) for raw in (result or [])]
+        except Aria2ConnectionError as exc:
+            logger.warning("aria2 unreachable (get_active): %s", exc)
+            return []
+        except Aria2RPCError as exc:
+            logger.error("aria2 RPC error (get_active): %s", exc)
+            return []
+
     async def get_global_options(self) -> Dict[str, Any]:
         return await self._call("aria2.getGlobalOption")
 

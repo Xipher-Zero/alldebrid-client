@@ -253,6 +253,8 @@ def test_topbar_uses_live_aria2_speed_with_human_download_units():
     frontend = (REPO_ROOT / "frontend/static/app.js").read_text()
     index = (REPO_ROOT / "frontend/static/index.html").read_text()
     styles = (REPO_ROOT / "frontend/static/style.css").read_text()
+    routes = (REPO_ROOT / "backend/api/routes.py").read_text()
+    aria2_service = (REPO_ROOT / "backend/services/aria2.py").read_text()
 
     assert frontend.count("function fmtSpeed(bps)") == 1
     assert frontend.count("function fmtSpeedCap(bps)") == 1
@@ -263,7 +265,9 @@ def test_topbar_uses_live_aria2_speed_with_human_download_units():
     assert "return '<1 KB/s'" in frontend
     assert "return 'Unlimited'" in frontend
     assert "const units = ['KB', 'MB', 'GB', 'TB']" in frontend
-    assert "elLimit.textContent  = fmtSpeedCap(s.limitBps)" in frontend
+    assert "'Externally Controlled'" in frontend
+    assert "externalControl" in frontend
+    assert "if (_aria2BadgeState.externalControl) return;" in frontend
     assert '<span id="aria2-badge-limit">Unlimited</span>' in index
 
     runtime_handler = frontend.split("async function loadAria2Runtime()", 1)[1].split(
@@ -283,6 +287,12 @@ def test_topbar_uses_live_aria2_speed_with_human_download_units():
     assert "updateAria2TopbarBadge({limitBps: bps})" in frontend
     assert ".aria2-cap-menu" in styles
     assert ".aria2-cap-options" in styles
+    assert "#aria2-speed-badge.external-control" in styles
+
+    assert "async def get_active(self)" in aria2_service
+    assert "owned_active = await manager._aria2_owned_downloads(active_downloads)" in routes
+    assert "downloads = await manager._aria2_owned_downloads(downloads)" in routes
+    assert '"external_control": True' in routes
 
 
 def test_watch_folder_ingestion_is_not_shipped_in_v1():

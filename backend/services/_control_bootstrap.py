@@ -2,7 +2,8 @@
 
 The package initializer installs this hook before ``services.manager_v2`` is
 loaded. The normal module loader runs first; once the singleton manager exists
-we attach the v1.0.3 transfer-control reliability layer.
+we attach the v1.0.3 transfer-control reliability layer and its parent-status
+guard.
 """
 from __future__ import annotations
 
@@ -15,6 +16,14 @@ _TARGET = "services.manager_v2"
 _HOOK_MARKER = "_debridpulse_transfer_control_import_hook"
 
 
+def _install_manager_control(manager) -> None:
+    from services.transfer_control import install_transfer_control
+    from services.pause_parent_status import install_parent_progress_guard
+
+    install_transfer_control(manager)
+    install_parent_progress_guard(manager)
+
+
 class _PostLoadManagerLoader(Loader):
     def __init__(self, wrapped: Loader) -> None:
         self._wrapped = wrapped
@@ -25,8 +34,7 @@ class _PostLoadManagerLoader(Loader):
 
     def exec_module(self, module: ModuleType) -> None:
         self._wrapped.exec_module(module)
-        from services.transfer_control import install_transfer_control
-        install_transfer_control(module.manager)
+        _install_manager_control(module.manager)
 
 
 class _ManagerFinder(MetaPathFinder):
@@ -47,8 +55,7 @@ class _ManagerFinder(MetaPathFinder):
 def install_import_hook() -> None:
     existing = sys.modules.get(_TARGET)
     if existing is not None and getattr(existing, "manager", None) is not None:
-        from services.transfer_control import install_transfer_control
-        install_transfer_control(existing.manager)
+        _install_manager_control(existing.manager)
         return
     if getattr(sys, _HOOK_MARKER, False):
         return

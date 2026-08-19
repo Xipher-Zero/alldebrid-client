@@ -8,6 +8,7 @@ from core.logging_utils import sanitize_exception
 from core.performance import async_timer
 from core.version import normalize_version_tag
 from services.manager_v2 import manager
+from services.reconcile_cycle import reconcile_download_client_cycle
 
 logger = logging.getLogger("alldebrid.scheduler")
 _tasks = []
@@ -108,7 +109,7 @@ async def sync_download_clients_loop():
     while True:
         try:
             async with async_timer("scheduler.download_client_sync"):
-                await manager.sync_download_clients()
+                await reconcile_download_client_cycle(manager)
         except Exception as e:
             logger.error(f"Download client sync error: {e}")
         await asyncio.sleep(max(2, get_settings().aria2_poll_interval_seconds))
@@ -181,7 +182,6 @@ async def aria2_log_rotation_loop():
         await asyncio.sleep(900)
 
 
-
 async def aria2_restart_loop():
     """
     Periodically restarts the built-in aria2 process to reclaim memory.
@@ -237,6 +237,7 @@ async def aria2_restart_loop():
             logger.info("aria2 restarted successfully")
         except Exception as e:
             logger.error("aria2_restart_loop error: %s", e)
+
 
 async def update_check_loop() -> None:
     """Check GitHub for new releases every N hours and send a Discord webhook if enabled."""
@@ -334,7 +335,6 @@ async def recovery_loop():
         except Exception as exc:
             logger.debug("recovery_loop error: %s", exc)
         await asyncio.sleep(300)
-
 
 
 async def disk_guard_loop():

@@ -763,7 +763,7 @@ async function loadDetailedStats(period) {
     var stats = await api('GET', '/stats/detail?period=' + encodeURIComponent(period));
     var t = stats.totals || {};
     document.getElementById('detail-stat-cards').innerHTML =
-      '<div class="metric-card"><div class="metric-label">Torrents</div><div class="metric-value">'+(t.torrent_total||0)+'</div><div class="metric-sub">Added in '+pLabel+'.</div></div>' +
+      '<div class="metric-card"><div class="metric-label">Downloads</div><div class="metric-value">'+(t.torrent_total||0)+'</div><div class="metric-sub">Added in '+pLabel+'.</div></div>' +
       '<div class="metric-card"><div class="metric-label">Completed Size</div><div class="metric-value">'+fmtSize(t.completed_size||0)+'</div><div class="metric-sub">Completed in '+pLabel+'.</div></div>' +
       '<div class="metric-card"><div class="metric-label">Completed</div><div class="metric-value">'+(t.completed_count||0)+'</div><div class="metric-sub">Finished in '+pLabel+'.</div></div>' +
       '<div class="metric-card"><div class="metric-label">In Progress</div><div class="metric-value">'+(t.partial_total||0)+'</div><div class="metric-sub">Currently downloading or processing.</div></div>' +
@@ -920,6 +920,7 @@ async function quickAdd() {
       toast('Magnet added!', 'success');
     }
     input.value = '';
+    resizeDebridLinkInput(input);
     input.focus();
     loadStats(); loadRecent();
   } catch(e) { toast(sanitizeErrorMsg(e.message), 'error'); }

@@ -360,3 +360,29 @@ def test_dashboard_kpi_strip_omits_duplicate_database_tile_and_stays_centered():
     assert "setDot('db'" in frontend
     assert ".dash-kpi-strip--dashboard" in styles
     assert "width: 85.7142857%;" in styles
+
+
+def test_v102_minor_ui_cleanup_contract():
+    index = (REPO_ROOT / "frontend/static/index.html").read_text()
+    frontend = (REPO_ROOT / "frontend/static/app.js").read_text()
+    styles = (REPO_ROOT / "frontend/static/style.css").read_text()
+
+    assert '<div class="metric-label">Downloads</div>' in frontend
+    assert '<div class="metric-label">Torrents</div>' not in frontend
+    assert '<span class="card-title">Download Status</span>' in index
+    assert '<span class="card-title">Torrent Status</span>' not in index
+
+    assert '<textarea class="input direct-link-input" id="q-magnet" rows="1"' in index
+    assert 'oninput="resizeDebridLinkInput(this)"' in index
+    assert "(event.ctrlKey||event.metaKey)&&event.key==='Enter'" in index
+    quick_add = frontend.split("async function quickAdd()", 1)[1].split(
+        "function resizeDebridLinkInput", 1
+    )[0]
+    assert "input.value = '';\n    resizeDebridLinkInput(input);" in quick_add
+
+    assert '.aria2-queue { display: flex; flex-direction: column; gap: 10px; min-width: 0; width: 100%; }' in styles
+    assert 'max-width: 100%' in styles.split('.aria2-job {', 1)[1].split('}', 1)[0]
+    assert 'overflow-wrap: anywhere' in styles.split('.aria2-job-name {', 1)[1].split('}', 1)[0]
+    assert 'overflow-wrap: anywhere' in styles.split('.aria2-job-meta {', 1)[1].split('}', 1)[0]
+    assert '/style.css?v=11' in index
+    assert '/app.js?v=11' in index

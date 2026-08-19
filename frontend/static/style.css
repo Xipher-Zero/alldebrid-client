@@ -1134,6 +1134,10 @@ textarea.input { resize: vertical; }
   width: 300px;
   min-width: 300px;
 }
+
+#aria2-speed-badge.external-control .aria2-cap-toggle {
+  padding-right: 12px;
+}
 @media (max-width: 760px) {
   #aria2-speed-badge.external-control {
     flex-basis: 280px;

@@ -13,20 +13,45 @@ let pausedTransferCount = 0;
 function renderTopbarActions() {
   const el = document.getElementById('topbar-actions');
   if (!el) return;
+
+  // Create these controls once. Replacing their DOM nodes during live refreshes
+  // can swallow pointer-up/click events when an SSE update lands mid-click.
+  if (el.dataset.initialized !== '1') {
+    el.innerHTML = `
+      <button id="btn-resume-all" class="btn btn-primary" onclick="resumeProcessing()" style="display:none">Resume All</button>
+      <button id="btn-resume-paused" class="btn btn-primary" onclick="resumePausedDownloads()" style="display:none">Resume Paused</button>
+      <button id="btn-pause-all" class="btn btn-ghost" onclick="pauseProcessing()">Pause All</button>
+    `;
+    el.dataset.initialized = '1';
+  }
+
   const globallyPaused = !!settingsData.paused;
   const selectivelyPaused = Math.max(0, Number(pausedTransferCount) || 0);
-  if (globallyPaused) {
-    el.innerHTML = `
-      <button class="btn btn-primary" onclick="resumeProcessing()">Resume All</button>
-    `;
-    return;
+  const pauseBtn = document.getElementById('btn-pause-all');
+  const resumeAllBtn = document.getElementById('btn-resume-all');
+  const resumePausedBtn = document.getElementById('btn-resume-paused');
+
+  if (pauseBtn) {
+    pauseBtn.style.display = globallyPaused ? 'none' : '';
+    pauseBtn.dataset.defaultLabel = 'Pause All';
   }
-  el.innerHTML = `
-    ${selectivelyPaused > 0 ? `
-      <button class="btn btn-primary" onclick="resumePausedDownloads()">Resume Paused (${selectivelyPaused})</button>
-    ` : ''}
-    <button class="btn btn-ghost" onclick="pauseProcessing()">Pause All</button>
-  `;
+
+  if (resumeAllBtn) {
+    resumeAllBtn.style.display = globallyPaused ? '' : 'none';
+    resumeAllBtn.dataset.defaultLabel = 'Resume All';
+  }
+
+  if (resumePausedBtn) {
+    resumePausedBtn.style.display =
+      !globallyPaused && selectivelyPaused > 0 ? '' : 'none';
+
+    const label = `Resume Paused (${selectivelyPaused})`;
+    resumePausedBtn.dataset.defaultLabel = label;
+
+    if (resumePausedBtn.dataset.pending !== '1') {
+      resumePausedBtn.textContent = label;
+    }
+  }
 }
 
 // ── Nav ────────────────────────────────────────────────────────────────────
@@ -146,6 +171,65 @@ function toast(msg, type = 'info') {
   document.getElementById('toasts').appendChild(el);
   setTimeout(() => el.style.opacity = '0', 3000);
   setTimeout(() => el.remove(), 3400);
+}
+
+function setButtonPending(button, pending, pendingLabel) {
+  if (!button) return;
+
+  if (!button.dataset.defaultLabel) {
+    button.dataset.defaultLabel = button.textContent;
+  }
+
+  if (pending) {
+    button.dataset.pending = '1';
+    button.disabled = true;
+    button.setAttribute('aria-busy', 'true');
+
+    if (pendingLabel) {
+      button.textContent = pendingLabel;
+    }
+
+    return;
+  }
+
+  delete button.dataset.pending;
+  button.disabled = false;
+  button.removeAttribute('aria-busy');
+
+  if (button.dataset.defaultLabel) {
+    button.textContent = button.dataset.defaultLabel;
+  }
+}
+
+function coalesceAsync(fn) {
+  let running = null;
+  let trailing = false;
+
+  return function(...args) {
+    if (running) {
+      trailing = true;
+      return running;
+    }
+
+    const context = this;
+
+    const run = async () => {
+      let result;
+
+      do {
+        trailing = false;
+        result = await fn.apply(context, args);
+      } while (trailing);
+
+      return result;
+    };
+
+    running = run().finally(() => {
+      running = null;
+    });
+
+    return running;
+  };
 }
 
 
@@ -286,6 +370,57 @@ function progress(pct, status) {
           <span class="prog-pct">${label}</span>`;
 }
 
+function patchProgressOnlyTransferEvent(data) {
+  const updates = Array.isArray(data?.items) ? data.items : [];
+
+  if (!data?.progress_only || !updates.length) {
+    return false;
+  }
+
+  // Status transitions change filters and available action buttons.
+  // Those still get an authoritative full refresh.
+  if (updates.some(update => !!update?.status_changed)) {
+    return false;
+  }
+
+  for (const update of updates) {
+    const id = Number(update?.id ?? update?.torrent_id);
+    const nextProgress = Number(update?.progress);
+    const nextStatus = String(update?.status || '');
+
+    if (!Number.isFinite(id) || !Number.isFinite(nextProgress)) {
+      continue;
+    }
+
+    document
+      .querySelectorAll(`tr[data-torrent-id="${id}"]`)
+      .forEach(row => {
+        const currentStatus = String(row.dataset.status || '');
+        const status = nextStatus || currentStatus;
+
+        const progressCell =
+          row.querySelector('[data-role="transfer-progress"]');
+
+        if (progressCell) {
+          progressCell.innerHTML =
+            progress(nextProgress, status);
+        }
+
+        const dashFill =
+          row.querySelector('.dash-row-bar-fill');
+
+        if (dashFill) {
+          const pctValue =
+            Math.min(100, Math.max(0, nextProgress));
+
+          dashFill.style.width = `${pctValue}%`;
+        }
+      });
+  }
+
+  return true;
+}
+
 // ── Status Bar ─────────────────────────────────────────────────────────────
 
 function getAria2ngUrl(aria2Url) {
@@ -368,6 +503,11 @@ function getActiveSettingsTab() {
 }
 
 async function pauseProcessing() {
+  const button =
+    document.getElementById('btn-pause-all');
+
+  setButtonPending(button, true, 'Pausing…');
+
   try {
     await api('POST', '/processing/pause');
     settingsData.paused = true;
@@ -375,11 +515,28 @@ async function pauseProcessing() {
     toast('Processing paused','warn');
     loadStats();
     loadRecent();
-    if (document.getElementById('view-torrents').classList.contains('active')) loadTorrents();
-  } catch(e) { toast(sanitizeErrorMsg(e.message),'error'); }
+
+    if (
+      document
+        .getElementById('view-torrents')
+        .classList.contains('active')
+    ) {
+      loadTorrents();
+    }
+  } catch(e) {
+    toast(sanitizeErrorMsg(e.message),'error');
+  } finally {
+    setButtonPending(button, false);
+    renderTopbarActions();
+  }
 }
 
 async function resumeProcessing() {
+  const button =
+    document.getElementById('btn-resume-all');
+
+  setButtonPending(button, true, 'Resuming…');
+
   try {
     await api('POST', '/processing/resume');
     settingsData.paused = false;
@@ -388,11 +545,28 @@ async function resumeProcessing() {
     toast('Processing resumed','success');
     loadStats();
     loadRecent();
-    if (document.getElementById('view-torrents').classList.contains('active')) loadTorrents();
-  } catch(e) { toast(sanitizeErrorMsg(e.message),'error'); }
+
+    if (
+      document
+        .getElementById('view-torrents')
+        .classList.contains('active')
+    ) {
+      loadTorrents();
+    }
+  } catch(e) {
+    toast(sanitizeErrorMsg(e.message),'error');
+  } finally {
+    setButtonPending(button, false);
+    renderTopbarActions();
+  }
 }
 
 async function resumePausedDownloads() {
+  const button =
+    document.getElementById('btn-resume-paused');
+
+  setButtonPending(button, true, 'Resuming…');
+
   try {
     await api('POST', '/processing/resume');
     settingsData.paused = false;
@@ -401,8 +575,20 @@ async function resumePausedDownloads() {
     toast('Paused downloads resumed','success');
     loadStats();
     loadRecent();
-    if (document.getElementById('view-torrents').classList.contains('active')) loadTorrents();
-  } catch(e) { toast(sanitizeErrorMsg(e.message),'error'); }
+
+    if (
+      document
+        .getElementById('view-torrents')
+        .classList.contains('active')
+    ) {
+      loadTorrents();
+    }
+  } catch(e) {
+    toast(sanitizeErrorMsg(e.message),'error');
+  } finally {
+    setButtonPending(button, false);
+    renderTopbarActions();
+  }
 }
 
 // ── Dashboard ──────────────────────────────────────────────────────────────
@@ -643,21 +829,21 @@ async function loadRecent() {
     tb.innerHTML = items.map(t => {
       const pct_val = t.progress != null ? Math.round(t.progress) : 0;
       const is_active = ['downloading','queued'].includes(t.status);
-      return `<tr onclick="showDetail(${t.id})" style="cursor:pointer">
+      return `<tr data-torrent-id="${t.id}" data-status="${esc(t.status)}" onclick="showDetail(${t.id})" style="cursor:pointer">
         <td>
           <div class="t-name" title="${esc(t.name)||''}">${esc(t.name)||'(unnamed)'}</div>
           ${is_active ? `<div class="dash-row-bar"><div class="dash-row-bar-fill" style="width:${pct_val}%;background:var(--blue)"></div></div>` : ''}
           ${t.alldebrid_id ? `<div class="t-hash" style="font-size:10px;color:var(--text3)" title="AllDebrid ID">AD: ${esc(t.alldebrid_id)}</div>` : ''}
           ${t.source === 'direct_link' ? `<div class="t-hash" style="font-size:10px;color:var(--text3)" title="Direct debrid link transfer">🔗 Direct link</div>` : ''}
         </td>
-        <td>${badge(transferDisplayStatus(t))}</td>
-        <td>${progress(t.progress,t.status)}</td>
+        <td data-role="transfer-status">${badge(transferDisplayStatus(t))}</td>
+        <td data-role="transfer-progress">${progress(t.progress,t.status)}</td>
         <td class="sz">${fmtSize(t.size_bytes)}</td>
         <td class="sz">${fmtDate(t.created_at)}</td>
         <td onclick="event.stopPropagation()">
           <div class="actions">
-            ${t.status==='downloading' || t.status==='queued' ? `<button class="btn btn-blue btn-sm" onclick="event.stopPropagation();pauseT(${t.id})" title="Pause this download">⏸ Pause</button>` : ''}
-            ${t.status==='paused' ? `<button class="btn btn-blue btn-sm" onclick="event.stopPropagation();resumeT(${t.id})" title="Resume this download">▶ Resume</button>` : ''}
+            ${t.status==='downloading' || t.status==='queued' ? `<button class="btn btn-blue btn-sm" onclick="event.stopPropagation();pauseT(${t.id},this)" title="Pause this download">⏸ Pause</button>` : ''}
+            ${t.status==='paused' ? `<button class="btn btn-blue btn-sm" onclick="event.stopPropagation();resumeT(${t.id},this)" title="Resume this download">▶ Resume</button>` : ''}
           </div>
         </td>
       </tr>`;
@@ -721,8 +907,8 @@ async function quickAdd() {
     openTorrentFilePicker();
     return;
   }
-  const btn = document.querySelector('#view-dashboard button.btn-primary');
-  if (btn) btn.disabled = true;
+  const btn = document.getElementById('btn-add-magnet');
+  setButtonPending(btn, true, 'Adding…');
   try {
     const res = await api('POST', '/torrents/add-magnet', {magnet: v}, 30000);
     if (res && res._duplicate && res._duplicate.action === 'skip') {
@@ -736,7 +922,7 @@ async function quickAdd() {
     input.focus();
     loadStats(); loadRecent();
   } catch(e) { toast(sanitizeErrorMsg(e.message), 'error'); }
-  finally { if (btn) btn.disabled = false; }
+  finally { setButtonPending(btn, false); }
 }
 
 function resizeDebridLinkInput(input) {
@@ -825,7 +1011,7 @@ async function loadTorrents() {
       tb.innerHTML = `<tr><td colspan="8"><div class="empty"><div class="empty-icon">⬇️</div>${currentTorrentSearch || currentFilter ? 'No downloads match the current filter or search.' : 'No downloads found.'}</div></td></tr>`;
       return;
     }
-    tb.innerHTML = items.map(t => `<tr data-torrent-id="${t.id}" draggable="true" ondragstart="onTorrentDragStart(event,${t.id})" ondragend="onTorrentDragEnd(event)" ondragover="onTorrentDragOver(event,${t.id})" ondrop="onTorrentDrop(event,${t.id})">
+    tb.innerHTML = items.map(t => `<tr data-torrent-id="${t.id}" data-status="${esc(t.status)}" draggable="true" ondragstart="onTorrentDragStart(event,${t.id})" ondragend="onTorrentDragEnd(event)" ondragover="onTorrentDragOver(event,${t.id})" ondrop="onTorrentDrop(event,${t.id})">
       <td onclick="event.stopPropagation()"><input type="checkbox" class="t-chk" data-id="${t.id}" onchange="onCheckboxChange()"/></td>
       <td onclick="showDetail(${t.id})" style="cursor:pointer">
         <div class="t-name">${esc(t.name)||'(unnamed)'}</div>
@@ -835,23 +1021,28 @@ async function loadTorrents() {
         <div>${sourceLabel(t.source)}</div>
         ${t.label?`<span class="lbl-badge">🏷 ${esc(t.label)}</span>`:''}
       </td>
-      <td>${badge(transferDisplayStatus(t))}</td>
-      <td>${progress(t.progress,t.status)}</td>
+      <td data-role="transfer-status">${badge(transferDisplayStatus(t))}</td>
+      <td data-role="transfer-progress">${progress(t.progress,t.status)}</td>
       <td class="sz">${fmtSize(t.size_bytes)}</td>
       <td class="sz">${fmtDate(t.created_at)}</td>
       <td>
         <div class="actions">
           <button class="btn btn-ghost btn-sm" onclick="showDetail(${t.id})">Details</button>
-          ${t.status==='ready' || t.status==='pending' ? `<button class="btn btn-primary btn-sm" onclick="event.stopPropagation();downloadNow(${t.id})" title="Move to front of queue">⬇ Now</button>` : ''}
-          ${t.status==='downloading' || t.status==='queued' ? `<button class="btn btn-blue btn-sm" onclick="pauseT(${t.id})">⏸</button>` : ''}
-          ${t.status==='paused' ? `<button class="btn btn-blue btn-sm" onclick="resumeT(${t.id})">▶</button>` : ''}
-          ${t.status==='error'?`<button class="btn btn-blue btn-sm" onclick="retryT(${t.id})">↻</button>`:''}
-          <button class="btn btn-danger btn-sm" onclick="deleteT(${t.id},event)">✕</button>
+          ${t.status==='ready' || t.status==='pending' ? `<button class="btn btn-primary btn-sm" onclick="event.stopPropagation();downloadNow(${t.id},this)" title="Move to front of queue">⬇ Now</button>` : ''}
+          ${t.status==='downloading' || t.status==='queued' ? `<button class="btn btn-blue btn-sm" onclick="pauseT(${t.id},this)">⏸</button>` : ''}
+          ${t.status==='paused' ? `<button class="btn btn-blue btn-sm" onclick="resumeT(${t.id},this)">▶</button>` : ''}
+          ${t.status==='error'?`<button class="btn btn-blue btn-sm" onclick="retryT(${t.id},this)">↻</button>`:''}
+          <button class="btn btn-danger btn-sm" onclick="deleteT(${t.id},event,this)">✕</button>
         </div>
       </td>
     </tr>`).join('');
   } catch(e) { toast(sanitizeErrorMsg(e.message),'error'); }
 }
+
+// Prevent SSE bursts and manual actions from stacking duplicate full renders.
+loadStats = coalesceAsync(loadStats);
+loadRecent = coalesceAsync(loadRecent);
+loadTorrents = coalesceAsync(loadTorrents);
 
 async function addMagnet() {
   const input = document.getElementById('t-magnet');
@@ -875,71 +1066,192 @@ async function addMagnet() {
   } catch(e) { toast(sanitizeErrorMsg(e.message),'error'); }
 }
 
-async function importExisting() {
+async function importExisting(button) {
+  setButtonPending(button, true, 'Importing…');
+
   try {
-    const r = await api('POST','/torrents/import-existing');
-    toast(`Imported ${r.imported} magnets from AllDebrid`,'success');
-    loadStats(); loadRecent();
-    if (document.getElementById('view-torrents').classList.contains('active')) loadTorrents();
-  } catch(e) { toast(sanitizeErrorMsg(e.message),'error'); }
+    const r =
+      await api('POST','/torrents/import-existing');
+
+    toast(
+      `Imported ${r.imported} magnets from AllDebrid`,
+      'success'
+    );
+
+    loadStats();
+    loadRecent();
+
+    if (
+      document
+        .getElementById('view-torrents')
+        .classList.contains('active')
+    ) {
+      loadTorrents();
+    }
+  } catch(e) {
+    toast(
+      sanitizeErrorMsg(e.message),
+      'error'
+    );
+  } finally {
+    setButtonPending(button, false);
+  }
 }
 
-async function recoverAll() {
+async function recoverAll(button) {
+  setButtonPending(button, true, 'Recovering…');
+
   try {
-    toast('Checking AllDebrid for ready torrents…','info');
-    const r = await api('POST','/torrents/recover-all');
-    const msg = `Recovery: reset ${r.reset} stuck, checked ${r.checked}, started ${r.started}`;
-    toast(msg, r.started > 0 || r.reset > 0 ? 'success' : 'warn');
-    loadStats(); loadRecent();
-    if (document.getElementById('view-torrents').classList.contains('active')) loadTorrents();
-  } catch(e) { toast(sanitizeErrorMsg(e.message),'error'); }
+    toast(
+      'Checking AllDebrid for ready torrents…',
+      'info'
+    );
+
+    const r =
+      await api('POST','/torrents/recover-all');
+
+    const msg =
+      `Recovery: reset ${r.reset} stuck, checked ${r.checked}, started ${r.started}`;
+
+    toast(
+      msg,
+      r.started > 0 || r.reset > 0
+        ? 'success'
+        : 'warn'
+    );
+
+    loadStats();
+    loadRecent();
+
+    if (
+      document
+        .getElementById('view-torrents')
+        .classList.contains('active')
+    ) {
+      loadTorrents();
+    }
+  } catch(e) {
+    toast(
+      sanitizeErrorMsg(e.message),
+      'error'
+    );
+  } finally {
+    setButtonPending(button, false);
+  }
 }
 
-async function deleteT(id, e) {
-  e.stopPropagation();
-  if (!confirm('Delete from AllDebrid and remove from list?')) return;
+async function deleteT(id, eventObj, button) {
+  eventObj?.stopPropagation();
+
+  if (!confirm('Delete from AllDebrid and remove from list?')) {
+    return;
+  }
+
+  setButtonPending(button, true, 'Deleting…');
+
   try {
-    await api('DELETE',`/torrents/${id}?from_alldebrid=true`);
+    await api(
+      'DELETE',
+      `/torrents/${id}?from_alldebrid=true`
+    );
+
     toast('Deleted','success');
-    loadTorrents(); loadStats();
-  } catch(e) { toast(sanitizeErrorMsg(e.message),'error'); }
+    loadTorrents();
+    loadStats();
+  } catch(e) {
+    toast(sanitizeErrorMsg(e.message),'error');
+  } finally {
+    setButtonPending(button, false);
+  }
 }
 
-async function retryT(id) {
+async function retryT(id, button) {
+  setButtonPending(button, true, 'Retrying…');
+
   try {
     await api('POST',`/torrents/${id}/retry`);
     toast('Queued for retry','success');
     loadTorrents();
-  } catch(e) { toast(sanitizeErrorMsg(e.message),'error'); }
+  } catch(e) {
+    toast(sanitizeErrorMsg(e.message),'error');
+  } finally {
+    setButtonPending(button, false);
+  }
 }
 
-async function pauseT(id) {
+async function pauseT(id, button) {
+  setButtonPending(button, true, 'Pausing…');
+
   try {
     await api('POST',`/torrents/${id}/pause`);
     toast('aria2 queue paused','warn');
-    loadTorrents(); loadStats(); loadRecent();
-  } catch(e) { toast(sanitizeErrorMsg(e.message),'error'); }
+    loadTorrents();
+    loadStats();
+    loadRecent();
+  } catch(e) {
+    toast(sanitizeErrorMsg(e.message),'error');
+  } finally {
+    setButtonPending(button, false);
+  }
 }
 
-async function resumeT(id) {
+async function resumeT(id, button) {
+  setButtonPending(button, true, 'Resuming…');
+
   try {
-    const result = await api('POST',`/torrents/${id}/resume`);
+    const result =
+      await api('POST',`/torrents/${id}/resume`);
+
     if (typeof result.paused === 'boolean') {
       settingsData.paused = result.paused;
-      if (!result.paused) pausedTransferCount = Math.max(0, pausedTransferCount - 1);
+
+      if (!result.paused) {
+        pausedTransferCount =
+          Math.max(0, pausedTransferCount - 1);
+      }
+
       renderTopbarActions();
     }
+
     toast('aria2 queue resumed','success');
-    loadTorrents(); loadStats(); loadRecent();
-  } catch(e) { toast(sanitizeErrorMsg(e.message),'error'); }
+    loadTorrents();
+    loadStats();
+    loadRecent();
+  } catch(e) {
+    toast(sanitizeErrorMsg(e.message),'error');
+  } finally {
+    setButtonPending(button, false);
+  }
 }
 
 // ── Detail Modal ───────────────────────────────────────────────────────────
 async function showDetail(id) {
+  const overlay = document.getElementById('overlay');
+  const modalTitle = document.getElementById('modal-title');
+  const modalBody = document.getElementById('modal-body');
+
+  if (modalTitle) {
+    modalTitle.textContent = 'Loading…';
+  }
+
+  if (modalBody) {
+    modalBody.innerHTML =
+      '<div class="empty" style="padding:24px">Loading transfer details…</div>';
+  }
+
+  if (overlay) {
+    overlay.classList.add('open');
+  }
+
   try {
     const t = await api('GET',`/torrents/${id}`);
-    document.getElementById('modal-title').textContent = t.name||'Torrent Details';
-    document.getElementById('modal-body').innerHTML = `
+
+    if (modalTitle) {
+      modalTitle.textContent =
+        t.name || 'Torrent Details';
+    }
+
+    if (modalBody) modalBody.innerHTML = `
       <div class="detail-grid">
         <div><div class="dk">Status</div><div class="dv">${badge(transferDisplayStatus(t))}</div></div>
         <div><div class="dk">Provider</div><div class="dv">${t.provider_status ? badge(providerDisplayStatus(t)) : '—'}</div></div>
@@ -981,8 +1293,14 @@ async function showDetail(id) {
           </div>`).join('')}
       `:''}
     `;
-    document.getElementById('overlay').classList.add('open');
-  } catch(e) { toast(sanitizeErrorMsg(e.message),'error'); }
+  } catch(e) {
+    if (modalBody) {
+      modalBody.innerHTML =
+        `<div class="empty" style="padding:24px">Failed to load details: ${sanitizeErrorMsg(e.message)}</div>`;
+    }
+
+    toast(sanitizeErrorMsg(e.message),'error');
+  }
 }
 
 function closeModal(e) {
@@ -1080,19 +1398,54 @@ function clearSelection() {
   document.getElementById('bulk-bar').classList.remove('visible');
 }
 
-async function bulkAction(action) {
+async function bulkAction(action, button) {
   if (!_selectedIds.size) return;
+
   const ids = [..._selectedIds];
-  if (action === 'delete' && !confirm(`Delete ${ids.length} torrents?`)) return;
+
+  if (
+    action === 'delete' &&
+    !confirm(`Delete ${ids.length} torrents?`)
+  ) {
+    return;
+  }
+
+  const pendingLabels = {
+    delete: 'Deleting…',
+    reset: 'Resetting…',
+    pause: 'Pausing…',
+    resume: 'Resuming…',
+  };
+
+  setButtonPending(
+    button,
+    true,
+    pendingLabels[action] || 'Working…'
+  );
+
   try {
-    const r = await api('POST', '/torrents/bulk', {ids, action});
-    toast(`Done: ${r.ok} ok, ${r.failed} failed`, r.failed ? 'warn' : 'success');
+    const r =
+      await api(
+        'POST',
+        '/torrents/bulk',
+        {ids, action}
+      );
+
+    toast(
+      `Done: ${r.ok} ok, ${r.failed} failed`,
+      r.failed ? 'warn' : 'success'
+    );
+
     clearSelection();
-    loadTorrents(); loadStats();
-  } catch(e) { toast(e.message, 'error'); }
+    loadTorrents();
+    loadStats();
+  } catch(e) {
+    toast(e.message, 'error');
+  } finally {
+    setButtonPending(button, false);
+  }
 }
 
-// ── Label management ─────────────────────────────────────────────────────────
 async function setLabel(id) {
   const label = prompt('Label (leave empty to clear):') ?? null;
   if (label === null) return;
@@ -1236,7 +1589,7 @@ function renderSettings() {
             <label class="form-label">API Key</label>
             <div class="test-row">
               <input class="input" type="password" id="s-alldebrid_api_key" value="${s.alldebrid_api_key||''}" placeholder="Your AllDebrid API key"/>
-              <button class="btn btn-blue btn-sm" onclick="testAD()">Test</button>
+              <button class="btn btn-blue btn-sm" onclick="testAD(this)">Test</button>
             </div>
           </div>
           <div class="form-group">
@@ -1403,7 +1756,7 @@ function renderSettings() {
             <label class="form-label">aria2 RPC URL</label>
             <div class="test-row">
               <input class="input" id="s-aria2_url" value="${aria2BuiltIn ? 'http://127.0.0.1:'+(s.aria2_builtin_port||6800)+'/jsonrpc' : (s.aria2_url||'http://127.0.0.1:6800/jsonrpc')}" placeholder="http://127.0.0.1:6800/jsonrpc" ${aria2BuiltIn?'disabled':''}/>
-              <button class="btn btn-blue btn-sm" onclick="testAria2()" ${aria2BuiltIn?'disabled':''}>Test</button>
+              <button class="btn btn-blue btn-sm" onclick="testAria2(this)" ${aria2BuiltIn?'disabled':''}>Test</button>
             </div>
           </div>
 
@@ -1466,10 +1819,10 @@ function renderSettings() {
             <div id="aria2-runtime-status" class="form-hint" style="line-height:1.6">Runtime status not loaded yet.</div>
             <div class="input-row">
               <button class="btn btn-blue btn-sm" onclick="loadAria2Runtime()">Refresh</button>
-              <button class="btn btn-ghost btn-sm" onclick="aria2RuntimeAction('start')" ${aria2BuiltIn?'':'disabled'}>Start</button>
-              <button class="btn btn-ghost btn-sm" onclick="aria2RuntimeAction('restart')" ${aria2BuiltIn?'':'disabled'}>Restart</button>
-              <button class="btn btn-danger btn-sm" onclick="aria2RuntimeAction('stop')" ${aria2BuiltIn?'':'disabled'}>Stop</button>
-              <button class="btn btn-ghost btn-sm" onclick="aria2RuntimeAction('apply')" ${aria2BuiltIn?'':'disabled'}>Apply</button>
+              <button class="btn btn-ghost btn-sm" onclick="aria2RuntimeAction('start',this)" ${aria2BuiltIn?'':'disabled'}>Start</button>
+              <button class="btn btn-ghost btn-sm" onclick="aria2RuntimeAction('restart',this)" ${aria2BuiltIn?'':'disabled'}>Restart</button>
+              <button class="btn btn-danger btn-sm" onclick="aria2RuntimeAction('stop',this)" ${aria2BuiltIn?'':'disabled'}>Stop</button>
+              <button class="btn btn-ghost btn-sm" onclick="aria2RuntimeAction('apply',this)" ${aria2BuiltIn?'':'disabled'}>Apply</button>
             </div>
           </div>
         </div>
@@ -1480,8 +1833,8 @@ function renderSettings() {
             <div class="aria2-queue-head">
               <div class="form-hint">Live aria2 queue with progress, speed, status, and basic controls.</div>
               <div class="input-row">
-                <button class="btn btn-blue btn-sm" onclick="loadAria2Downloads()">Refresh Queue</button>
-                <button class="btn btn-ghost btn-sm" onclick="runAria2Housekeeping()">Purge Results</button>
+                <button class="btn btn-blue btn-sm" onclick="refreshAria2Downloads(this)">Refresh Queue</button>
+                <button class="btn btn-ghost btn-sm" onclick="runAria2Housekeeping(this)">Purge Results</button>
               </div>
             </div>
             <div id="aria2-downloads" class="aria2-queue">
@@ -1515,7 +1868,7 @@ function renderSettings() {
           <span class="form-hint">How often the client refreshes aria2 download state.</span>
         </div>
         <div class="form-group">
-          <button class="btn btn-ghost" onclick="triggerFullSync()">🔄 Full AllDebrid Sync Now</button>
+          <button class="btn btn-ghost" onclick="triggerFullSync(this)">🔄 Full AllDebrid Sync Now</button>
           <button class="btn btn-ghost" onclick="runDeepSync()">🔍 Run Deep Sync Now</button>
           <span class="form-hint" style="margin-top:6px;display:block">Immediately checks all pending aria2 files on disk and marks completed ones.</span>
         </div>
@@ -1589,7 +1942,7 @@ function renderSettings() {
         </div>
         <div class="form-group">
           <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-            <button class="btn btn-ghost" onclick="runAria2Housekeeping()">Run aria2 Cleanup Now</button>
+            <button class="btn btn-ghost" onclick="runAria2Housekeeping(this)">Run aria2 Cleanup Now</button>
             <button class="btn btn-ghost" onclick="showMemoryInfo()" title="Shows real RAM vs kernel page cache">&#128202; Memory Info</button>
             <button class="btn btn-ghost" onclick="dropPageCache()" title="Release kernel page cache for all downloaded files">&#129522; Drop Page Cache</button>
           </div>
@@ -1708,7 +2061,7 @@ function renderSettings() {
             <label class="form-label">Main Webhook URL</label>
             <div class="test-row">
               <input class="input" id="s-discord_webhook_url" value="${s.discord_webhook_url||''}" placeholder="https://discord.com/api/webhooks/…"/>
-              <button class="btn btn-blue btn-sm" onclick="testDiscord()">Test</button>
+              <button class="btn btn-blue btn-sm" onclick="testDiscord(this)">Test</button>
             </div>
           </div>
           <div class="form-group">
@@ -1796,8 +2149,8 @@ function renderSettings() {
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">
           <button class="btn btn-blue btn-sm" onclick="loadComprehensiveStats()">📊 Load Report</button>
           <button class="btn btn-ghost btn-sm" onclick="exportStats()">⬇ Export JSON</button>
-          <button class="btn btn-ghost btn-sm" onclick="triggerStatsSnapshot()">📸 Snapshot Now</button>
-          <button class="btn btn-ghost btn-sm" onclick="sendStatsReport()">📨 Send Webhook Now</button>
+          <button class="btn btn-ghost btn-sm" onclick="triggerStatsSnapshot(this)">📸 Snapshot Now</button>
+          <button class="btn btn-ghost btn-sm" onclick="sendStatsReport(this)">📨 Send Webhook Now</button>
         </div>
         <div id="comprehensive-stats" style="margin-top:14px"></div>
       </div>
@@ -2003,7 +2356,7 @@ function renderSettings() {
           </div>
           <div class="form-hint" style="margin-top:10px">Pause processing first. Wipe clears torrents, files, events, and stats snapshots.</div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
-            <button class="btn btn-danger btn-sm" onclick="wipeDatabase()">🗑️ Wipe Database</button>
+            <button class="btn btn-danger btn-sm" onclick="wipeDatabase(this)">🗑️ Wipe Database</button>
           </div>
         </div>
       </div>
@@ -2126,52 +2479,171 @@ function toggleFilterFields() {
   }
 }
 
-async function triggerFullSync() {
+async function triggerFullSync(button) {
+  setButtonPending(
+    button,
+    true,
+    'Syncing…'
+  );
+
   try {
-    const r = await api('POST', '/admin/full-sync');
-    toast('Full sync: ' + r.updated + ' torrent(s) updated', r.updated > 0 ? 'success' : 'info');
-    setTimeout(() => { loadStats(); loadRecent(); }, 1500);
-  } catch(e) { toast(e.message, 'error'); }
+    const r =
+      await api(
+        'POST',
+        '/admin/full-sync'
+      );
+
+    toast(
+      'Full sync: ' +
+        r.updated +
+        ' torrent(s) updated',
+      r.updated > 0
+        ? 'success'
+        : 'info'
+    );
+
+    setTimeout(() => {
+      loadStats();
+      loadRecent();
+    }, 1500);
+  } catch(e) {
+    toast(
+      e.message,
+      'error'
+    );
+  } finally {
+    setButtonPending(button, false);
+  }
 }
 
-async function saveSettings() {
+async function saveSettings(button) {
+  setButtonPending(button, true, 'Saving…');
+
   try {
-    const activeTab = getActiveSettingsTab();
-    const d = getFormSettings();
-    await api('PUT','/settings',d);
-    settingsData = await api('GET','/settings');
-    // Re-render so defaults set by backend are immediately visible
+    const activeTab =
+      getActiveSettingsTab();
+
+    const d =
+      getFormSettings();
+
+    settingsData =
+      await api('PUT','/settings',d);
+
     renderSettings();
     switchSettingsTab(activeTab);
     updateAria2ngLink();
-    toast('Settings saved!','success');
+
+    toast(
+      'Settings saved!',
+      'success'
+    );
+
     checkConnections();
-    // Sync Downloads panel — PUT /settings may have updated aria2 limits,
-    // so reload them from aria2 to keep both views consistent.
     loadAria2SpeedLimit();
-  } catch(e) { toast(sanitizeErrorMsg(e.message),'error'); }
+  } catch(e) {
+    toast(
+      sanitizeErrorMsg(e.message),
+      'error'
+    );
+  } finally {
+    setButtonPending(button, false);
+  }
 }
 
-async function testDiscord() {
+async function testDiscord(button) {
+  const activeTab =
+    getActiveSettingsTab();
+
+  let settingsApplied = false;
+  let rendered = false;
+
+  setButtonPending(
+    button,
+    true,
+    'Testing…'
+  );
+
   try {
-    const activeTab = getActiveSettingsTab();
-    const current = getFormSettings();
-    await api('PUT','/settings', current);
-    settingsData = await api('GET','/settings');
+    const current =
+      getFormSettings();
+
+    settingsData =
+      await api(
+        'PUT',
+        '/settings',
+        current
+      );
+
+    settingsApplied = true;
+
+    await api(
+      'POST',
+      '/settings/test-discord'
+    );
+
     renderSettings();
     switchSettingsTab(activeTab);
-    await api('POST','/settings/test-discord');
-    toast('Discord notification sent ✓','success');
-  } catch(e) { toast('Discord: '+e.message,'error'); }
+    rendered = true;
+
+    toast(
+      'Discord notification sent ✓',
+      'success'
+    );
+  } catch(e) {
+    toast(
+      'Discord: ' + e.message,
+      'error'
+    );
+  } finally {
+    setButtonPending(button, false);
+
+    if (settingsApplied && !rendered) {
+      renderSettings();
+      switchSettingsTab(activeTab);
+    }
+  }
 }
 
-async function testAD() {
+async function testAD(button) {
+  setButtonPending(
+    button,
+    true,
+    'Testing…'
+  );
+
   try {
-    const r = await api('POST','/settings/test-alldebrid');
-    toast(`AllDebrid: connected as ${r.username} ${r.isPremium?'(Premium)':'(Free)'}✓`,'success');
-    setDot('api','ok',`AllDebrid: ${r.username}`);
+    const r =
+      await api(
+        'POST',
+        '/settings/test-alldebrid'
+      );
+
+    toast(
+      `AllDebrid: connected as ${r.username} ${r.isPremium?'(Premium)':'(Free)'}✓`,
+      'success'
+    );
+
+    setDot(
+      'api',
+      'ok',
+      `AllDebrid: ${r.username}`
+    );
+
     _updatePremiumLabel(r);
-  } catch(e) { toast('AllDebrid: '+e.message,'error'); setDot('api','error','AllDebrid: error'); }
+  } catch(e) {
+    toast(
+      'AllDebrid: ' + e.message,
+      'error'
+    );
+
+    setDot(
+      'api',
+      'error',
+      'AllDebrid: error'
+    );
+  } finally {
+    setButtonPending(button, false);
+  }
 }
 
 function _updatePremiumLabel(r) {
@@ -2228,21 +2700,74 @@ function updateSettingsFooterActions(activeTab) {
   });
 }
 
-async function testAria2() {
+async function testAria2(button) {
+  const activeTab =
+    getActiveSettingsTab();
+
+  let settingsApplied = false;
+  let rendered = false;
+
+  setButtonPending(
+    button,
+    true,
+    'Testing…'
+  );
+
   try {
-    const activeTab = getActiveSettingsTab();
-    const current = getFormSettings();
-    await api('PUT','/settings', current);
-    settingsData = await api('GET','/settings');
+    const current =
+      getFormSettings();
+
+    settingsData =
+      await api(
+        'PUT',
+        '/settings',
+        current
+      );
+
+    settingsApplied = true;
+
+    const r =
+      await api(
+        'POST',
+        '/settings/test-aria2'
+      );
+
     renderSettings();
     switchSettingsTab(activeTab);
-    const r = await api('POST','/settings/test-aria2');
-    renderAria2Diagnostics(r.diagnostics || null);
-    toast(`aria2: ${r.version||'online'} ✓`,'success');
-    setDot('aria2','ok',`aria2: ${r.version||'online'}`);
+    rendered = true;
+
+    renderAria2Diagnostics(
+      r.diagnostics || null
+    );
+
+    toast(
+      `aria2: ${r.version||'online'} ✓`,
+      'success'
+    );
+
+    setDot(
+      'aria2',
+      'ok',
+      `aria2: ${r.version||'online'}`
+    );
   } catch(e) {
-    toast('aria2: '+e.message,'error');
-    setDot('aria2','error','aria2: error');
+    toast(
+      'aria2: ' + e.message,
+      'error'
+    );
+
+    setDot(
+      'aria2',
+      'error',
+      'aria2: error'
+    );
+  } finally {
+    setButtonPending(button, false);
+
+    if (settingsApplied && !rendered) {
+      renderSettings();
+      switchSettingsTab(activeTab);
+    }
   }
 }
 
@@ -2335,9 +2860,9 @@ function renderAria2Downloads(data) {
             <div class="aria2-job-meta" title="${esc(job.path || '')}">${esc(job.gid || '')}${job.path ? ' · ' + esc(job.path) : ''}</div>
           </div>
           <div class="aria2-actions">
-            ${canPause ? `<button class="btn btn-ghost btn-sm" onclick="aria2DownloadAction('${esc(job.gid)}','pause')">Pause</button>` : ''}
-            ${canResume ? `<button class="btn btn-blue btn-sm" onclick="aria2DownloadAction('${esc(job.gid)}','resume')">Resume</button>` : ''}
-            <button class="btn btn-danger btn-sm" onclick="aria2DownloadAction('${esc(job.gid)}','remove')">Remove</button>
+            ${canPause ? `<button class="btn btn-ghost btn-sm" onclick="aria2DownloadAction('${esc(job.gid)}','pause',this)">Pause</button>` : ''}
+            ${canResume ? `<button class="btn btn-blue btn-sm" onclick="aria2DownloadAction('${esc(job.gid)}','resume',this)">Resume</button>` : ''}
+            <button class="btn btn-danger btn-sm" onclick="aria2DownloadAction('${esc(job.gid)}','remove',this)">Remove</button>
           </div>
         </div>
         <div>${progress(job.progress || 0, job.status === 'complete' ? 'completed' : 'downloading')}</div>
@@ -2355,24 +2880,82 @@ function renderAria2Downloads(data) {
 
 async function loadAria2Downloads() {
   try {
-    const data = await api('GET', '/aria2/downloads');
+    const data =
+      await api(
+        'GET',
+        '/aria2/downloads'
+      );
+
     renderAria2Downloads(data);
+
     return data;
   } catch(e) {
-    const el = document.getElementById('aria2-downloads');
-    if (el) el.innerHTML = `<div class="aria2-error">Queue error: ${esc(e.message)}</div>`;
+    const el =
+      document.getElementById(
+        'aria2-downloads'
+      );
+
+    if (el) {
+      el.innerHTML =
+        `<div class="aria2-error">Queue error: ${esc(e.message)}</div>`;
+    }
+
     throw e;
   }
 }
 
-async function aria2DownloadAction(gid, action) {
+loadAria2Downloads =
+  coalesceAsync(loadAria2Downloads);
+
+async function refreshAria2Downloads(button) {
+  setButtonPending(
+    button,
+    true,
+    'Refreshing…'
+  );
+
   try {
-    await api('POST', `/aria2/downloads/${encodeURIComponent(gid)}/${action}`);
-    toast(`aria2 ${action} sent`, 'success');
+    await loadAria2Downloads();
+  } catch (_) {
+    // loadAria2Downloads owns its visible error state.
+  } finally {
+    setButtonPending(button, false);
+  }
+}
+
+async function aria2DownloadAction(gid, action, button) {
+  const pendingLabels = {
+    pause: 'Pausing…',
+    resume: 'Resuming…',
+    remove: 'Removing…',
+  };
+
+  setButtonPending(
+    button,
+    true,
+    pendingLabels[action] || 'Working…'
+  );
+
+  try {
+    await api(
+      'POST',
+      `/aria2/downloads/${encodeURIComponent(gid)}/${action}`
+    );
+
+    toast(
+      `aria2 ${action} sent`,
+      'success'
+    );
+
     await loadAria2Downloads();
     await loadAria2Runtime();
   } catch(e) {
-    toast(`aria2 ${action}: ${e.message}`, 'error');
+    toast(
+      `aria2 ${action}: ${e.message}`,
+      'error'
+    );
+  } finally {
+    setButtonPending(button, false);
   }
 }
 
@@ -2422,31 +3005,95 @@ async function loadAria2Runtime() {
   }
 }
 
-async function aria2RuntimeAction(action) {
+async function aria2RuntimeAction(action, button) {
+  const pendingLabels = {
+    start: 'Starting…',
+    restart: 'Restarting…',
+    stop: 'Stopping…',
+    apply: 'Applying…',
+  };
+
+  setButtonPending(
+    button,
+    true,
+    pendingLabels[action] || 'Working…'
+  );
+
   try {
-    const current = getFormSettings();
-    await api('PUT','/settings', current);
-    settingsData = await api('GET','/settings');
-    const data = await api('POST', `/aria2/runtime/${action}`);
+    const current =
+      getFormSettings();
+
+    settingsData =
+      await api(
+        'PUT',
+        '/settings',
+        current
+      );
+
+    const data =
+      await api(
+        'POST',
+        `/aria2/runtime/${action}`
+      );
+
     renderAria2Runtime(data);
     loadAria2Downloads().catch(()=>{});
-    toast(`aria2 ${action} complete`, 'success');
+
+    toast(
+      `aria2 ${action} complete`,
+      'success'
+    );
   } catch(e) {
-    toast(`aria2 ${action}: ${e.message}`, 'error');
+    toast(
+      `aria2 ${action}: ${e.message}`,
+      'error'
+    );
+
     loadAria2Runtime().catch(()=>{});
+  } finally {
+    setButtonPending(button, false);
   }
 }
 
-async function runAria2Housekeeping() {
+async function runAria2Housekeeping(button) {
+  setButtonPending(
+    button,
+    true,
+    'Cleaning…'
+  );
+
   try {
-    const current = getFormSettings();
-    await api('PUT','/settings', current);
-    settingsData = await api('GET','/settings');
-    const r = await api('POST', '/settings/aria2-housekeeping');
-    renderAria2Diagnostics(r.diagnostics || null);
-    toast('aria2 cleanup finished', 'success');
+    const current =
+      getFormSettings();
+
+    settingsData =
+      await api(
+        'PUT',
+        '/settings',
+        current
+      );
+
+    const r =
+      await api(
+        'POST',
+        '/settings/aria2-housekeeping'
+      );
+
+    renderAria2Diagnostics(
+      r.diagnostics || null
+    );
+
+    toast(
+      'aria2 cleanup finished',
+      'success'
+    );
   } catch(e) {
-    toast(e.message, 'error');
+    toast(
+      e.message,
+      'error'
+    );
+  } finally {
+    setButtonPending(button, false);
   }
 }
 
@@ -2544,34 +3191,113 @@ async function loadDatabaseBackupList() {
   } catch(e) { toast(e.message, 'error'); }
 }
 
-async function wipeDatabase() {
-  const enabled = document.getElementById('s-db_wipe_enabled')?.checked;
-  if (!enabled) { toast('Enable database wipe in settings first', 'warn'); return; }
-  if (!confirm('This will remove all database rows. Continue?')) return;
-  const confirmText = prompt('Type WIPE to confirm database wipe');
+async function wipeDatabase(button) {
+  const enabled =
+    document
+      .getElementById(
+        's-db_wipe_enabled'
+      )
+      ?.checked;
+
+  if (!enabled) {
+    toast(
+      'Enable database wipe in settings first',
+      'warn'
+    );
+    return;
+  }
+
+  if (
+    !confirm(
+      'This will remove all database rows. Continue?'
+    )
+  ) {
+    return;
+  }
+
+  const confirmText =
+    prompt(
+      'Type WIPE to confirm database wipe'
+    );
+
   if (confirmText !== 'WIPE') return;
+
+  // Start pending state only after explicit operator confirmation.
+  setButtonPending(
+    button,
+    true,
+    'Wiping…'
+  );
+
   try {
-    toast('Wiping database…', 'warn');
-    const r = await api('POST', '/admin/database/wipe', {confirm: true});
-    if (r.backup && !r.backup.skipped) {
-      toast('Database wiped. Pre-wipe backup created.', 'success');
+    toast(
+      'Wiping database…',
+      'warn'
+    );
+
+    const r =
+      await api(
+        'POST',
+        '/admin/database/wipe',
+        {confirm: true}
+      );
+
+    if (
+      r.backup &&
+      !r.backup.skipped
+    ) {
+      toast(
+        'Database wiped. Pre-wipe backup created.',
+        'success'
+      );
     } else {
-      toast('Database wiped.', 'success');
+      toast(
+        'Database wiped.',
+        'success'
+      );
     }
+
     loadDatabaseBackupList();
     loadStats().catch(()=>{});
     loadRecent().catch(()=>{});
-    if (document.getElementById('view-torrents')?.classList.contains('active')) loadTorrents().catch(()=>{});
-  } catch(e) { toast(e.message, 'error'); }
+
+    if (
+      document
+        .getElementById('view-torrents')
+        ?.classList.contains('active')
+    ) {
+      loadTorrents().catch(()=>{});
+    }
+  } catch(e) {
+    toast(
+      e.message,
+      'error'
+    );
+  } finally {
+    setButtonPending(button, false);
+  }
 }
 
-async function sendStatsReport() {
+async function sendStatsReport(button) {
   const hours = parseInt(document.getElementById('stats-report-hours')?.value || '24', 10);
+
+  setButtonPending(
+    button,
+    true,
+    'Sending…'
+  );
+
   try {
     const r = await api('POST', `/stats/report/send?hours=${hours}`);
-    toast(`Report sent via webhook (${r.hours}h) ✓`, 'success');
+
+    toast(
+      `Report sent via webhook (${r.hours}h) ✓`,
+      'success'
+    );
   } catch(e) {
     toast(e.message, 'error');
+  } finally {
+    setButtonPending(button, false);
   }
 }
 
@@ -2621,11 +3347,28 @@ async function exportStats() {
   window.open(`/api/stats/export?hours=${hours}`, '_blank');
 }
 
-async function triggerStatsSnapshot() {
+async function triggerStatsSnapshot(button) {
+  setButtonPending(
+    button,
+    true,
+    'Taking…'
+  );
+
   try {
-    await api('POST', '/stats/snapshot');
-    toast('Stats snapshot taken', 'success');
-  } catch(e) { toast(e.message, 'error'); }
+    await api(
+      'POST',
+      '/stats/snapshot'
+    );
+
+    toast(
+      'Stats snapshot taken',
+      'success'
+    );
+  } catch(e) {
+    toast(e.message, 'error');
+  } finally {
+    setButtonPending(button, false);
+  }
 }
 
 async function runMigration(direction, dryRun) {
@@ -2646,11 +3389,32 @@ async function runMigration(direction, dryRun) {
   }
 }
 
-async function testPostgres() {
+async function testPostgres(button) {
+  setButtonPending(
+    button,
+    true,
+    'Testing…'
+  );
+
   try {
-    const r = await api('POST', '/settings/test-postgres');
-    toast(`PostgreSQL ${r.version} — ${r.host}:${r.port}/${r.database} ✓`, 'success');
-  } catch(e) { toast(e.message, 'error'); }
+    const r =
+      await api(
+        'POST',
+        '/settings/test-postgres'
+      );
+
+    toast(
+      `PostgreSQL ${r.version} — ${r.host}:${r.port}/${r.database} ✓`,
+      'success'
+    );
+  } catch(e) {
+    toast(
+      e.message,
+      'error'
+    );
+  } finally {
+    setButtonPending(button, false);
+  }
 }
 
 // ── Init ───────────────────────────────────────────────────────────────────
@@ -2676,6 +3440,7 @@ async function testPostgres() {
   } catch(e) {
     dbg('Settings ERROR: ' + e.message);
   }
+
   renderTopbarActions();
   updateAria2ngLink();
 
@@ -2683,61 +3448,193 @@ async function testPostgres() {
   dbg('Starte loadStats…');
   let statsLoaded = false;
   let statsAttempt = 0;
+
   while (!statsLoaded) {
     statsAttempt++;
     dbg('loadStats Versuch ' + statsAttempt);
+
     statsLoaded = await loadStats();
+
     if (!statsLoaded) {
-      const delay = Math.min(400 + statsAttempt * 400, 3000);
-      dbg('Error — retrying in ' + delay + 'ms…');
-      await new Promise(r => setTimeout(r, delay));
-      if (statsAttempt >= 10) { dbg('Aufgegeben nach 10 Versuchen'); break; }
+      const delay =
+        Math.min(
+          400 + statsAttempt * 400,
+          3000
+        );
+
+      dbg(
+        'Error — retrying in ' +
+        delay +
+        'ms…'
+      );
+
+      await new Promise(
+        r => setTimeout(r, delay)
+      );
+
+      if (statsAttempt >= 10) {
+        dbg(
+          'Aufgegeben nach 10 Versuchen'
+        );
+        break;
+      }
     }
   }
+
   // Start background tasks immediately — do not wait for stats
   loadRecent().catch(() => {});
-  checkConnections().catch(() => {});   // setzt aria2-Dot
+  checkConnections().catch(() => {});
   checkPremiumStatus().catch(() => {});
 
   if (statsLoaded) {
     dbg('Stats loaded ✓');
-    setTimeout(() => { const el = document.getElementById('debug-status'); if (el) el.style.display = 'none'; }, 5000);
+
+    setTimeout(() => {
+      const el =
+        document.getElementById(
+          'debug-status'
+        );
+
+      if (el) {
+        el.style.display = 'none';
+      }
+    }, 5000);
   } else {
-    dbg('Stats failed to load. Please reload the page.');
-    setDot('api', 'error', 'AllDebrid: Error');
+    dbg(
+      'Stats failed to load. Please reload the page.'
+    );
+
+    setDot(
+      'api',
+      'error',
+      'AllDebrid: Error'
+    );
   }
 
-  setInterval(checkPremiumStatus, 12 * 60 * 60 * 1000);
+  setInterval(
+    checkPremiumStatus,
+    12 * 60 * 60 * 1000
+  );
 
   // ── Server-Sent Events — live updates without 15 s polling ──────────────
   // Falls back to polling if SSE is unavailable (proxy, browser quirk, etc.)
   (function initSSE() {
-    if (typeof EventSource === 'undefined') return startPolling();
+    if (
+      typeof EventSource === 'undefined'
+    ) {
+      return startPolling();
+    }
+
     var es;
     var sseOk = false;
     var fallbackTimer = null;
 
     function connect() {
       try {
-        es = new EventSource('/api/events/stream');
-        es.addEventListener('connected', function() {
-          sseOk = true;
-          if (fallbackTimer) { clearInterval(fallbackTimer); fallbackTimer = null; }
-        });
-        es.addEventListener('stats_changed', function() {
-          loadStats().catch(()=>{});
-          if (document.getElementById('view-dashboard')?.classList.contains('active')) loadRecent().catch(()=>{});
-        });
-        es.addEventListener('torrent_updated', function(e) {
-          if (document.getElementById('view-torrents')?.classList.contains('active')) loadTorrents().catch(()=>{});
-          if (document.getElementById('view-dashboard')?.classList.contains('active')) loadRecent().catch(()=>{});
-          loadStats().catch(()=>{});
-        });
-        es.addEventListener('ping', function() {});
+        es =
+          new EventSource(
+            '/api/events/stream'
+          );
+
+        es.addEventListener(
+          'connected',
+          function() {
+            sseOk = true;
+
+            if (fallbackTimer) {
+              clearInterval(
+                fallbackTimer
+              );
+
+              fallbackTimer = null;
+            }
+          }
+        );
+
+        es.addEventListener(
+          'stats_changed',
+          function() {
+            loadStats().catch(()=>{});
+
+            if (
+              document
+                .getElementById(
+                  'view-dashboard'
+                )
+                ?.classList.contains(
+                  'active'
+                )
+            ) {
+              loadRecent().catch(()=>{});
+            }
+          }
+        );
+
+        es.addEventListener(
+          'torrent_updated',
+          function(e) {
+            let payload = {};
+
+            try {
+              payload =
+                JSON.parse(
+                  e.data || '{}'
+                );
+            } catch (_) {}
+
+            const patchedProgress =
+              patchProgressOnlyTransferEvent(
+                payload
+              );
+
+            if (!patchedProgress) {
+              if (
+                document
+                  .getElementById(
+                    'view-torrents'
+                  )
+                  ?.classList.contains(
+                    'active'
+                  )
+              ) {
+                loadTorrents()
+                  .catch(()=>{});
+              }
+
+              if (
+                document
+                  .getElementById(
+                    'view-dashboard'
+                  )
+                  ?.classList.contains(
+                    'active'
+                  )
+              ) {
+                loadRecent()
+                  .catch(()=>{});
+              }
+            }
+
+            loadStats().catch(()=>{});
+          }
+        );
+
+        es.addEventListener(
+          'ping',
+          function() {}
+        );
+
         es.onerror = function() {
-          if (!sseOk) startPolling();
+          if (!sseOk) {
+            startPolling();
+          }
+
           es.close();
-          setTimeout(connect, 10000); // reconnect after 10 s
+
+          setTimeout(
+            connect,
+            10000
+          );
         };
       } catch(err) {
         startPolling();
@@ -2746,18 +3643,54 @@ async function testPostgres() {
 
     function startPolling() {
       if (fallbackTimer) return;
-      fallbackTimer = setInterval(()=>{
-        loadStats().catch(()=>{});
-        if (document.getElementById('view-dashboard')?.classList.contains('active')) loadRecent().catch(()=>{});
-        if (document.getElementById('view-torrents')?.classList.contains('active')) loadTorrents().catch(()=>{});
-      }, 15000);
+
+      fallbackTimer =
+        setInterval(()=>{
+          loadStats().catch(()=>{});
+
+          if (
+            document
+              .getElementById(
+                'view-dashboard'
+              )
+              ?.classList.contains(
+                'active'
+              )
+          ) {
+            loadRecent()
+              .catch(()=>{});
+          }
+
+          if (
+            document
+              .getElementById(
+                'view-torrents'
+              )
+              ?.classList.contains(
+                'active'
+              )
+          ) {
+            loadTorrents()
+              .catch(()=>{});
+          }
+        }, 15000);
     }
 
     connect();
+
     // Still refresh stats every 60 s as a safety net even with SSE
-    setInterval(()=>{ loadStats().catch(()=>{}); }, 60000);
+    setInterval(
+      ()=>{
+        loadStats().catch(()=>{});
+      },
+      60000
+    );
   })();
-  setInterval(()=>checkConnections().catch(()=>{}), 60000);
+
+  setInterval(
+    ()=>checkConnections().catch(()=>{}),
+    60000
+  );
 })();
 
 
@@ -2784,7 +3717,7 @@ async function loadAria2QueueView() {
       if (!btn) return;
       var gid = decodeURIComponent(btn.getAttribute('data-gid') || '');
       var act = btn.getAttribute('data-act') || '';
-      if (gid && act) aria2QueueAction(gid, act);
+      if (gid && act) aria2QueueAction(gid, act, btn);
     });
   }
 
@@ -2928,13 +3861,34 @@ function renderAria2QueueView(data) {
   }).join('');
 }
 
-async function aria2QueueAction(gid, action) {
+async function aria2QueueAction(gid, action, button) {
+  const pendingLabel =
+    action === 'pause'
+      ? 'Pausing…'
+      : action === 'resume'
+        ? 'Resuming…'
+        : 'Removing…';
+
+  setButtonPending(button, true, pendingLabel);
+
   try {
-    await api('POST', '/aria2/downloads/' + encodeURIComponent(gid) + '/' + action);
+    await api(
+      'POST',
+      '/aria2/downloads/' +
+        encodeURIComponent(gid) +
+        '/' +
+        action
+    );
+
     toast('aria2: ' + action + ' sent', 'success');
     await loadAria2QueueView();
   } catch(e) {
-    toast('aria2 ' + action + ': ' + e.message, 'error');
+    toast(
+      'aria2 ' + action + ': ' + e.message,
+      'error'
+    );
+  } finally {
+    setButtonPending(button, false);
   }
 }
 
@@ -3103,13 +4057,25 @@ async function cleanupAlldebridOrphans() {
 
 // ── Download Now / Priority Queue ────────────────────────────────────────────
 
-async function downloadNow(torrentId) {
+async function downloadNow(torrentId, button) {
   // Set priority very high so this torrent is dispatched next
+  setButtonPending(button, true, 'Queuing…');
+
   try {
-    await api('PATCH', '/torrents/' + torrentId + '/priority', {priority: 100}, 10000);
+    await api(
+      'PATCH',
+      '/torrents/' + torrentId + '/priority',
+      {priority: 100},
+      10000
+    );
+
     toast('Moved to front of queue', 'success');
     loadTorrents();
-  } catch(e) { toast(sanitizeErrorMsg(e.message), 'error'); }
+  } catch(e) {
+    toast(sanitizeErrorMsg(e.message), 'error');
+  } finally {
+    setButtonPending(button, false);
+  }
 }
 
 async function setTorrentPriority(torrentId, priority) {

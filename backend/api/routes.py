@@ -264,7 +264,11 @@ async def update_settings(new: AppSettings):
             await manager.apply_aria2_memory_tuning()
         except Exception as exc:
             logger.warning("Could not apply aria2 memory settings immediately: %s", exc)
-    return {"ok": True}
+    data = clean.model_dump()
+    if env_db_type in ("sqlite", "postgres"):
+        data["_db_type_locked"] = True
+    data["ok"] = True
+    return data
 
 
 # ── Avatar ─────────────────────────────────────────────────────────────────────

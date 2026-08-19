@@ -2069,13 +2069,20 @@ class TorrentManager:
         # Recent Activity row. Emit after every provider poll that was applied.
         try:
             from api.routes import _sse_broadcast
+            status_changed = persisted_status != current_status
+            progress_item = {
+                "id": row["id"],
+                "status": persisted_status,
+                "name": str(row["name"] or ""),
+                "progress": progress,
+                "status_changed": status_changed,
+            }
             await _sse_broadcast(
                 "torrent_updated",
                 {
-                    "id": row["id"],
-                    "status": persisted_status,
-                    "name": str(row["name"] or ""),
-                    "progress": progress,
+                    **progress_item,
+                    "progress_only": not status_changed,
+                    "items": [progress_item],
                 },
             )
         except Exception as exc:
@@ -3648,6 +3655,7 @@ class TorrentManager:
             grouped.setdefault(row["torrent_id"], []).append(row)
 
         updates = []
+        changed_updates = []
         broadcast_needed = False
 
         for torrent_id, files in grouped.items():
@@ -3720,11 +3728,19 @@ class TorrentManager:
                 files[0]["torrent_status"] or ""
             )
 
-            if (
-                int(progress) != int(current_progress)
-                or parent_status != current_status
-            ):
+            progress_changed = int(progress) != int(current_progress)
+            status_changed = parent_status != current_status
+
+            if progress_changed or status_changed:
                 broadcast_needed = True
+                changed_updates.append(
+                    {
+                        "id": int(torrent_id),
+                        "progress": progress,
+                        "status": parent_status,
+                        "status_changed": status_changed,
+                    }
+                )
 
             updates.append((progress, parent_status, torrent_id))
 
@@ -3751,7 +3767,16 @@ class TorrentManager:
         if broadcast_needed:
             try:
                 from api.routes import _sse_broadcast
-                await _sse_broadcast("torrent_updated", {})
+                await _sse_broadcast(
+                    "torrent_updated",
+                    {
+                        "progress_only": not any(
+                        item["status_changed"]
+                        for item in changed_updates
+                    ),
+                        "items": changed_updates,
+                    },
+                )
             except Exception as exc:
                 logger.debug(
                     "Aggregate aria2 progress SSE broadcast failed: %s",

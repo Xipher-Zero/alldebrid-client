@@ -1,0 +1,331 @@
+import re
+from pathlib import Path
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_live_refresh_keeps_action_nodes_stable_and_coalesces_core_loaders():
+    js = (REPO_ROOT / "frontend/static/app.js").read_text()
+
+    assert "el.dataset.initialized !== '1'" in js
+    assert 'id="btn-pause-all"' in js
+    assert 'id="btn-resume-all"' in js
+    assert "loadStats = coalesceAsync(loadStats);" in js
+    assert "loadRecent = coalesceAsync(loadRecent);" in js
+    assert "loadTorrents = coalesceAsync(loadTorrents);" in js
+
+
+def test_progress_only_sse_updates_rows_without_forcing_full_render():
+    js = (REPO_ROOT / "frontend/static/app.js").read_text()
+    manager = (
+        REPO_ROOT / "backend/services/manager_v2.py"
+    ).read_text()
+
+    assert "function patchProgressOnlyTransferEvent(data)" in js
+    assert 'data-role="transfer-progress"' in js
+    assert 'data-status="${esc(t.status)}"' in js
+
+    assert (
+        '"progress_only": not any('
+        in manager
+    )
+    assert (
+        'item["status_changed"]'
+        in manager
+    )
+    assert (
+        "for item in changed_updates"
+        in manager
+    )
+    assert '"items": changed_updates' in manager
+    assert '"status_changed": status_changed' in manager
+
+
+def test_async_controls_acknowledge_clicks_immediately():
+    js = (REPO_ROOT / "frontend/static/app.js").read_text()
+    css = (REPO_ROOT / "frontend/static/style.css").read_text()
+
+    for label in (
+        "Pausing…",
+        "Resuming…",
+        "Retrying…",
+        "Deleting…",
+        "Queuing…",
+    ):
+        assert label in js
+
+    assert '.btn:not(:disabled):active' in css
+    assert 'aria-busy' in js
+
+
+def test_detail_modal_opens_before_detail_request_finishes():
+    js = (REPO_ROOT / "frontend/static/app.js").read_text()
+
+    detail = js.split(
+        "async function showDetail(id)", 1
+    )[1].split(
+        "function closeModal", 1
+    )[0]
+
+    assert detail.index(
+        "overlay.classList.add('open')"
+    ) < detail.index(
+        "await api('GET',`/torrents/${id}`)"
+    )
+
+    assert "Loading transfer details…" in detail
+
+
+def test_settings_put_response_is_reused_without_followup_get():
+    js = (REPO_ROOT / "frontend/static/app.js").read_text()
+    routes = (
+        REPO_ROOT / "backend/api/routes.py"
+    ).read_text()
+
+    assert "data = clean.model_dump()" in routes
+    assert 'data["ok"] = True' in routes
+
+    settings_put_assignments = re.findall(
+        r"settingsData\s*=\s*await\s+api\(\s*'PUT'\s*,\s*'/settings'",
+        js,
+    )
+
+    assert len(settings_put_assignments) == 5
+
+    assert (
+        "await api('PUT','/settings',d);\n"
+        "    settingsData = await api('GET','/settings');"
+        not in js
+    )
+
+
+def test_dashboard_magnet_button_has_its_own_pending_target():
+    js = (REPO_ROOT / "frontend/static/app.js").read_text()
+    html = (
+        REPO_ROOT / "frontend/static/index.html"
+    ).read_text()
+
+    assert 'id="btn-add-magnet"' in html
+    assert (
+        "document.getElementById('btn-add-magnet')"
+        in js
+    )
+
+
+def test_secondary_operator_controls_get_pending_feedback():
+    js = (REPO_ROOT / "frontend/static/app.js").read_text()
+    html = (REPO_ROOT / "frontend/static/index.html").read_text()
+
+    for control_id in (
+        "btn-import-existing",
+        "btn-recover-all",
+        "btn-save-settings",
+        "btn-test-alldebrid",
+        "btn-test-aria2",
+        "btn-test-discord",
+        "btn-test-postgres",
+    ):
+        assert f'id="{control_id}"' in html
+
+    for signature in (
+        "async function importExisting(button)",
+        "async function recoverAll(button)",
+        "async function bulkAction(action, button)",
+        "async function saveSettings(button)",
+        "async function testDiscord(button)",
+        "async function testAD(button)",
+        "async function testAria2(button)",
+        "async function testPostgres(button)",
+        "async function triggerFullSync(button)",
+        "async function aria2RuntimeAction(action, button)",
+        "async function runAria2Housekeeping(button)",
+        "async function wipeDatabase(button)",
+    ):
+        assert signature in js
+
+    for label in (
+        "Importing…",
+        "Recovering…",
+        "Saving…",
+        "Testing…",
+        "Syncing…",
+        "Restarting…",
+        "Cleaning…",
+        "Wiping…",
+    ):
+        assert label in js
+
+
+def test_settings_remote_tests_hold_pending_state_through_remote_test():
+    js = (REPO_ROOT / "frontend/static/app.js").read_text()
+
+    discord = js.split(
+        "async function testDiscord(button)", 1
+    )[1].split(
+        "async function testAD(button)", 1
+    )[0]
+
+    assert discord.index(
+        "'/settings/test-discord'"
+    ) < discord.index(
+        "renderSettings();"
+    )
+
+    aria2 = js.split(
+        "async function testAria2(button)", 1
+    )[1].split(
+        "function renderAria2Diagnostics", 1
+    )[0]
+
+    assert aria2.index(
+        "'/settings/test-aria2'"
+    ) < aria2.index(
+        "renderSettings();"
+    )
+
+
+def test_settings_aria2_queue_refresh_is_coalesced_and_actions_acknowledge():
+    js = (REPO_ROOT / "frontend/static/app.js").read_text()
+
+    assert (
+        "loadAria2Downloads =\n"
+        "  coalesceAsync(loadAria2Downloads);"
+        in js
+    )
+
+    assert (
+        "async function refreshAria2Downloads(button)"
+        in js
+    )
+
+    assert (
+        "async function aria2DownloadAction(gid, action, button)"
+        in js
+    )
+
+    assert "Refreshing…" in js
+    assert "Removing…" in js
+
+    wipe = js.split(
+        "async function wipeDatabase(button)", 1
+    )[1].split(
+        "async function sendStatsReport", 1
+    )[0]
+
+    assert wipe.index(
+        "if (confirmText !== 'WIPE') return;"
+    ) < wipe.index(
+        "'Wiping…'"
+    )
+
+
+def test_startup_initializer_and_queue_state_survive_ui_refactors():
+    js = (REPO_ROOT / "frontend/static/app.js").read_text()
+
+    assert js.count("// ── Init ─") == 1
+    assert js.count("var _aria2qTimer = null;") == 1
+    assert js.count("var _aria2qErrCount = 0;") == 1
+
+    init_start = js.index(
+        "// ── Init ─"
+    )
+
+    queue_function = js.index(
+        "async function loadAria2QueueView()"
+    )
+
+    init = js[
+        init_start:queue_function
+    ]
+
+    assert "(async()=>{" in init
+    assert (
+        "settingsData = await api('GET', '/settings');"
+        in init
+    )
+    assert "renderTopbarActions();" in init
+    assert "updateAria2ngLink();" in init
+    assert "statsLoaded = await loadStats();" in init
+
+    assert re.search(
+        r"new\s+EventSource\(\s*'/api/events/stream'\s*\)",
+        init,
+    )
+
+    assert (
+        "patchProgressOnlyTransferEvent("
+        in init
+    )
+
+    assert "function startPolling()" in init
+
+    assert (
+        "checkConnections().catch(()=>{})"
+        in init
+    )
+
+    settings_gets = re.findall(
+        r"settingsData\s*=\s*await\s+api\("
+        r"\s*'GET'\s*,\s*'/settings'\s*\)",
+        js,
+    )
+
+    assert len(settings_gets) == 2
+
+    # Queue loader relies on both state variables.
+    queue = js.split(
+        "async function loadAria2QueueView()", 1
+    )[1]
+
+    assert "_aria2qTimer" in queue
+    assert "_aria2qErrCount" in queue
+
+
+def test_stats_operator_actions_acknowledge_before_network_completion():
+    js = (REPO_ROOT / "frontend/static/app.js").read_text()
+
+    assert (
+        'onclick="triggerStatsSnapshot(this)"'
+        in js
+    )
+    assert (
+        'onclick="sendStatsReport(this)"'
+        in js
+    )
+
+    send = js.split(
+        "async function sendStatsReport(button)", 1
+    )[1].split(
+        "function exportStats", 1
+    )[0]
+
+    snapshot = js.split(
+        "async function triggerStatsSnapshot(button)", 1
+    )[1].split(
+        "async function loadAnalytics", 1
+    )[0]
+
+    assert send.index(
+        "setButtonPending("
+    ) < send.index(
+        "await api("
+    )
+
+    assert snapshot.index(
+        "setButtonPending("
+    ) < snapshot.index(
+        "await api("
+    )
+
+    assert "'Sending…'" in send
+    assert "'Taking…'" in snapshot
+
+    assert (
+        "setButtonPending(button, false);"
+        in send
+    )
+    assert (
+        "setButtonPending(button, false);"
+        in snapshot
+    )

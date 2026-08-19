@@ -6,38 +6,8 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-if "pydantic" not in sys.modules:
-    class _BaseModel:
-        def __init__(self, **kwargs):
-            for key, value in kwargs.items():
-                setattr(self, key, value)
-
-        def model_dump(self):
-            return dict(self.__dict__)
-
-    sys.modules["pydantic"] = types.SimpleNamespace(BaseModel=_BaseModel)
-
-if "aiohttp" not in sys.modules:
-    sys.modules["aiohttp"] = types.SimpleNamespace(
-        ClientTimeout=lambda *a, **kw: None,
-        ClientSession=object,
-        TCPConnector=lambda **kw: None,
-        FormData=object,
-        ClientError=Exception,
-        ServerDisconnectedError=Exception,
-        ClientConnectorError=Exception,
-        ClientOSError=Exception,
-    )
-
-if "aiofiles" not in sys.modules:
-    sys.modules["aiofiles"] = types.SimpleNamespace(open=lambda *a, **kw: None)
-
-if "aiosqlite" not in sys.modules:
-    sys.modules["aiosqlite"] = types.SimpleNamespace(
-        Connection=object,
-        Row=object,
-        connect=lambda *a, **kw: None,
-    )
+# Use the real pinned runtime dependencies during repository tests.
+# Local module stubs made test behavior depend on pytest collection order.
 
 from core.scheduler import _coerce_int_setting, _stats_report_window_hours
 from services import manager_v2

@@ -47,42 +47,83 @@ def install_scheduler_snapshot_reuse(manager) -> None:
     manager._dp_scheduler_snapshot_reuse_installed = True
 
 
-def _install_confirm_gid_metrics(manager) -> None:
-    """Instrument the manager confirmation path without changing semantics.
+def _install_confirm_gid_cache(manager) -> None:
+    """Cache scheduler-only negative GID confirmations after strict proof.
 
-    TransferControlCoordinator.install() binds ``manager._aria2_confirm_gid`` to
-    the coordinator's then-current bound method. Replacing
-    ``coordinator.confirm_gid`` later does not update that already-bound manager
-    attribute, so scheduler instrumentation must wrap the manager reference
-    itself. This is diagnostic-only and leaves operator pause/resume methods
-    untouched.
+    ``sync_aria2_downloads`` may encounter a persisted GID that is absent from
+    the bulk aria2 snapshot. The v1.0.3 reliability path then proves that absence
+    with three tellStatus attempts and backoff before returning ``None``. Once
+    that proof succeeds, repeating the same proof every two seconds adds no new
+    safety information while the DB still references the same GID.
+
+    This wrapper is deliberately installed on ``manager._aria2_confirm_gid`` --
+    the path used by reconciliation -- rather than on the coordinator's
+    ``confirm_gid`` method. Operator Pause/Resume therefore keeps the original
+    strict confirmation behavior on every action.
+
+    A GID observed again in a later authoritative bulk snapshot is removed from
+    the negative cache before reconciliation, so a reappearing daemon entry is
+    never hidden by a prior negative result. A replacement DB association uses a
+    different GID and naturally bypasses the cached old association.
     """
-    if getattr(manager, "_dp_confirm_gid_metrics_installed", False):
+    if getattr(manager, "_dp_confirm_gid_cache_installed", False):
         return
 
     original_confirm_gid = manager._aria2_confirm_gid
+    confirmed_missing: set[str] = set()
+    manager._dp_confirmed_missing_gids = confirmed_missing
 
-    async def profiled_confirm_gid(*args, **kwargs):
+    async def cached_confirm_gid(gid: str, *args, **kwargs):
+        normalized = str(gid or "").strip()
         increment("aria2.confirm_gid_calls")
+
+        if normalized and normalized in confirmed_missing:
+            increment("aria2.confirm_gid_cache_hits")
+            return None
+
         try:
             async with async_timer("aria2.confirm_gid"):
-                result = await original_confirm_gid(*args, **kwargs)
+                result = await original_confirm_gid(normalized, *args, **kwargs)
         except Exception:
             increment("aria2.confirm_gid_errors")
             raise
+
         if result is None:
+            if normalized:
+                confirmed_missing.add(normalized)
             increment("aria2.confirm_gid_missing")
+        elif normalized:
+            confirmed_missing.discard(normalized)
         return result
 
-    manager._aria2_confirm_gid = profiled_confirm_gid
-    manager._dp_confirm_gid_metrics_installed = True
+    manager._aria2_confirm_gid = cached_confirm_gid
+    manager._dp_confirm_gid_cache_installed = True
+
+
+def _refresh_confirmed_missing_cache(manager, snapshot) -> None:
+    """Invalidate negative entries that reappear in authoritative daemon state."""
+    confirmed_missing = getattr(manager, "_dp_confirmed_missing_gids", None)
+    if not confirmed_missing:
+        return
+
+    present = {
+        str(getattr(item, "gid", "") or "").strip()
+        for item in snapshot
+        if str(getattr(item, "gid", "") or "").strip()
+    }
+    recovered = confirmed_missing.intersection(present)
+    if recovered:
+        confirmed_missing.difference_update(recovered)
+        increment("aria2.confirm_gid_cache_recovered", len(recovered))
 
 
 async def _raw_snapshot(manager):
     install_scheduler_snapshot_reuse(manager)
     increment("aria2.scheduler_snapshot_fetch")
     async with async_timer("reconcile.snapshot"):
-        return await manager._dp_scheduler_raw_aria2_get_all()
+        snapshot = await manager._dp_scheduler_raw_aria2_get_all()
+    _refresh_confirmed_missing_cache(manager, snapshot)
+    return snapshot
 
 
 async def _has_unintended_paused_children(coordinator) -> bool:
@@ -114,7 +155,7 @@ async def reconcile_download_client_cycle(manager) -> None:
         return
 
     install_scheduler_snapshot_reuse(manager)
-    _install_confirm_gid_metrics(manager)
+    _install_confirm_gid_cache(manager)
     await coordinator.ensure_initialized()
     globally_paused = bool(get_settings().paused)
 

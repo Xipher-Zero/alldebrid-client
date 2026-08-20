@@ -1,0 +1,64 @@
+name: v1.0.5 Pytest Diagnostics
+
+on:
+  pull_request:
+    branches:
+      - main
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  diagnostics:
+    if: github.head_ref == 'work/v1.0.5-architecture'
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - name: Checkout work branch
+        uses: actions/checkout@v5
+        with:
+          ref: work/v1.0.5-architecture
+          fetch-depth: 0
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Apply architecture refactor
+        run: |
+          python tools/v105_refactor.py
+          python tools/v105_refactor_fix1.py
+          python tools/v105_refactor_fix3.py
+
+      - name: Install test dependencies
+        run: |
+          cd backend
+          pip install -r requirements-dev.txt
+
+      - name: Capture full pytest diagnostics
+        id: pytest
+        shell: bash
+        run: |
+          set +e
+          cd backend
+          python -m pytest tests/ -ra --tb=long --junitxml=../v105-pytest.xml 2>&1 | tee ../v105-pytest.log
+          status=${PIPESTATUS[0]}
+          echo "exit_code=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Upload pytest diagnostics
+        uses: actions/upload-artifact@v4
+        with:
+          name: v105-pytest-diagnostics
+          path: |
+            v105-pytest.log
+            v105-pytest.xml
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Preserve pytest result
+        shell: bash
+        run: exit "${{ steps.pytest.outputs.exit_code }}"

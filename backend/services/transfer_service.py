@@ -1,8 +1,8 @@
 """DebridPulse application service root.
 
 FastAPI and scheduler code depend on this object. The inherited TorrentManager is
-retained only as a provider/materialization engine while orchestration lives in
-explicit services with normal dependency injection.
+retained as the V1 materialization implementation, but every application-visible
+operation is explicit: there is no transparent fallback into the legacy engine.
 """
 from __future__ import annotations
 
@@ -21,11 +21,11 @@ from services.notification_service import NotificationService
 
 class TransferService:
     def __init__(self, materialization_engine):
-        self.engine = materialization_engine
+        self._engine = materialization_engine
         self.repository = TransferRepository()
         self.provider = ProviderGateway(materialization_engine)
-        self.aria2 = Aria2Gateway(materialization_engine)
         self.ownership = OwnershipLedger(materialization_engine)
+        self.aria2 = Aria2Gateway(materialization_engine, self.ownership)
         self.state_machine = TransferStateMachine(materialization_engine)
         self.control = TransferControlService(materialization_engine, self.repository, self.state_machine)
         self.state_machine.bind_control(self.control)
@@ -37,10 +37,7 @@ class TransferService:
         self.notifications = NotificationService()
         materialization_engine.bind_architecture(self)
 
-    def __getattr__(self, name):
-        # Compatibility while provider/materialization methods are progressively
-        # moved out of the inherited engine. Orchestration methods below are explicit.
-        return getattr(self.engine, name)
+    # ----- operator control -----
 
     async def pause_torrent(self, transfer_id: int):
         return await self.control.pause_transfer(transfer_id)
@@ -60,15 +57,11 @@ class TransferService:
     async def owned_aria2_downloads(self, downloads):
         return await self.ownership.filter_owned(downloads)
 
-    async def advance_aria2_queue(self):
-        return await self.engine.advance_aria2_queue()
+    # ----- provider boundary -----
 
-    async def apply_aria2_memory_tuning(self):
-        return await self.engine.apply_aria2_memory_tuning()
-
-    def reset_services(self):
-        self.control.reset_runtime_state()
-        return self.engine.reset_services()
+    def ad(self):
+        """Compatibility name retained for one provider-only route; no fallback."""
+        return self.provider.client()
 
     async def sync_alldebrid_status(self):
         return await self.provider.sync_status()
@@ -78,6 +71,68 @@ class TransferService:
 
     async def import_existing_magnets(self):
         return await self.provider.import_existing()
+
+    async def full_alldebrid_sync(self):
+        return await self.provider.full_sync()
+
+    async def add_magnet_direct(self, magnet: str, source: str = "manual"):
+        return await self.provider.add_magnet(magnet, source=source)
+
+    async def add_torrent_file_direct(self, *args, **kwargs):
+        return await self.provider.add_torrent_file(*args, **kwargs)
+
+    async def add_direct_links(self, links):
+        return await self.provider.add_direct_links(links)
+
+    async def retry_direct_link_collection(self, transfer_id: int):
+        return await self.provider.retry_direct_link_collection(transfer_id)
+
+    async def cleanup_no_peer_errors(self):
+        return await self.provider.cleanup_no_peer_errors()
+
+    async def cleanup_alldebrid_orphans(self):
+        return await self.provider.cleanup_orphans()
+
+    async def cleanup_stuck_downloads(self):
+        return await self.provider.cleanup_stuck()
+
+    # ----- aria2 observation/maintenance -----
+
+    async def advance_aria2_queue(self):
+        return await self.aria2.advance_queue()
+
+    async def apply_aria2_memory_tuning(self):
+        return await self.aria2.apply_memory_tuning()
+
+    async def test_aria2(self):
+        return await self.aria2.test()
+
+    async def _aria2_get_memory_diagnostics(self):
+        """Compatibility name for the existing runtime diagnostics route."""
+        return await self.aria2.memory_diagnostics()
+
+    async def run_aria2_housekeeping(self):
+        return await self.aria2.housekeeping()
+
+    async def deep_sync_aria2_finished(self):
+        return await self.aria2.deep_sync()
+
+    async def check_disk_space_guard(self):
+        return await self.aria2.disk_guard()
+
+    # ----- explicit materialization/lifecycle compatibility -----
+
+    async def _start_download(self, *args, **kwargs):
+        """Existing startup recovery entrypoint routed through control authority."""
+        return await self.control.start_download(*args, **kwargs)
+
+    async def delete_torrent(self, *args, **kwargs):
+        """Delete remains a materialization-engine operation in V1, explicitly exposed."""
+        return await self._engine.delete_torrent(*args, **kwargs)
+
+    def reset_services(self):
+        self.control.reset_runtime_state()
+        return self._engine.reset_services()
 
 
 transfer_service = TransferService(engine)

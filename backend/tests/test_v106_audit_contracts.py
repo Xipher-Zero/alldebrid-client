@@ -209,6 +209,10 @@ def test_dashboard_has_one_mixed_submission_control():
     assert 'id="btn-add-transfer"' in html
     assert 'https://example-hoster.com/file/' in html
     assert 'magnet:?xt=urn:btih:' in html
+    assert 'One item per line · Empty + Add opens a .torrent file' in html
+    assert 'column-gap:14px' in html
+    assert 'font-size:11px;font-weight:400;color:var(--text3)' in html
+    assert 'One item per line. Leave empty and click Add to choose a .torrent file.' not in html
     assert 'addDashboardEntries()' in html
     assert "function classifyDashboardEntries" in js
     assert "openTorrentFilePicker();" in js

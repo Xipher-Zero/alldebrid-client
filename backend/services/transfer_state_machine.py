@@ -5,6 +5,7 @@ import logging
 
 from core.config import get_settings
 from db.database import get_db
+from services.event_bus import publish
 
 logger = logging.getLogger("debridpulse.state_machine")
 _RUNNABLE = frozenset({"pending", "queued", "downloading", "paused"})
@@ -109,10 +110,9 @@ class TransferStateMachine:
                 await db.commit()
         if changed:
             try:
-                from api.routes import _sse_broadcast
-                await _sse_broadcast("torrent_updated", {
+                await publish("torrent_updated", {
                     "progress_only": not any(item["status_changed"] for item in changed),
                     "items": changed,
                 })
             except Exception as exc:
-                logger.debug("parent progress SSE deferred: %s", exc)
+                logger.debug("parent progress event deferred: %s", exc)

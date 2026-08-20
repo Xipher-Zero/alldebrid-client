@@ -19,6 +19,33 @@ class TransferRepository:
             )
         return [int(row["id"]) for row in rows]
 
+    async def parent_progress_rows(self):
+        """Return the aria2-backed rows required for parent aggregation."""
+        async with get_db() as db:
+            return await db.fetchall(
+                """SELECT t.id AS torrent_id, t.status AS torrent_status,
+                          t.progress AS torrent_progress, f.id AS file_id,
+                          f.status AS file_status, f.size_bytes, f.download_id
+                     FROM torrents t JOIN download_files f ON f.torrent_id=t.id
+                    WHERE t.download_client='aria2'
+                      AND t.status IN ('queued','downloading','paused')
+                      AND f.download_client='aria2' AND f.blocked=0
+                      AND f.status!='missing' ORDER BY t.id,f.id"""
+            )
+
+    async def persist_parent_progress(self, updates) -> None:
+        """Persist derived parent progress/status updates as one batch."""
+        updates = list(updates or [])
+        if not updates:
+            return
+        async with get_db() as db:
+            await db.executemany(
+                """UPDATE torrents SET progress=?,status=?,updated_at=CURRENT_TIMESTAMP
+                     WHERE id=? AND status IN ('queued','downloading','paused')""",
+                updates,
+            )
+            await db.commit()
+
     async def persist_pause_transition(
         self,
         target_id: int,

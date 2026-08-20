@@ -1,0 +1,1 @@
+Temporary validation trigger. This file will be removed immediately; its only purpose is to produce an owner-authored PR synchronization event after the validated Actions-bot cleanup commit.

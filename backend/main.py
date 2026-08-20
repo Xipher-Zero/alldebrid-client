@@ -433,6 +433,11 @@ async def lifespan(app: FastAPI):
         await aria2_runtime.stop()
     except Exception as e:
         logger.warning("Built-in aria2 shutdown failed: %s", sanitize_exception(e))
+    try:
+        from db.database import close_db_runtime
+        await close_db_runtime()
+    except Exception as e:
+        logger.warning("Database runtime shutdown failed: %s", sanitize_exception(e))
 
 
 app = FastAPI(

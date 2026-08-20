@@ -9,12 +9,15 @@ Improvements over the original:
 - Clear error classes: Aria2RPCError (RPC logic) vs Aria2ConnectionError (network)
 - Retry logic with backoff for connection errors
 - get_all() returns an empty list on connection error instead of raising
+- Hot state snapshots use system.multicall so active/waiting/stopped state is
+  collected in one HTTP transaction without reintroducing keep-alive failures
 """
 import asyncio
 import logging
+import time
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import aiohttp
 from core.config import get_settings
@@ -22,7 +25,6 @@ from core.logging_utils import sanitize_log_value
 
 logger = logging.getLogger("alldebrid.aria2")
 
-# Error messages indicating a closing or closed transport
 _CLOSING_TRANSPORT_MSGS = frozenset({
     "Cannot write to closing transport",
     "Connection reset by peer",
@@ -50,10 +52,7 @@ class Aria2RPCError(Exception):
 
 
 class Aria2ConnectionError(Aria2RPCError):
-    """
-    Connection error to aria2 (e.g. unreachable, closing transport).
-    Subclass of Aria2RPCError for backward compatibility.
-    """
+    """Connection error to aria2; subclass retained for compatibility."""
 
 
 @dataclass
@@ -122,12 +121,12 @@ class Aria2Service:
         self.timeout = aiohttp.ClientTimeout(total=max(5, int(timeout_seconds or 15)))
         self._request_id = 0
         self._uri_locks: Dict[str, asyncio.Lock] = {}
-        self._rpc_lock = asyncio.Lock()   # serialises concurrent RPC calls
-        self._last_call_time: float = 0.0 # for min-interval enforcement
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # Public API
-    # ─────────────────────────────────────────────────────────────────────────
+        self._rpc_pace_lock = asyncio.Lock()
+        self._last_call_time: float = 0.0
+        self._rpc_http_requests = 0
+        self._rpc_method_calls = 0
+        self._rpc_multicall_requests = 0
+        self._rpc_total_seconds = 0.0
 
     async def test(self) -> Dict[str, Any]:
         version = await self._call("aria2.getVersion")
@@ -137,20 +136,18 @@ class Aria2Service:
         }
 
     async def get_global_stat(self) -> Dict[str, int]:
-        """Return current download/upload speed and active/waiting count."""
         try:
             result = await self._call("aria2.getGlobalStat")
             return {
                 "download_speed": int(result.get("downloadSpeed") or 0),
-                "upload_speed":   int(result.get("uploadSpeed") or 0),
-                "active":         int(result.get("numActive") or 0),
-                "waiting":        int(result.get("numWaiting") or 0),
+                "upload_speed": int(result.get("uploadSpeed") or 0),
+                "active": int(result.get("numActive") or 0),
+                "waiting": int(result.get("numWaiting") or 0),
             }
         except Exception:
             return {"download_speed": 0, "upload_speed": 0, "active": 0, "waiting": 0}
 
     async def get_active(self) -> List[Aria2DownloadStatus]:
-        """Return active aria2 jobs with per-job speed for live telemetry."""
         try:
             result = await self._call("aria2.tellActive", [self._keys()])
             return [self._normalize(raw) for raw in (result or [])]
@@ -166,24 +163,14 @@ class Aria2Service:
 
     async def change_global_options(self, options: Dict[str, Any]) -> Any:
         if not _is_builtin_mode():
-            logger.warning(
-                "Blocked aria2.changeGlobalOption for shared external daemon"
-            )
-            return {
-                "skipped": True,
-                "reason": "external aria2 policy is read-only",
-            }
+            logger.warning("Blocked aria2.changeGlobalOption for shared external daemon")
+            return {"skipped": True, "reason": "external aria2 policy is read-only"}
         return await self._call("aria2.changeGlobalOption", [options])
 
     async def purge_download_results(self) -> Any:
         if not _is_builtin_mode():
-            logger.warning(
-                "Blocked aria2.purgeDownloadResult for shared external daemon"
-            )
-            return {
-                "skipped": True,
-                "reason": "external aria2 result history is daemon-owned",
-            }
+            logger.warning("Blocked aria2.purgeDownloadResult for shared external daemon")
+            return {"skipped": True, "reason": "external aria2 result history is daemon-owned"}
         return await self._call("aria2.purgeDownloadResult")
 
     async def get_memory_diagnostics(
@@ -193,20 +180,19 @@ class Aria2Service:
     ) -> Dict[str, Any]:
         waiting_limit = self._bounded_window(waiting_limit)
         stopped_limit = self._bounded_window(stopped_limit)
-        active, waiting, stopped = await asyncio.gather(
-            self._call("aria2.tellActive", [self._keys()]),
-            self._call("aria2.tellWaiting", [0, waiting_limit, self._keys()]),
-            self._call("aria2.tellStopped", [0, stopped_limit, self._keys()]),
+        active, waiting, stopped, options = await self._multicall(
+            [
+                ("aria2.tellActive", [self._keys()]),
+                ("aria2.tellWaiting", [0, waiting_limit, self._keys()]),
+                ("aria2.tellStopped", [0, stopped_limit, self._keys()]),
+                ("aria2.getGlobalOption", []),
+            ]
         )
-        options = await self.get_global_options()
         return {
             "active_count": len(active or []),
             "waiting_count": len(waiting or []),
             "stopped_count": len(stopped or []),
-            "query_limits": {
-                "waiting": waiting_limit,
-                "stopped": stopped_limit,
-            },
+            "query_limits": {"waiting": waiting_limit, "stopped": stopped_limit},
             "global_options": {
                 "max-download-result": str((options or {}).get("max-download-result", "")),
                 "keep-unfinished-download-result": str((options or {}).get("keep-unfinished-download-result", "")),
@@ -218,19 +204,16 @@ class Aria2Service:
         waiting_limit: int = 100,
         stopped_limit: int = 100,
     ) -> List[Aria2DownloadStatus]:
-        """
-        Fetches active, waiting and stopped downloads.
-
-        On connection errors an empty list is returned and the error
-        is logged as WARNING so the scheduler keeps running.
-        """
+        """Fetch active/waiting/stopped state, normally in one HTTP request."""
         waiting_limit = self._bounded_window(waiting_limit)
         stopped_limit = self._bounded_window(stopped_limit)
         try:
-            results = await asyncio.gather(
-                self._call("aria2.tellActive", [self._keys()]),
-                self._call("aria2.tellWaiting", [0, waiting_limit, self._keys()]),
-                self._call("aria2.tellStopped", [0, stopped_limit, self._keys()]),
+            results = await self._multicall(
+                [
+                    ("aria2.tellActive", [self._keys()]),
+                    ("aria2.tellWaiting", [0, waiting_limit, self._keys()]),
+                    ("aria2.tellStopped", [0, stopped_limit, self._keys()]),
+                ]
             )
         except Aria2ConnectionError as exc:
             logger.warning("aria2 unreachable (get_all): %s", exc)
@@ -257,18 +240,6 @@ class Aria2Service:
         max_retries: int = 5,
         cached_downloads: Optional[List["Aria2DownloadStatus"]] = None,
     ) -> str:
-        """
-        Adds a download to aria2 if not already present.
-
-        Deduplication is performed by URI and target path.
-        Pass cached_downloads to skip an extra get_all() call when dispatching
-        multiple files in the same cycle (avoids aria2 request storms).
-
-        In external mode callers must supply an ownership-filtered snapshot.
-        When they do not, deduplication is deliberately disabled so this client
-        cannot adopt or remove a foreign job merely because its URI or target
-        path matches.
-        """
         normalized_uri = uri.strip()
         target_path = self._target_path_from_options(options)
         async with self._lock_for_uri(normalized_uri):
@@ -285,24 +256,15 @@ class Aria2Service:
                     if dl.status in {"complete", "removed"}:
                         for dup in matches:
                             if dup.gid != dl.gid and dup.status not in {"complete", "removed"}:
-                                logger.warning(
-                                    "Removing stale duplicate aria2 entry %s for %s", dup.gid, normalized_uri
-                                )
+                                logger.warning("Removing stale duplicate aria2 entry %s for %s", dup.gid, normalized_uri)
                                 await self.remove(dup.gid)
                         return dl.gid
             else:
-                # Stopped entries are history, not reusable jobs. Preserve them
-                # and add a new transfer if no ADC-owned live match exists.
-                matches = [
-                    dl for dl in matches
-                    if dl.status in {"active", "waiting", "paused"}
-                ]
+                matches = [dl for dl in matches if dl.status in {"active", "waiting", "paused"}]
 
             if len(matches) > 1:
                 for dup in matches[1:]:
-                    logger.warning(
-                        "Removing duplicate aria2 entry %s for %s", dup.gid, normalized_uri
-                    )
+                    logger.warning("Removing duplicate aria2 entry %s for %s", dup.gid, normalized_uri)
                     await self.remove(dup.gid)
 
             if matches:
@@ -326,28 +288,19 @@ class Aria2Service:
                     if attempt >= max_retries:
                         break
                     delay = min(attempt * attempt, 10)
-                    logger.warning(
-                        "aria2 unreachable (attempt %s/%s), retrying in %ss: %s",
-                        attempt, max_retries, delay, exc,
-                    )
+                    logger.warning("aria2 unreachable (attempt %s/%s), retrying in %ss: %s", attempt, max_retries, delay, exc)
                     await asyncio.sleep(delay)
-                except Aria2RPCError as exc:
-                    # RPC errors cannot be resolved by retrying
+                except Aria2RPCError:
                     raise
                 except Exception as exc:
                     last_error = exc
                     if attempt >= max_retries:
                         break
                     delay = min(attempt * attempt, 10)
-                    logger.warning(
-                        "Error queuing download (attempt %s/%s) for %s, retrying in %ss: %s",
-                        attempt, max_retries, normalized_uri, delay, exc,
-                    )
+                    logger.warning("Error queuing download (attempt %s/%s) for %s, retrying in %ss: %s", attempt, max_retries, normalized_uri, delay, exc)
                     await asyncio.sleep(delay)
 
-        raise Aria2RPCError(
-            f"Unable to queue aria2 download for {normalized_uri}: {last_error}"
-        )
+        raise Aria2RPCError(f"Unable to queue aria2 download for {normalized_uri}: {last_error}")
 
     def _find_all_matches(
         self,
@@ -374,10 +327,7 @@ class Aria2Service:
         matched.sort(key=lambda d: 0 if d.status in {"complete", "removed"} else 1)
         return matched
 
-    async def find_existing_download(
-        self,
-        uri: str,
-    ) -> Optional["Aria2DownloadStatus"]:
+    async def find_existing_download(self, uri: str) -> Optional["Aria2DownloadStatus"]:
         all_downloads = await self.get_all()
         for dl in self._find_all_matches(uri, "", all_downloads):
             if dl.status not in {"complete", "removed"}:
@@ -410,19 +360,12 @@ class Aria2Service:
         await self._best_effort("aria2.pause", [gid])
 
     async def unpause(self, gid: str):
-        """Alias for resume() — used by disk_guard to resume paused downloads."""
         await self._best_effort("aria2.unpause", [gid])
 
     async def resume(self, gid: str):
         await self._best_effort("aria2.unpause", [gid])
 
     async def tell_active(self) -> list[dict]:
-        """
-        Return all active downloads from aria2 (aria2.tellActive).
-
-        Returns a list of dicts with at least 'gid' and 'status'.
-        Returns [] on any error so callers can safely iterate.
-        """
         try:
             result = await self._call("aria2.tellActive", [["gid", "status"]])
             return result if isinstance(result, list) else []
@@ -434,9 +377,18 @@ class Aria2Service:
         if _is_builtin_mode():
             await self._best_effort("aria2.removeDownloadResult", [gid])
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # Interne RPC-Implementierung
-    # ─────────────────────────────────────────────────────────────────────────
+    def rpc_metrics(self) -> Dict[str, Any]:
+        requests = int(self._rpc_http_requests)
+        return {
+            "http_requests": requests,
+            "method_calls": int(self._rpc_method_calls),
+            "multicall_requests": int(self._rpc_multicall_requests),
+            "total_seconds": round(float(self._rpc_total_seconds), 6),
+            "average_http_ms": (
+                round((self._rpc_total_seconds / requests) * 1000.0, 3)
+                if requests else 0.0
+            ),
+        }
 
     async def _best_effort(self, method: str, params: List[Any]):
         try:
@@ -446,28 +398,85 @@ class Aria2Service:
         except Exception as exc:
             logger.debug("aria2 %s failed for %s: %s", method, params, exc)
 
-    async def _call(self, method: str, params: Optional[List[Any]] = None) -> Any:
-        """
-        Executes a single JSON-RPC call.
+    def _authorized_params(self, params: Optional[Sequence[Any]] = None) -> List[Any]:
+        rpc_params = list(params or [])
+        if self.secret:
+            rpc_params.insert(0, f"token:{self.secret}")
+        return rpc_params
 
-        Creates a new ClientSession with force_close=True for each call
-        to ensure no transport is written to while closing.
-        Serialises concurrent calls via _rpc_lock and enforces a minimum
-        50ms inter-request interval to prevent aria2 from dropping requests
-        under rapid sequential load.
+    async def _multicall(
+        self,
+        calls: Sequence[Tuple[str, Sequence[Any]]],
+    ) -> List[Any]:
+        """Execute several aria2 methods through one system.multicall request.
+
+        If a caller deliberately overrides the `_call` transport hook (tests,
+        embedded adapters, or downstream integrations), preserve the historical
+        hook contract by executing through that override instead of bypassing it
+        with production-only keyword arguments.
         """
-        import time as _time
-        async with self._rpc_lock:
-            # Enforce minimum interval between aria2 RPC calls
-            now = _time.monotonic()
+        if not calls:
+            return []
+
+        current_call = getattr(self, "_call")
+        bound_func = getattr(current_call, "__func__", None)
+        if bound_func is not Aria2Service._call:
+            return list(await asyncio.gather(*[
+                current_call(str(method), list(params))
+                for method, params in calls
+            ]))
+
+        methods = [
+            {
+                "methodName": str(method),
+                "params": self._authorized_params(params),
+            }
+            for method, params in calls
+        ]
+        self._rpc_multicall_requests += 1
+        result = await self._call(
+            "system.multicall",
+            [methods],
+            inject_token=False,
+            method_call_weight=len(methods),
+        )
+        if not isinstance(result, list) or len(result) != len(methods):
+            raise Aria2RPCError("aria2 system.multicall returned an invalid response")
+
+        values: List[Any] = []
+        for index, entry in enumerate(result):
+            if isinstance(entry, dict) and ("faultCode" in entry or "faultString" in entry):
+                method_name = methods[index]["methodName"]
+                raise Aria2RPCError(
+                    f"aria2 multicall {method_name} failed: "
+                    f"{entry.get('faultString', entry.get('faultCode', 'unknown fault'))}"
+                )
+            if not isinstance(entry, list) or len(entry) != 1:
+                raise Aria2RPCError(
+                    f"aria2 multicall {methods[index]['methodName']} returned an invalid result wrapper"
+                )
+            values.append(entry[0])
+        return values
+
+    async def _call(
+        self,
+        method: str,
+        params: Optional[List[Any]] = None,
+        *,
+        inject_token: bool = True,
+        method_call_weight: int = 1,
+    ) -> Any:
+        """Execute one HTTP JSON-RPC transaction with conservative transport handling."""
+        async with self._rpc_pace_lock:
+            now = time.monotonic()
             gap = now - self._last_call_time
-            if gap < 0.02:  # 20ms minimum (reduced from 50ms for faster dispatch)
+            if gap < 0.02:
                 await asyncio.sleep(0.02 - gap)
-            self._last_call_time = _time.monotonic()
+            self._last_call_time = time.monotonic()
 
         self._request_id += 1
         rpc_params = list(params or [])
-        if self.secret:
+        if inject_token and self.secret:
             rpc_params.insert(0, f"token:{self.secret}")
 
         payload = {
@@ -477,14 +486,12 @@ class Aria2Service:
             "params": rpc_params,
         }
 
-        # force_close=True: each session closes the connection after the request.
-        # This prevents 'Cannot write to closing transport' on subsequent calls.
         connector = aiohttp.TCPConnector(force_close=True)
+        started = time.monotonic()
+        self._rpc_http_requests += 1
+        self._rpc_method_calls += max(1, int(method_call_weight or 1))
         try:
-            async with aiohttp.ClientSession(
-                timeout=self.timeout,
-                connector=connector,
-            ) as session:
+            async with aiohttp.ClientSession(timeout=self.timeout, connector=connector) as session:
                 try:
                     async with session.post(self.url, json=payload) as response:
                         data = await response.json(content_type=None)
@@ -494,16 +501,13 @@ class Aria2Service:
                     aiohttp.ClientOSError,
                     ConnectionResetError,
                 ) as exc:
-                    raise Aria2ConnectionError(
-                        f"Connection to aria2 lost: {exc}"
-                    ) from exc
+                    raise Aria2ConnectionError(f"Connection to aria2 lost: {exc}") from exc
                 except aiohttp.ClientError as exc:
                     if _is_transient_connection_error(exc):
-                        raise Aria2ConnectionError(
-                            f"Transient connection error to aria2: {exc}"
-                        ) from exc
+                        raise Aria2ConnectionError(f"Transient connection error to aria2: {exc}") from exc
                     raise Aria2RPCError(f"Network error communicating with aria2: {exc}") from exc
         finally:
+            self._rpc_total_seconds += max(0.0, time.monotonic() - started)
             await connector.close()
 
         if "error" in data:

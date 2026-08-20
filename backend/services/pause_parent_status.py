@@ -1,15 +1,15 @@
-"""Parent-status aggregation guard for DebridPulse v1.0.3 pause semantics.
+"""Parent-status aggregation guard for DebridPulse pause semantics.
 
-The legacy aggregate progress calculation treated every non-completed child as
-runnable work. A multi-file transfer with paused runnable children plus a
-terminal error child was therefore derived as ``queued`` even though aria2 had
-actually paused all controllable GIDs. This module replaces only the aggregate
-parent-status calculation captured by the v1.0.3 transfer-control coordinator.
+Parent status is a semantic/operator state, not merely a mirror of aria2's
+physical state. In particular, a resumed transfer can remain physically paused
+inside aria2 while it waits for a DebridPulse delivery slot. Such a transfer is
+eligible queued work and must not be presented as selectively paused.
 """
 from __future__ import annotations
 
 import logging
 
+from core.config import get_settings
 from db.database import get_db
 
 logger = logging.getLogger("alldebrid.pause_parent_status")
@@ -25,32 +25,34 @@ def derive_parent_status(
     live_active: bool,
     live_waiting: bool,
     selectively_paused: bool,
+    globally_paused: bool = False,
 ) -> str:
-    """Derive visible parent state from controllable work, not error siblings.
+    """Derive visible parent state from intent plus authoritative daemon state.
 
-    ``unfinished_files`` still participates in progress clamping, but terminal
-    error children are not runnable and therefore must not force a physically
-    paused multi-file transfer back to ``queued``.
+    A visible ``paused`` parent requires an operator pause intent: either the
+    durable per-transfer intent or the global Pause All gate. A physically
+    paused aria2 GID without either intent is slot-waiting work after Resume and
+    is therefore visibly ``queued``.
 
-    A durable selective-pause intent may cover a short DB materialization gap
-    where a no-GID child is still ``pending``. We report ``paused`` only when
-    aria2 has no active/waiting child; observed daemon state wins while a pause
-    transition is still incomplete.
+    Observed active/waiting daemon state wins while a pause transition is still
+    being applied. ``paused_files`` remains part of the call contract because
+    callers aggregate it for diagnostics, but physical pause alone is not an
+    operator pause state.
     """
     if unfinished_files <= 0 or runnable_files <= 0:
         return current_status
 
-    if selectively_paused:
-        if live_active:
-            return "downloading"
-        if live_waiting:
-            return "queued"
-        return "paused"
-
     if live_active:
         return "downloading"
-    if paused_files == runnable_files:
+    if live_waiting:
+        return "queued"
+
+    if selectively_paused or globally_paused:
         return "paused"
+
+    # No operator pause intent exists. aria2 may still have the GID physically
+    # paused because Resume found no free DebridPulse delivery slot. Treat that
+    # as eligible queued work; the coordinator will unpause it when a slot frees.
     return "queued"
 
 
@@ -63,10 +65,16 @@ def install_parent_progress_guard(manager) -> None:
         return
 
     async def aggregate_parent_progress(all_downloads=None):
+        # The durable intent set must be authoritative before any parent state is
+        # derived. Otherwise the first reconciliation after startup can briefly
+        # classify a persisted selective pause as ordinary slot-waiting work.
+        await coordinator.ensure_initialized()
+
         if all_downloads is None:
             all_downloads = await manager._aria2_get_all()
 
         by_gid, _, _ = manager._build_aria2_indexes(all_downloads)
+        globally_paused = bool(get_settings().paused)
 
         async with get_db() as db:
             rows = await db.fetchall(
@@ -160,6 +168,7 @@ def install_parent_progress_guard(manager) -> None:
                 live_active=live_active,
                 live_waiting=live_waiting,
                 selectively_paused=int(torrent_id) in coordinator._pause_intents,
+                globally_paused=globally_paused,
             )
 
             persist_progress_changed = progress != current_progress

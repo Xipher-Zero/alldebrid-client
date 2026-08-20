@@ -1,6 +1,5 @@
-"""DebridPulse service package."""
+"""DebridPulse service package.
 
-from ._control_bootstrap import install_import_hook as _install_import_hook
-
-_install_import_hook()
-del _install_import_hook
+Runtime coordinators are installed explicitly after the shared manager singleton
+is constructed; importing this package has no process-wide import side effects.
+"""

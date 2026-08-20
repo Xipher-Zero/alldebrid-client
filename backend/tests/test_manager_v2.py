@@ -1047,9 +1047,14 @@ class FinishedEntryTests(unittest.IsolatedAsyncioTestCase):
             mgr._fetch_ready_files = AsyncMock(return_value=duplicate_files)
             await mgr._download(1, "ad-id", "Test")
 
-        # unlock_link should have been called only ONCE (duplicate skipped)
-        self.assertEqual(fake_ad.unlock_link.await_count, 1)
-        self.assertEqual(mgr._log_file.await_count, 1)
+        # Manifest preparation no longer unlocks provider links eagerly. The
+        # duplicate is collapsed before the one-row manifest batch is persisted;
+        # URL generation happens later when the dispatcher has a free slot.
+        self.assertEqual(fake_ad.unlock_link.await_count, 0)
+        self.assertEqual(mgr._log_file.await_count, 0)
+        fake_db.executemany.assert_awaited_once()
+        manifest_rows = fake_db.executemany.await_args.args[1]
+        self.assertEqual(len(manifest_rows), 1)
 
 
 class Aria2RecoverySafetyTests(unittest.IsolatedAsyncioTestCase):

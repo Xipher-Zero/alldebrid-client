@@ -373,6 +373,7 @@ class TorrentManager:
         self._aria2_dispatch_lock = asyncio.Lock()
         self._aria2_ownership_lock = asyncio.Lock()
         self._aria2_ownership_ready = False
+        self._aria2_owned_gid_cache: Set[str] = set()
         # Disk-space guard state
         self._disk_guard_active: bool = False          # True = guard triggered, downloads paused
         self._disk_guard_paused: set[str] = set()     # aria2 GIDs paused by the guard
@@ -384,6 +385,10 @@ class TorrentManager:
         self._ad = None
         self._aria2 = None
         self._sem = None
+        # A settings/database transition may change the durable ownership
+        # source. Rebuild the cache lazily on the next external aria2 access.
+        self._aria2_ownership_ready = False
+        self._aria2_owned_gid_cache.clear()
 
     def ad(self) -> AllDebridService:
         if self._ad is None:
@@ -425,7 +430,22 @@ class TorrentManager:
                           AND download_id IS NOT NULL
                        ON CONFLICT(gid) DO NOTHING"""
                 )
+                rows = await db.fetchall(
+                    """SELECT gid
+                         FROM adc_aria2_owned_gids
+                        WHERE gid IS NOT NULL
+                       UNION
+                       SELECT download_id AS gid
+                         FROM download_files
+                        WHERE download_client='aria2'
+                          AND download_id IS NOT NULL"""
+                )
                 await db.commit()
+            self._aria2_owned_gid_cache = {
+                str(row["gid"]).strip()
+                for row in rows
+                if str(row.get("gid") or "").strip()
+            }
             self._aria2_ownership_ready = True
 
     async def _record_aria2_owned_gid(
@@ -451,28 +471,12 @@ class TorrentManager:
                 (gid, download_file_id, torrent_id),
             )
             await db.commit()
+        self._aria2_owned_gid_cache.add(gid)
 
     async def _aria2_owned_gids(self) -> Set[str]:
-        """Return every GID ADC has recorded, including current legacy rows."""
+        """Return a copy of the durable DebridPulse aria2 ownership cache."""
         await self._ensure_aria2_ownership_table()
-        async with get_db() as db:
-            rows = await (
-                await db.execute(
-                    """SELECT gid
-                         FROM adc_aria2_owned_gids
-                        WHERE gid IS NOT NULL
-                       UNION
-                       SELECT download_id AS gid
-                         FROM download_files
-                        WHERE download_client='aria2'
-                          AND download_id IS NOT NULL"""
-                )
-            ).fetchall()
-        return {
-            str(row["gid"]).strip()
-            for row in rows
-            if str(row["gid"] or "").strip()
-        }
+        return set(self._aria2_owned_gid_cache)
 
     async def _aria2_owned_downloads(self, downloads) -> List:
         if is_builtin_mode():
@@ -987,6 +991,9 @@ class TorrentManager:
             missing = 0
             total_size = 0
             resolved_names: List[str] = []
+            failed_updates: List[tuple] = []
+            success_updates: List[tuple] = []
+            generation_events: List[tuple] = []
 
             for position, result in enumerate(results, start=1):
                 if result["error"]:
@@ -1000,22 +1007,16 @@ class TorrentManager:
                         if is_missing
                         else result["error"]
                     )
-                    async with get_db() as db:
-                        await db.execute(
-                            """UPDATE download_files
-                               SET status=?, block_reason=?,
-                                   updated_at=CURRENT_TIMESTAMP
-                               WHERE id=?""",
-                            (failure_status, failure_reason, result["file_id"]),
+                    failed_updates.append(
+                        (failure_status, failure_reason, result["file_id"])
+                    )
+                    generation_events.append(
+                        (
+                            torrent_id,
+                            "error",
+                            f"AllDebrid could not generate link {position}: {failure_reason}",
                         )
-                        await db.execute(
-                            "INSERT INTO events (torrent_id, level, message) VALUES (?, 'error', ?)",
-                            (
-                                torrent_id,
-                                f"AllDebrid could not generate link {position}: {failure_reason}",
-                            ),
-                        )
-                        await db.commit()
+                    )
                 else:
                     succeeded += 1
                     total_size += int(result["size_bytes"] or 0)
@@ -1028,22 +1029,41 @@ class TorrentManager:
                             result["source_url"] in reusable_source_urls
                         ),
                     )
-                    async with get_db() as db:
-                        await db.execute(
+                    success_updates.append(
+                        (
+                            result["filename"],
+                            result["size_bytes"],
+                            result["generated_url"],
+                            str(local_path),
+                            result["file_id"],
+                        )
+                    )
+
+            if failed_updates or success_updates or generation_events:
+                async with get_db() as db:
+                    if failed_updates:
+                        await db.executemany(
+                            """UPDATE download_files
+                               SET status=?, block_reason=?,
+                                   updated_at=CURRENT_TIMESTAMP
+                               WHERE id=?""",
+                            failed_updates,
+                        )
+                    if success_updates:
+                        await db.executemany(
                             """UPDATE download_files
                                SET filename=?, size_bytes=?, download_url=?,
                                    local_path=?, status='pending', block_reason=NULL,
                                    updated_at=CURRENT_TIMESTAMP
                                WHERE id=?""",
-                            (
-                                result["filename"],
-                                result["size_bytes"],
-                                result["generated_url"],
-                                str(local_path),
-                                result["file_id"],
-                            ),
+                            success_updates,
                         )
-                        await db.commit()
+                    if generation_events:
+                        await db.executemany(
+                            "INSERT INTO events (torrent_id, level, message) VALUES (?, ?, ?)",
+                            generation_events,
+                        )
+                    await db.commit()
 
             final_name = direct_link_collection_name(
                 resolved_names, normalized
@@ -1300,7 +1320,41 @@ class TorrentManager:
             row = await (await db.execute("SELECT * FROM torrents WHERE hash=?", (hash_value,))).fetchone()
         return dict(row) if row else {}
 
-    async def full_alldebrid_sync(self) -> int:
+    async def reconcile_provider_inventory(self) -> dict:
+        """Run one provider inventory cycle from one authoritative bulk snapshot."""
+        if self.is_paused() or not get_settings().alldebrid_api_key:
+            return {"imported": 0, "updated": 0, "snapshot_count": 0}
+
+        try:
+            all_magnets = await self.ad().get_magnet_status()
+        except Exception as exc:
+            error = str(exc)
+            if any(
+                keyword in error
+                for keyword in (
+                    "DISCONTINUED",
+                    "discontinued",
+                    "deprecated",
+                    "migrate",
+                )
+            ):
+                raise Exception(
+                    "AllDebrid has disabled 'list all magnets' for your account. "
+                    "Add magnets manually through the DebridPulse UI."
+                ) from exc
+            raise
+
+        imported = await self.import_existing_magnets(all_magnets=all_magnets)
+        updated = await self.full_alldebrid_sync(all_magnets=all_magnets)
+        return {
+            "imported": len(imported),
+            "updated": int(updated or 0),
+            "snapshot_count": len(all_magnets or []),
+        }
+
+    async def full_alldebrid_sync(
+        self, all_magnets: Optional[List[Dict]] = None
+    ) -> int:
         """
         Full reconciliation: fetches all magnets from AllDebrid and syncs
         every known torrent — including those marked 'completed' or 'error'.
@@ -1315,11 +1369,12 @@ class TorrentManager:
         if self.is_paused() or not get_settings().alldebrid_api_key:
             return 0
 
-        try:
-            all_magnets = await self.ad().get_magnet_status()
-        except Exception as exc:
-            logger.warning("full_alldebrid_sync: could not fetch magnets: %s", exc)
-            return 0
+        if all_magnets is None:
+            try:
+                all_magnets = await self.ad().get_magnet_status()
+            except Exception as exc:
+                logger.warning("full_alldebrid_sync: could not fetch magnets: %s", exc)
+                return 0
 
         if not all_magnets:
             return 0
@@ -1431,7 +1486,6 @@ class TorrentManager:
             ).fetchall()
 
         if not rows:
-            await self.sync_download_clients()
             return
 
         # Attempt a single bulk call first.
@@ -1482,7 +1536,6 @@ class TorrentManager:
                     logger.error("Status poll failed for %s: %s", row["alldebrid_id"], exc)
                     await self._increment_poll_failure(row["id"], row["name"], str(exc))
 
-        await self.sync_download_clients()
 
     async def deep_sync_aria2_finished(self):
         async with self._aria2_state_lock:
@@ -2553,6 +2606,7 @@ class TorrentManager:
         # ── Dedupe and categorise files ───────────────────────────────────────
         # Build work list: filter out duplicates and immediately-blocked files
         work_items: List[Dict] = []
+        manifest_rows: List[tuple] = []
         for file_info in flat_files:
             relative_path = file_info.get("path") or file_info.get("name") or "download.bin"
             display_name = str(PurePosixPath(relative_path.replace("\\", "/")))
@@ -2584,7 +2638,20 @@ class TorrentManager:
 
             if blocked:
                 blocked_items.append({"filename": display_name, "size_bytes": file_size, "reason": reason})
-                await self._log_file(torrent_id, display_name, source_link, str(local_path), "blocked", reason, file_size)
+                manifest_rows.append(
+                    (
+                        torrent_id,
+                        display_name,
+                        file_size,
+                        source_link,
+                        source_link,
+                        str(local_path),
+                        "blocked",
+                        client_name,
+                        1,
+                        reason,
+                    )
+                )
                 continue
 
             work_items.append({
@@ -2594,92 +2661,66 @@ class TorrentManager:
                 "local_path": local_path,
             })
 
-        # ── Unlock links in parallel (rate-limited) ──────────────────────────
-        # Parallel calls are much faster than sequential, but firing hundreds
-        # of concurrent requests triggers AllDebrid HTTP 503 rate-limiting.
-        # A semaphore caps concurrent unlock calls to avoid overloading the API.
-        _unlock_sem = asyncio.Semaphore(3)
+        # ── Materialize the provider manifest without eager URL generation ───
+        # The dispatcher owns direct-URL generation because it knows which files
+        # actually have an aria2 slot. Eagerly unlocking every manifest entry here
+        # doubled provider API calls and made large cached torrents slow to queue.
+        for item in work_items:
+            display_name = item["display_name"]
+            file_size = item["file_size"]
+            source_link = item["source_link"]
+            local_path = item["local_path"]
 
-        async def _unlock_one(item: Dict) -> Dict:
-            async with _unlock_sem:
-                try:
-                    unlocked = await _retry_async(self.ad().unlock_link, item["source_link"])
-                    download_url = unlocked.get("link", "")
-                    if not download_url:
-                        raise Exception("Empty download URL from unlock")
-                    size = item["file_size"] if item["file_size"] > 0 else int(unlocked.get("filesize", 0) or 0)
-                    return {**item, "download_url": download_url, "file_size": size, "error": None}
-                except Exception as exc:
-                    return {**item, "download_url": "", "error": str(exc)}
-
-        unlock_results = await asyncio.gather(*[_unlock_one(w) for w in work_items])
-
-        for result in unlock_results:
-            display_name = result["display_name"]
-            file_size    = result["file_size"]
-            source_link  = result["source_link"]
-            local_path   = result["local_path"]
-
-            if result["error"]:
-                error_text = result["error"]
-
-                # AllDebrid can expose individual manifest entries whose backing
-                # host cannot be unlocked. Treat only this provider limitation
-                # as blocked so valid files can complete normally. All other
-                # unlock failures remain errors.
-                if "LINK_HOST_NOT_SUPPORTED" in error_text:
-                    logger.warning("File blocked [%s]: %s", display_name, error_text)
-                    blocked_items.append({
-                        "filename": display_name,
-                        "size_bytes": file_size,
-                        "reason": error_text,
-                    })
-                    await self._log_file(
+            if local_path.exists() and (
+                file_size <= 0
+                or local_path.stat().st_size >= max(file_size - 1024, 0)
+            ):
+                transferred_items.append(
+                    {"filename": display_name, "size_bytes": file_size}
+                )
+                manifest_rows.append(
+                    (
                         torrent_id,
                         display_name,
+                        file_size,
+                        source_link,
                         source_link,
                         str(local_path),
-                        "blocked",
-                        error_text,
-                        file_size,
-                        download_client=client_name,
+                        "completed",
+                        client_name,
+                        0,
+                        None,
                     )
-                else:
-                    logger.error("File failed [%s]: %s", display_name, error_text)
-                    failed_items.append({
-                        "filename": display_name,
-                        "size_bytes": file_size,
-                        "reason": error_text,
-                    })
-                    await self._log_file(
-                        torrent_id,
-                        display_name,
-                        source_link,
-                        str(local_path),
-                        "error",
-                        error_text,
-                        file_size,
-                        download_client=client_name,
-                    )
-                continue
-
-            download_url = result["download_url"]
-            if local_path.exists() and (file_size <= 0 or local_path.stat().st_size >= max(file_size - 1024, 0)):
-                transferred_items.append({"filename": display_name, "size_bytes": file_size})
-                await self._log_file(torrent_id, display_name, download_url, str(local_path), "completed", None, file_size)
+                )
                 continue
 
             queued_items.append({"filename": display_name, "size_bytes": file_size})
-            await self._log_file(
-                torrent_id,
-                display_name,
-                source_link,
-                str(local_path),
-                "pending",
-                None,
-                file_size,
-                download_client="aria2",
+            manifest_rows.append(
+                (
+                    torrent_id,
+                    display_name,
+                    file_size,
+                    source_link,
+                    source_link,
+                    str(local_path),
+                    "pending",
+                    "aria2",
+                    0,
+                    None,
+                )
             )
+
+        if manifest_rows:
+            async with get_db() as db:
+                await db.executemany(
+                    """INSERT INTO download_files
+                       (torrent_id, filename, size_bytes, source_url,
+                        download_url, local_path, status, download_id,
+                        download_client, blocked, block_reason, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, CURRENT_TIMESTAMP)""",
+                    manifest_rows,
+                )
+                await db.commit()
 
         blocked_count = len(blocked_items)
         failed_count = len(failed_items)
@@ -2953,6 +2994,9 @@ class TorrentManager:
                         await db.commit()
                 for dl in excess:
                     await self._remove_owned_aria2_gid(dl.gid)
+                owned_downloads = [
+                    dl for dl in owned_downloads if dl.gid not in excess_gids
+                ]
                 in_flight = in_flight[:limit]
 
             # ── Step 4: fill available slots ─────────────────────────────────
@@ -3002,17 +3046,11 @@ class TorrentManager:
                 available_slots, len(pending_rows),
             )
 
-            # Snapshot of aria2 state for the whole dispatch batch.
-            # Passing this to ensure_download() avoids one get_all() call per
-            # file, which would cause a burst of rapid RPC requests that aria2
-            # may drop or answer inconsistently.
-            dispatch_snapshot = await self._aria2_get_all()
-            if not is_builtin_mode():
-                owned_gids = await self._aria2_owned_gids()
-                dispatch_snapshot = [
-                    dl for dl in dispatch_snapshot
-                    if str(dl.gid) in owned_gids
-                ]
+            # Reuse the authoritative ownership-filtered snapshot from the
+            # start of this serialized dispatch pass. ensure_download() receives
+            # the same view used for slot accounting, eliminating a redundant
+            # active/waiting/stopped snapshot immediately before addUri.
+            dispatch_snapshot = list(owned_downloads)
 
             # ── Unlock all pending links in parallel (rate-limited) ──────────
             # Semaphore caps concurrent AllDebrid API calls to avoid 503 errors
@@ -3043,8 +3081,39 @@ class TorrentManager:
             for row in unlocked_rows:
                 local_path = Path(row["local_path"])
                 if row["_err"]:
-                    logger.error("aria2 dispatch failed [%s]: %s", row["filename"], row["_err"])
-                    await self._update_file_state(row["file_id"], "error", row["local_path"], reason=str(row["_err"]))
+                    error = row["_err"]
+                    error_text = str(error)
+                    provider_code = str(getattr(error, "code", "") or "")
+                    if (
+                        provider_code == "LINK_HOST_NOT_SUPPORTED"
+                        or "LINK_HOST_NOT_SUPPORTED" in error_text
+                    ):
+                        logger.warning(
+                            "aria2 dispatch blocked unsupported provider file [%s]: %s",
+                            row["filename"],
+                            error_text,
+                        )
+                        async with get_db() as db:
+                            await db.execute(
+                                """UPDATE download_files
+                                   SET status='blocked', blocked=1, block_reason=?,
+                                       download_id=NULL, updated_at=CURRENT_TIMESTAMP
+                                   WHERE id=?""",
+                                (error_text, row["file_id"]),
+                            )
+                            await db.commit()
+                    else:
+                        logger.error(
+                            "aria2 dispatch failed [%s]: %s",
+                            row["filename"],
+                            error,
+                        )
+                        await self._update_file_state(
+                            row["file_id"],
+                            "error",
+                            row["local_path"],
+                            reason=error_text,
+                        )
                     await self._finalize_aria2_torrent(row["torrent_id"])
                     continue
                 try:
@@ -4958,16 +5027,19 @@ class TorrentManager:
         except Exception:
             pass
 
-    async def import_existing_magnets(self) -> List[dict]:
+    async def import_existing_magnets(
+        self, all_magnets: Optional[List[Dict]] = None
+    ) -> List[dict]:
         if self.is_paused():
             return []
-        try:
-            all_magnets = await self.ad().get_magnet_status()
-        except Exception as exc:
-            error = str(exc)
-            if any(keyword in error for keyword in ("DISCONTINUED", "discontinued", "deprecated", "migrate")):
-                raise Exception("AllDebrid has disabled 'list all magnets' for your account. Add magnets manually through the DebridPulse UI.")
-            raise
+        if all_magnets is None:
+            try:
+                all_magnets = await self.ad().get_magnet_status()
+            except Exception as exc:
+                error = str(exc)
+                if any(keyword in error for keyword in ("DISCONTINUED", "discontinued", "deprecated", "migrate")):
+                    raise Exception("AllDebrid has disabled 'list all magnets' for your account. Add magnets manually through the DebridPulse UI.")
+                raise
 
         if not all_magnets:
             return []
@@ -5291,3 +5363,18 @@ class TorrentManager:
 
 
 manager = TorrentManager()
+
+# Install singleton-only reliability coordinators explicitly after construction.
+# TorrentManager instances created by unit tests or future backend adapters remain
+# unmodified unless they opt into these coordinators themselves.
+from services.transfer_control import install_transfer_control as _install_transfer_control
+from services.pause_parent_status import install_parent_progress_guard as _install_parent_progress_guard
+from services.global_pause_semantics import install_global_pause_semantics as _install_global_pause_semantics
+
+_install_transfer_control(manager)
+_install_parent_progress_guard(manager)
+_install_global_pause_semantics(manager)
+
+del _install_transfer_control
+del _install_parent_progress_guard
+del _install_global_pause_semantics

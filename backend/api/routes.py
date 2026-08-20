@@ -1074,85 +1074,107 @@ async def get_events(limit: int = Query(200, le=500)):
         )
 
 
+@router.get("/admin/performance")
+async def performance_diagnostics():
+    from core.performance import snapshot as performance_snapshot
+    from db.database import db_runtime_metrics
+
+    return {
+        "timers": performance_snapshot(),
+        "database": db_runtime_metrics(),
+        "aria2": manager.aria2().rpc_metrics(),
+    }
+
+
 # ── Statistics ─────────────────────────────────────────────────────────────────
 
 @router.get("/stats")
 async def get_stats():
+    started = time.monotonic()
     async with get_db() as db:
-        by_status_rows = await db.fetchall("SELECT status, COUNT(*) as count FROM torrents GROUP BY status")
+        by_status_rows = await db.fetchall(
+            "SELECT status, COUNT(*) as count FROM torrents GROUP BY status"
+        )
         by_status = {r["status"]: r["count"] for r in by_status_rows}
 
-        def _v(row, key="v"): return row[key] if row else 0
-        def _c(row): return row["c"] if row else 0
-
-        size_total      = _v(await db.fetchone("SELECT COALESCE(SUM(size_bytes),0) as v FROM torrents WHERE status='completed'"))
-        blocked         = _c(await db.fetchone("SELECT COUNT(*) as c FROM download_files WHERE blocked=1"))
-        active          = _c(await db.fetchone("SELECT COUNT(*) as c FROM torrents WHERE status IN ('downloading','processing','uploading','paused')"))
-        # Provider-ready parents are queued work even before their file rows
-        # have been materialized for aria2.
-        queued          = _c(await db.fetchone("SELECT COUNT(*) as c FROM torrents WHERE status IN ('ready','queued')"))
-
-        # Browser-tab operator state deliberately uses only torrents that are
-        # genuinely transferring bytes.  Do not inherit the broader historical
-        # active_downloads metric, which also includes provider processing,
-        # uploading, and paused states.
-        operator_row = await db.fetchone(
-            """SELECT
-                       COUNT(*) AS active_count,
-                       AVG(COALESCE(progress, 0)) AS average_progress
-               FROM torrents
-               WHERE status='downloading'"""
+        last_24h_expr = _sql_now_minus("1 day")
+        last_7d_expr = _sql_now_minus("7 days")
+        aggregate = await db.fetchone(
+            f"""SELECT
+                   COALESCE(SUM(CASE WHEN status='completed' THEN size_bytes ELSE 0 END), 0)
+                       AS total_completed_bytes,
+                   SUM(CASE WHEN status IN ('downloading','processing','uploading','paused')
+                            THEN 1 ELSE 0 END) AS active_downloads,
+                   SUM(CASE WHEN status IN ('ready','queued') THEN 1 ELSE 0 END)
+                       AS queued_downloads,
+                   SUM(CASE WHEN status='downloading' THEN 1 ELSE 0 END)
+                       AS operator_active_downloads,
+                   AVG(CASE WHEN status='downloading' THEN COALESCE(progress, 0)
+                            ELSE NULL END) AS operator_active_progress_pct,
+                   SUM(CASE WHEN status='error' THEN 1 ELSE 0 END) AS error_count,
+                   SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) AS completed_count,
+                   SUM(CASE WHEN completed_at >= {last_24h_expr} THEN 1 ELSE 0 END)
+                       AS completed_last_24h,
+                   SUM(CASE WHEN completed_at >= {last_7d_expr} THEN 1 ELSE 0 END)
+                       AS completed_last_7d,
+                   AVG(CASE
+                       WHEN completed_at IS NOT NULL AND created_at IS NOT NULL
+                       THEN CAST((julianday(completed_at)-julianday(created_at))*86400 AS INTEGER)
+                       ELSE NULL END) AS avg_download_duration_seconds,
+                   AVG(CASE WHEN status='completed' AND size_bytes>0 THEN size_bytes
+                            ELSE NULL END) AS avg_torrent_size_bytes,
+                   (SELECT COUNT(*) FROM download_files WHERE blocked=1)
+                       AS total_blocked_files
+               FROM torrents"""
         ) or {}
-        operator_active = int(operator_row.get("active_count") or 0)
-        operator_progress = None
 
-        # Use the same DebridPulse parent progress displayed for each item on
-        # the dashboard, averaged equally across actively downloading queue
-        # entries. This is queue progress, not aria2's byte-weighted aggregate.
-        if operator_active > 0:
-            average = float(operator_row.get("average_progress") or 0)
-            operator_progress = max(
-                0,
-                min(100, round(average)),
-            )
-        error_count     = _c(await db.fetchone("SELECT COUNT(*) as c FROM torrents WHERE status='error'"))
-        completed_count = _c(await db.fetchone("SELECT COUNT(*) as c FROM torrents WHERE status='completed'"))
-        last_24h        = _c(await db.fetchone(f"SELECT COUNT(*) as c FROM torrents WHERE completed_at >= {_sql_now_minus('1 day')}") )
-        last_7d         = _c(await db.fetchone(f"SELECT COUNT(*) as c FROM torrents WHERE completed_at >= {_sql_now_minus('7 days')}") )
-        avg_dur_row     = await db.fetchone(
-            """SELECT AVG(CAST((julianday(completed_at)-julianday(created_at))*86400 AS INTEGER)) as v
-               FROM torrents WHERE completed_at IS NOT NULL AND created_at IS NOT NULL""")
-        avg_duration    = int(_v(avg_dur_row) or 0)
-        avg_size_row    = await db.fetchone("SELECT AVG(size_bytes) as v FROM torrents WHERE status='completed' AND size_bytes>0")
-        avg_size        = int(_v(avg_size_row) or 0)
+    operator_active = int(aggregate.get("operator_active_downloads") or 0)
+    operator_progress = None
+    if operator_active > 0:
+        average = float(aggregate.get("operator_active_progress_pct") or 0)
+        operator_progress = max(0, min(100, round(average)))
 
-        terminal     = completed_count + error_count
-        success_rate = round(completed_count / terminal * 100, 1) if terminal > 0 else None
+    error_count = int(aggregate.get("error_count") or 0)
+    completed_count = int(aggregate.get("completed_count") or 0)
+    terminal = completed_count + error_count
+    success_rate = (
+        round(completed_count / terminal * 100, 1)
+        if terminal > 0
+        else None
+    )
 
-        env_db  = os.getenv("DB_TYPE", "").strip()
-        act_db  = getattr(get_settings(), "db_type", "sqlite")
-        db_type = ("sqlite_fallback" if act_db == "sqlite" and env_db == "postgres"
-                   else act_db)
+    env_db = os.getenv("DB_TYPE", "").strip()
+    act_db = getattr(get_settings(), "db_type", "sqlite")
+    db_type = (
+        "sqlite_fallback"
+        if act_db == "sqlite" and env_db == "postgres"
+        else act_db
+    )
 
-        return {
-            "version":                      read_version(),
-            "by_status":                    by_status,
-            "total_completed_bytes":        size_total,
-            "db_type":                      db_type,
-            "total_blocked_files":          blocked,
-            "active_downloads":             active,
-            "queued_downloads":             queued,
-            "operator_active_downloads":    operator_active,
-            "operator_active_progress_pct": operator_progress,
-            "error_count":                  error_count,
-            "completed_count":              completed_count,
-            "success_rate_pct":             success_rate,
-            "completed_last_24h":           last_24h,
-            "completed_last_7d":            last_7d,
-            "avg_download_duration_seconds": avg_duration,
-            "avg_torrent_size_bytes":       avg_size,
-            "paused":                       bool(get_settings().paused),
-        }
+    result = {
+        "version": read_version(),
+        "by_status": by_status,
+        "total_completed_bytes": int(aggregate.get("total_completed_bytes") or 0),
+        "db_type": db_type,
+        "total_blocked_files": int(aggregate.get("total_blocked_files") or 0),
+        "active_downloads": int(aggregate.get("active_downloads") or 0),
+        "queued_downloads": int(aggregate.get("queued_downloads") or 0),
+        "operator_active_downloads": operator_active,
+        "operator_active_progress_pct": operator_progress,
+        "error_count": error_count,
+        "completed_count": completed_count,
+        "success_rate_pct": success_rate,
+        "completed_last_24h": int(aggregate.get("completed_last_24h") or 0),
+        "completed_last_7d": int(aggregate.get("completed_last_7d") or 0),
+        "avg_download_duration_seconds": int(
+            aggregate.get("avg_download_duration_seconds") or 0
+        ),
+        "avg_torrent_size_bytes": int(aggregate.get("avg_torrent_size_bytes") or 0),
+        "paused": bool(get_settings().paused),
+    }
+    from core.performance import observe
+    observe("api.stats", time.monotonic() - started)
+    return result
 
 
 @router.get("/stats/detail")

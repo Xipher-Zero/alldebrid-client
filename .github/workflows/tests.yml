@@ -45,9 +45,25 @@ jobs:
           ruff check api core db services main.py --select F821,F822,F823
 
       - name: Run full test suite
+        id: pytest
+        continue-on-error: true
+        shell: bash
         run: |
+          set -o pipefail
           cd backend
-          python -m pytest tests/ -v --tb=short
+          python -m pytest tests/ -v --tb=short 2>&1 | tee ../pytest-v106.log
+
+      - name: Upload pytest log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v106-pytest-log
+          path: pytest-v106.log
+          if-no-files-found: error
+
+      - name: Stop on pytest failure
+        if: steps.pytest.outcome == 'failure'
+        run: exit 1
 
       - name: Check Python and frontend syntax
         run: |

@@ -67,6 +67,7 @@ class TransferService:
         return await self.engine.apply_aria2_memory_tuning()
 
     def reset_services(self):
+        self.control.reset_runtime_state()
         return self.engine.reset_services()
 
     async def sync_alldebrid_status(self):

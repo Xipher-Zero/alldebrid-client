@@ -31,6 +31,7 @@ jobs:
       - name: Apply guarded paused-intake migration
         run: |
           python .github/v106_paused_intake.py
+          python .github/v106_paused_intake_fix.py
           cp .github/tests.permanent.yml .github/workflows/tests.yml
           rm .github/tests.permanent.yml
 

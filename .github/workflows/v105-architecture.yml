@@ -1,0 +1,78 @@
+name: v1.0.5 Architecture Refactor
+
+on:
+  push:
+    branches:
+      - work/v1.0.5-architecture
+    paths:
+      - .github/workflows/v105-architecture.yml
+
+permissions:
+  contents: write
+
+jobs:
+  refactor:
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - name: Checkout work branch
+        uses: actions/checkout@v5
+        with:
+          ref: work/v1.0.5-architecture
+          fetch-depth: 0
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Apply architecture refactor
+        run: python tools/v105_refactor.py
+
+      - name: Install test dependencies
+        run: |
+          cd backend
+          pip install -r requirements-dev.txt
+
+      - name: Full test suite
+        run: |
+          cd backend
+          python -m pytest tests/ -q --tb=short
+
+      - name: Compile all Python
+        run: |
+          cd backend
+          python -m compileall -q .
+
+      - name: Frontend syntax
+        run: node --check frontend/static/app.js
+
+      - name: Architecture residue audit
+        run: |
+          set -e
+          ! grep -RniE 'asyncpg|postgresql|DB_TYPE=postgres' backend --exclude-dir=tests
+          ! grep -Rni 'allow_origins=\["\*"\]' backend/main.py
+          ! grep -RniE 'self\.manager\.[A-Za-z0-9_]+\s*=' backend/services/transfer_control.py
+          git diff --check
+
+      - name: Commit validated refactor
+        run: |
+          set -e
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          while IFS= read -r path; do
+            [ -n "$path" ] || continue
+            if [ -e "$path" ]; then
+              git add -- "$path"
+            else
+              git add -u -- "$path"
+            fi
+          done < .v105_changed_paths
+
+          git rm -- tools/v105_refactor.py .github/workflows/v105-architecture.yml
+          git diff --cached --check
+          git status --short
+          git commit -m "Refactor DebridPulse into explicit v1.0.5 service architecture"
+          git push origin HEAD:work/v1.0.5-architecture

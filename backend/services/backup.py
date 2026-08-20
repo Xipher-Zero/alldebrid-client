@@ -8,10 +8,17 @@ import asyncio
 import logging
 import os
 import shutil
+import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
 logger = logging.getLogger("alldebrid.backup")
+
+
+def _sqlite_backup(source: Path, destination: Path) -> None:
+    with sqlite3.connect(str(source), timeout=30) as src:
+        with sqlite3.connect(str(destination), timeout=30) as dst:
+            src.backup(dst)
 
 
 def _cfg():
@@ -56,7 +63,7 @@ async def run_backup() -> dict:
     try:
         from db.database import DB_PATH
         if DB_PATH.exists():
-            shutil.copy2(DB_PATH, backup_dir / DB_PATH.name)
+            await asyncio.to_thread(_sqlite_backup, DB_PATH, backup_dir / DB_PATH.name)
             backed_up.append(DB_PATH.name)
     except Exception as e:
         errors.append(f"database: {e}")

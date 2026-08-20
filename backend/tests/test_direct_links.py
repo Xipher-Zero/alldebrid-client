@@ -263,11 +263,12 @@ class DashboardContractTests(unittest.TestCase):
         repo_root = Path(__file__).resolve().parents[2]
         html = (repo_root / "frontend/static/index.html").read_text()
         js = (repo_root / "frontend/static/app.js").read_text()
-        direct_heading = "⬇️ Add Links to Generate and Download Debrid Links"
-        magnet_heading = "🧲 Add Magnet Links or a Torrent File"
-        self.assertIn(direct_heading, html)
-        self.assertLess(html.index(direct_heading), html.index(magnet_heading))
-        self.assertIn('id="q-debrid-links" rows="1"', html)
+        unified_heading = "⬇️ Add Links, Magnets, or Torrent File"
+        self.assertIn(unified_heading, html)
+        self.assertIn('id="q-transfer-input" rows="2"', html)
+        self.assertIn('id="btn-add-transfer"', html)
+        self.assertNotIn('id="q-debrid-links"', html)
+        self.assertNotIn('id="q-magnet"', html)
         self.assertNotIn('data-view="aria2queue"', html)
         self.assertNotIn('id="t-magnet"', html)
         self.assertIn('<span class="nav-label">Downloads</span>', html)
@@ -276,8 +277,11 @@ class DashboardContractTests(unittest.TestCase):
             html,
             r'<script src="/app\.js\?v=\d+" defer></script>',
         )
+        self.assertIn("function classifyDashboardEntries", js)
+        self.assertIn("async function addDashboardEntries()", js)
         self.assertIn("'/links/add'", js)
-        self.assertIn("button.textContent = 'Adding…'", js)
+        self.assertIn("'/torrents/add-magnet'", js)
+        self.assertIn("setButtonPending(button, true, 'Adding…')", js)
         self.assertIn("🔗 Direct link", js)
         self.assertIn("torrents:'Downloads'", js)
         self.assertIn("`All Downloads (${torrentTotal})`", js)
@@ -406,11 +410,12 @@ class DashboardContractTests(unittest.TestCase):
         self.assertIn('id="dash-activity-card"', html)
         self.assertIn('class="dash-activity-table-wrap"', html)
         self.assertIn("content.classList.toggle('dashboard-active', v === 'dashboard');", js)
-        self.assertIn("api('GET', '/torrents?limit=4')", js)
+        self.assertIn("function dashboardRecentLimit()", js)
+        self.assertIn("window.matchMedia('(max-width: 700px)').matches ? 4 : 6", js)
+        self.assertIn("api('GET', `/torrents?limit=${recentLimit}`)", js)
         self.assertIn("#content.dashboard-active { overflow-y: hidden; }", css)
         self.assertIn("#view-dashboard.active {", css)
         self.assertIn("#dash-activity-card {", css)
-
 
 if __name__ == "__main__":
     unittest.main()

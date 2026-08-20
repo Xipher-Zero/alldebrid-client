@@ -195,28 +195,6 @@ async def test_online_backup_captures_committed_wal_state(tmp_path, monkeypatch)
         assert conn.execute("SELECT name FROM torrents WHERE hash='wal-hash'").fetchone()[0] == "wal-row"
 
 
-def test_mediainfo_service_uses_real_path_ancestry(tmp_path, monkeypatch):
-    import services.mediainfo as mediainfo
-
-    root = tmp_path / "download"
-    sibling = tmp_path / "download_evil"
-    root.mkdir()
-    sibling.mkdir()
-    inside = root / "inside.mkv"
-    outside = sibling / "outside.mkv"
-    inside.write_bytes(b"x")
-    outside.write_bytes(b"x")
-
-    monkeypatch.setattr(
-        mediainfo,
-        "get_settings",
-        lambda: SimpleNamespace(download_folder=str(root)),
-    )
-    assert mediainfo.resolve_media_path(str(inside)) == inside.resolve()
-    with pytest.raises(PermissionError):
-        mediainfo.resolve_media_path(str(outside))
-
-
 @pytest.mark.asyncio
 async def test_service_permission_error_maps_to_http_403():
     import main

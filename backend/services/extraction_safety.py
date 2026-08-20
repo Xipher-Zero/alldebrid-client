@@ -162,6 +162,37 @@ def validate_7z_listing(archive: Path, output: str) -> None:
     validate_budget(archive=archive, file_count=file_count, expanded_bytes=expanded)
 
 
+def validate_staging_tree(root: Path, archive: Path) -> None:
+    """Validate a live external-extractor staging tree.
+
+    The scan is intentionally race-tolerant: files may disappear between
+    rglob/lstat/stat while the extractor is active. Unsafe links/special files
+    and budget overruns are still rejected as soon as a stable observation
+    sees them.
+    """
+    root = root.resolve()
+    file_count = 0
+    expanded = 0
+    for current in root.rglob("*"):
+        try:
+            mode = current.lstat().st_mode
+        except FileNotFoundError:
+            continue
+        if stat.S_ISLNK(mode):
+            raise ValueError(f"Extracted archive created a symlink: {current.name!r}")
+        if stat.S_ISDIR(mode):
+            continue
+        if not stat.S_ISREG(mode):
+            raise ValueError(f"Extracted archive created a special file: {current.name!r}")
+        try:
+            size = max(0, int(current.stat().st_size))
+        except FileNotFoundError:
+            continue
+        file_count += 1
+        expanded += size
+    validate_budget(archive=archive, file_count=file_count, expanded_bytes=expanded)
+
+
 def validate_extracted_tree(root: Path, archive: Path) -> None:
     root = root.resolve()
     file_count = 0

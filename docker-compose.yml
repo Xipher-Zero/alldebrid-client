@@ -1,27 +1,19 @@
-# DebridPulse — Multi-provider Debrid Download Manager
-#
-# Operating modes:
-#
-#   1. SQLite (default — no setup needed):
-#      docker compose up -d
+# DebridPulse — AllDebrid download manager
+# Generic bridge-network example. Adapt host paths, UID/GID and timezone.
 
 services:
-
   debridpulse:
     image: ghcr.io/xipher-zero/debridpulse:v1.0.6
     build: .
     container_name: debridpulse
     restart: unless-stopped
-    # host mode: avoids custom bridge networks that conflict with Unraid shfs
-    network_mode: host
+    ports:
+      - "8080:8080"
     volumes:
       - /mnt/user/appdata/debridpulse/data:/app/data
       - /mnt/user/appdata/debridpulse/config:/app/config
       - /mnt/user/downloads:/download
     environment:
-      # File ownership for downloaded files — set to match your host user
-      # so that other host processes can read and write the files.
-      # Run `id` on the host to find your UID and GID.
       - PUID=99
       - PGID=100
       - CONFIG_PATH=/app/config/config.json

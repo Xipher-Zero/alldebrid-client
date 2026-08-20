@@ -22,6 +22,8 @@ import re
 import shutil
 import stat
 import subprocess
+import tempfile
+import time
 import tarfile
 import zipfile
 from pathlib import Path, PurePosixPath
@@ -30,6 +32,7 @@ from typing import Iterable, List, Optional, Tuple
 from services.extraction_safety import (
     copy_limited,
     staged_external_extract,
+    validate_staging_tree,
     validate_7z_listing,
     validate_tar_members,
     validate_zip_members,
@@ -130,23 +133,53 @@ def _tool_available(name: str) -> bool:
     return shutil.which(name) is not None
 
 
-def _run_tool(cmd: List[str], timeout: int = 3600) -> Tuple[int, str]:
-    """Run an external command synchronously (called from asyncio via executor)."""
+def _run_tool(
+    cmd: List[str],
+    timeout: int = 3600,
+    *,
+    watch_dir: Path | None = None,
+    watch_archive: Path | None = None,
+) -> Tuple[int, str]:
+    """Run an external command and optionally enforce a live staging budget."""
+    kwargs = {}
+    if os.name == "posix":
+        kwargs["preexec_fn"] = lambda: os.nice(10)
+
+    started = time.monotonic()
     try:
-        kwargs = {}
-        if os.name == "posix":
-            # Keep extraction from starving the API/event loop on small NAS boxes.
-            kwargs["preexec_fn"] = lambda: os.nice(10)
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            **kwargs,
-        )
-        return result.returncode, (result.stdout + result.stderr).strip()
-    except subprocess.TimeoutExpired:
-        return -1, f"Timeout after {timeout}s"
+        with tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as capture:
+            process = subprocess.Popen(
+                cmd,
+                stdout=capture,
+                stderr=subprocess.STDOUT,
+                text=True,
+                **kwargs,
+            )
+            guard_error = ""
+            timed_out = False
+            while process.poll() is None:
+                if time.monotonic() - started > timeout:
+                    timed_out = True
+                    process.kill()
+                    break
+                if watch_dir is not None and watch_archive is not None:
+                    try:
+                        validate_staging_tree(watch_dir, watch_archive)
+                    except ValueError as exc:
+                        guard_error = str(exc)
+                        process.kill()
+                        break
+                time.sleep(0.25)
+
+            process.wait(timeout=10)
+            capture.flush()
+            capture.seek(0)
+            output = capture.read().strip()
+            if guard_error:
+                return -1, f"Extraction safety limit: {guard_error}"
+            if timed_out:
+                return -1, f"Timeout after {timeout}s"
+            return int(process.returncode or 0), output
     except FileNotFoundError as exc:
         return -1, str(exc)
 
@@ -287,7 +320,7 @@ def _extract_7z_to(archive: Path, dest: Path) -> None:
             cmd = [binary, "x", "-mmt=1", str(archive), f"-o{dest}", "-y"]
             if pw:
                 cmd.insert(-1, f"-p{pw}")
-            rc, _out = _run_tool(cmd)
+            rc, _out = _run_tool(cmd, watch_dir=dest, watch_archive=archive)
             if rc == 0:
                 return
         raise RuntimeError(f"{binary} failed to extract {archive.name}")
@@ -313,7 +346,7 @@ def _extract_rar_to(archive: Path, dest: Path) -> None:
             cmd = [binary, "x", "-mmt=1", str(archive), f"-o{dest}", "-y"]
             if pw:
                 cmd.insert(-1, f"-p{pw}")
-            rc, _out = _run_tool(cmd)
+            rc, _out = _run_tool(cmd, watch_dir=dest, watch_archive=archive)
             if rc == 0:
                 return
         raise RuntimeError(f"{binary} failed to extract {archive.name}")

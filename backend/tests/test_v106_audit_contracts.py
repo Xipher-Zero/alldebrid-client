@@ -180,3 +180,88 @@ def test_update_check_loop_has_failure_safe_backoff():
     loop = source.split("async def update_check_loop", 1)[1].split("async def events_ttl_loop", 1)[0]
     assert "while True:\n        # Keep a valid backoff even if settings retrieval itself fails.\n        interval_h = 12\n        try:" in loop
     assert "await asyncio.sleep(max(3600, interval_h * 3600))" in loop
+
+def test_v106_transitional_and_mediainfo_residue_removed():
+    root = Path(__file__).resolve().parents[1]
+    for relative in ("services/mediainfo.py", "services/reconcile_cycle.py", "services/recovery.py"):
+        assert not (root / relative).exists()
+    routes = (root / "api" / "routes.py").read_text()
+    assert '/mediainfo' not in routes
+    assert 'services.mediainfo' not in routes
+
+
+def test_alldebrid_retry_attempts_are_individually_rate_limited():
+    source = (Path(__file__).resolve().parents[1] / "services" / "alldebrid.py").read_text()
+    post = source.split("async def _post", 1)[1].split("async def _multipart", 1)[0]
+    loop_at = post.index("for attempt in range(1, attempts + 1):")
+    limiter_at = post.index("await acquire_alldebrid_request_slot()")
+    assert limiter_at > loop_at
+    assert post.count("await acquire_alldebrid_request_slot()") == 1
+
+
+def test_dashboard_has_one_mixed_submission_control():
+    root = Path(__file__).resolve().parents[2]
+    html = (root / "frontend" / "static" / "index.html").read_text()
+    js = (root / "frontend" / "static" / "app.js").read_text()
+    assert html.count('id="q-transfer-input"') == 1
+    assert 'id="q-debrid-links"' not in html
+    assert 'id="q-magnet"' not in html
+    assert 'id="btn-add-transfer"' in html
+    assert 'https://example-hoster.com/file/' in html
+    assert 'magnet:?xt=urn:btih:' in html
+    assert 'addDashboardEntries()' in html
+    assert "function classifyDashboardEntries" in js
+    assert "openTorrentFilePicker();" in js
+    assert "'/links/add'" in js
+    assert "'/torrents/add-magnet'" in js
+    assert "async function quickAdd()" not in js
+    assert "async function addDebridLinks()" not in js
+
+
+def test_dashboard_recent_activity_uses_viewport_slack():
+    js = (Path(__file__).resolve().parents[2] / "frontend" / "static" / "app.js").read_text()
+    assert "window.matchMedia('(max-width: 700px)').matches ? 4 : 6" in js
+    assert "`/torrents?limit=${recentLimit}`" in js
+
+
+def test_dead_indexer_css_is_physically_removed():
+    css = (Path(__file__).resolve().parents[2] / "frontend" / "static" / "style.css").read_text()
+    assert ".idx-picker" not in css
+    assert ".idx-dropdown" not in css
+    assert ".search-tags-row" not in css
+
+
+def test_external_extractor_has_live_staging_budget_watch():
+    root = Path(__file__).resolve().parents[1] / "services"
+    safety = (root / "extraction_safety.py").read_text()
+    extractor = (root / "extractor.py").read_text()
+    assert "def validate_staging_tree" in safety
+    assert "watch_dir: Path | None" in extractor
+    assert "validate_staging_tree(watch_dir, watch_archive)" in extractor
+    assert extractor.count("watch_dir=dest, watch_archive=archive") == 2
+
+
+def test_security_and_compose_document_current_boundaries():
+    root = Path(__file__).resolve().parents[2]
+    security = (root / "SECURITY.md").read_text()
+    compose = (root / "docker-compose.yml").read_text()
+    assert "if auth is added in future" not in security
+    assert "supports optional HTTP Basic Authentication" in security
+    assert "network_mode: host" not in compose
+    assert '"8080:8080"' in compose
+
+
+def test_scheduler_exception_logging_is_sanitized():
+    source = (Path(__file__).resolve().parents[1] / "core" / "scheduler.py").read_text()
+    assert 'sanitize_exception' in source
+    assert 'error: {e}' not in source
+    assert 'error: %s", e)' not in source
+    assert 'error: %s", exc)' not in source
+
+def test_recovery_route_survives_without_transitional_wrapper():
+    root = Path(__file__).resolve().parents[1]
+    routes = (root / "api" / "routes.py").read_text()
+    block = routes.split('async def run_recovery():', 1)[1].split('# ──', 1)[0]
+    assert 'transfer_service.reconciliation.recover()' in block
+    assert 'services.recovery' not in block
+    assert not (root / "services" / "recovery.py").exists()

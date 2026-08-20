@@ -807,9 +807,14 @@ function setStatsPeriod(el) {
   el.classList.add('active');
   loadDetailedStats(el.dataset.period);
 }
+function dashboardRecentLimit() {
+  return window.matchMedia('(max-width: 700px)').matches ? 4 : 6;
+}
+
 async function loadRecent() {
   try {
-    const {items} = await api('GET', '/torrents?limit=4');
+    const recentLimit = dashboardRecentLimit();
+    const {items} = await api('GET', `/torrents?limit=${recentLimit}`);
     const tb = document.getElementById('dash-tbody');
     if (!items.length) {
       tb.innerHTML = '<tr><td colspan="6"><div class="empty"><div class="empty-icon">⬇️</div>No transfers yet. Add a magnet, torrent file, or debrid link to start.</div></td></tr>';
@@ -892,32 +897,6 @@ async function uploadTorrentFile(input) {
   }
 }
 
-async function quickAdd() {
-  const input = document.getElementById('q-magnet');
-  const v = input.value.trim();
-  if (!v) {
-    openTorrentFilePicker();
-    return;
-  }
-  const btn = document.getElementById('btn-add-magnet');
-  setButtonPending(btn, true, 'Adding…');
-  try {
-    const res = await api('POST', '/torrents/add-magnet', {magnet: v}, 30000);
-    if (res && res._duplicate && res._duplicate.action === 'skip') {
-      toast('Already in queue: ' + (res.name || res._duplicate.reason), 'warn');
-    } else if (res && res._duplicate && res._duplicate.action === 'warn') {
-      toast('Added (possible duplicate)', 'warn');
-    } else {
-      toast('Magnet added!', 'success');
-    }
-    input.value = '';
-    resizeDebridLinkInput(input);
-    input.focus();
-    loadStats(); loadRecent();
-  } catch(e) { toast(sanitizeErrorMsg(e.message), 'error'); }
-  finally { setButtonPending(btn, false); }
-}
-
 function resizeDebridLinkInput(input) {
   if (!input) return;
   const styles = window.getComputedStyle(input);
@@ -926,7 +905,7 @@ function resizeDebridLinkInput(input) {
     (parseFloat(styles.paddingBottom) || 0) +
     (parseFloat(styles.borderTopWidth) || 0) +
     (parseFloat(styles.borderBottomWidth) || 0);
-  const minimum = 38;
+  const minimum = Math.ceil((lineHeight * 2) + chrome);
   const maximum = Math.ceil((lineHeight * 5) + chrome);
   input.style.height = `${minimum}px`;
   const target = Math.max(minimum, Math.min(input.scrollHeight, maximum));
@@ -934,41 +913,111 @@ function resizeDebridLinkInput(input) {
   input.style.overflowY = input.scrollHeight > maximum ? 'auto' : 'hidden';
 }
 
-async function addDebridLinks() {
-  const input = document.getElementById('q-debrid-links');
-  const button = document.getElementById('btn-add-debrid-links');
-  const links = (input?.value || '')
-    .split(/\r?\n/)
-    .map(v => v.trim())
-    .filter(Boolean);
-  if (!links.length) {
-    toast('Enter at least one HTTP or HTTPS link', 'warn');
+function classifyDashboardEntries(raw) {
+  const seen = new Set();
+  const direct = [];
+  const magnets = [];
+  const invalid = [];
+  String(raw || '').split(/\r?\n/).forEach((rawValue, index) => {
+    const value = rawValue.trim();
+    if (!value || seen.has(value)) return;
+    seen.add(value);
+    const entry = {value, line: index + 1};
+    if (/^https?:\/\/\S+$/i.test(value)) direct.push(entry);
+    else if (/^magnet:\?/i.test(value)) magnets.push(entry);
+    else invalid.push(entry);
+  });
+  return {direct, magnets, invalid};
+}
+
+async function mapWithConcurrency(items, concurrency, worker) {
+  const results = new Array(items.length);
+  let cursor = 0;
+  async function run() {
+    while (cursor < items.length) {
+      const index = cursor++;
+      try {
+        results[index] = {ok: true, value: await worker(items[index])};
+      } catch (error) {
+        results[index] = {ok: false, error};
+      }
+    }
+  }
+  const workers = Array.from(
+    {length: Math.min(Math.max(1, concurrency), Math.max(1, items.length))},
+    () => run()
+  );
+  await Promise.all(workers);
+  return results;
+}
+
+async function addDashboardEntries() {
+  const input = document.getElementById('q-transfer-input');
+  const button = document.getElementById('btn-add-transfer');
+  const raw = input?.value || '';
+  if (!raw.trim()) {
+    openTorrentFilePicker();
+    return;
+  }
+
+  const {direct, magnets, invalid} = classifyDashboardEntries(raw);
+  if (invalid.length) {
+    const first = invalid[0];
+    toast(`Line ${first.line}: enter an HTTP(S) link or magnet URI`, 'error');
     input?.focus();
     return;
   }
-  if (button) {
-    button.disabled = true;
-    button.textContent = 'Adding…';
+  if (!direct.length && !magnets.length) {
+    toast('Enter at least one HTTP(S) link or magnet URI', 'warn');
+    input?.focus();
+    return;
   }
+
+  setButtonPending(button, true, 'Adding…');
+  const failed = [];
+  let handled = 0;
   try {
-    const result = await api('POST', '/links/add', {links}, 30000);
-    const count = result.accepted_links || links.length;
-    toast(`${count} debrid link${count === 1 ? '' : 's'} submitted`, 'success');
-    input.value = '';
+    if (direct.length) {
+      try {
+        await api('POST', '/links/add', {links: direct.map(entry => entry.value)}, 30000);
+        handled += direct.length;
+      } catch (error) {
+        direct.forEach(entry => failed.push({...entry, error}));
+      }
+    }
+
+    if (magnets.length) {
+      const results = await mapWithConcurrency(
+        magnets,
+        3,
+        entry => api('POST', '/torrents/add-magnet', {magnet: entry.value}, 30000)
+      );
+      results.forEach((result, index) => {
+        if (result.ok) handled += 1;
+        else failed.push({...magnets[index], error: result.error});
+      });
+    }
+
+    failed.sort((a, b) => a.line - b.line);
+    input.value = failed.map(entry => entry.value).join('\n');
     resizeDebridLinkInput(input);
     input.focus();
-    loadStats();
-    loadRecent();
-    if (document.getElementById('view-torrents')?.classList.contains('active')) {
-      loadTorrents();
+
+    if (failed.length) {
+      toast(`${handled} handled · ${failed.length} failed`, handled ? 'warn' : 'error');
+    } else {
+      toast(`${handled} item${handled === 1 ? '' : 's'} submitted`, 'success');
     }
-  } catch(e) {
-    toast(sanitizeErrorMsg(e.message), 'error');
+
+    if (handled) {
+      loadStats();
+      loadRecent();
+      if (document.getElementById('view-torrents')?.classList.contains('active')) {
+        loadTorrents();
+      }
+    }
   } finally {
-    if (button) {
-      button.disabled = false;
-      button.textContent = 'Add';
-    }
+    setButtonPending(button, false);
   }
 }
 

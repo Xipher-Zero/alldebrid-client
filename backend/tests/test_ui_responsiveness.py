@@ -100,18 +100,13 @@ def test_settings_put_response_is_reused_without_followup_get():
     )
 
 
-def test_dashboard_magnet_button_has_its_own_pending_target():
+def test_dashboard_unified_add_button_has_its_own_pending_target():
     js = (REPO_ROOT / "frontend/static/app.js").read_text()
-    html = (
-        REPO_ROOT / "frontend/static/index.html"
-    ).read_text()
+    html = (REPO_ROOT / "frontend/static/index.html").read_text()
 
-    assert 'id="btn-add-magnet"' in html
-    assert (
-        "document.getElementById('btn-add-magnet')"
-        in js
-    )
-
+    assert 'id="btn-add-transfer"' in html
+    assert "document.getElementById('btn-add-transfer')" in js
+    assert "setButtonPending(button, true, 'Adding…')" in js
 
 def test_secondary_operator_controls_get_pending_feedback():
     js = (REPO_ROOT / "frontend/static/app.js").read_text()

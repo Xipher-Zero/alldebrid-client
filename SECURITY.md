@@ -15,57 +15,45 @@ Only the latest release receives security fixes. Please update before reporting.
 
 **Do not open a public GitHub issue for security vulnerabilities.**
 
-If you discover a security issue, please report it responsibly:
-
-1. Open a [GitHub Security Advisory](https://github.com/Xipher-Zero/debridpulse/security/advisories/new) (preferred), or
-2. Send an email to the maintainer (see repository profile).
-
-Please include:
-
-- A description of the vulnerability
-- Steps to reproduce
-- Potential impact
-- Any suggested fix (optional but appreciated)
-
-You can expect an acknowledgement within **48 hours** and a fix or mitigation plan within **7 days** for confirmed issues.
+Report security issues through a private GitHub Security Advisory (preferred), or contact the maintainer through the repository profile. Include the vulnerability, reproduction steps, likely impact, and any suggested mitigation.
 
 ---
 
 ## Security Considerations
 
-### API Key Storage
+### Secrets and configuration
 
-Your AllDebrid API key is stored in `config/config.json` on disk. Ensure this file is not world-readable:
+The AllDebrid API key, optional HTTP Basic Authentication password, Discord webhook URLs, aria2 credentials, and extraction passwords are secrets stored in `config/config.json`. Keep that file private:
 
 ```bash
 chmod 600 config/config.json
 ```
 
-When running in Docker, do not expose the config volume publicly.
+Do not publish the config volume or commit it to version control. API responses intentionally redact configured secret values and capability-bearing provider/download URLs.
 
-### Web UI
+### Web UI and API access control
 
-The Web UI has **no authentication** by default. It is intended to run on a trusted local network or behind a reverse proxy with authentication (e.g. Nginx + Basic Auth, Authelia, Authentik).
+DebridPulse supports optional HTTP Basic Authentication in **Settings → General**. Authentication is disabled until credentials are configured. When enabled, state-changing cross-origin requests are rejected and credentials are compared using constant-time checks.
 
-**Do not expose port 8080 directly to the internet.**
+For any network you do not fully trust, enable DebridPulse authentication and/or place the application behind an authenticated reverse proxy such as Authentik, Authelia, or an equivalent access-control layer.
 
-Example Nginx snippet with Basic Auth:
+**Do not expose port 8080 directly to the public internet.** The generic Compose example uses bridge networking with an explicit port mapping so exposure remains visible and can be bound/restricted by the operator. Host networking should be an explicit deployment choice, not the generic default.
 
-```nginx
-location / {
-    auth_basic "DebridPulse";
-    auth_basic_user_file /etc/nginx/.htpasswd;
-    proxy_pass http://localhost:8080;
-}
-```
+### Shared external aria2
 
-### Discord Webhook URL
+External aria2 may be shared with unrelated applications. DebridPulse records ownership for GIDs it creates, permits per-GID mutations only for owned downloads, and avoids daemon-global mutation outside built-in aria2 mode. Keep aria2 RPC itself on a trusted network and configure its RPC secret when supported.
 
-Treat your Discord webhook URL as a secret — anyone with the URL can post to your channel. Store it only in `config/config.json` and do not commit it to version control.
+### Archive extraction
 
-### .gitignore
+Archive extraction enforces member-path/type checks plus file-count, expanded-size, and compression-ratio budgets. External 7z/RAR extraction occurs in an isolated staging directory, is monitored while the extractor runs, and is validated again before files are merged into the download tree.
 
-The provided `.gitignore` excludes `config/` and `data/` from version control. Do not remove these entries.
+### Backups and database maintenance
+
+Database wipe requires verified transfer quiescence and fails closed if a required pre-wipe backup fails. Backup rotation only recursively removes DebridPulse-owned directories carrying the expected ownership manifest.
+
+### Discord webhook URL
+
+Treat Discord webhook URLs as secrets: possession of the URL permits posting to the configured channel.
 
 ---
 
@@ -73,13 +61,16 @@ The provided `.gitignore` excludes `config/` and `data/` from version control. D
 
 The following are **in scope** for security reports:
 
-- API key or webhook URL exposure
-- Remote code execution
-- Path traversal in file download
-- Authentication bypass (if auth is added in future)
+- secret or capability-bearing URL exposure;
+- remote code execution;
+- path traversal or unsafe archive extraction;
+- authentication or authorization bypass;
+- cross-origin state-changing request bypass;
+- mutation of unrelated transfers on shared external aria2;
+- unsafe destructive database/backup behavior.
 
 The following are **out of scope**:
 
-- Issues in AllDebrid's own API
-- Vulnerabilities in third-party dependencies (report upstream)
-- Denial of service on a local instance with no network exposure
+- issues in AllDebrid's own service/API;
+- vulnerabilities that exist solely in an unmodified third-party dependency (report upstream as well);
+- resource exhaustion requiring trusted local access with no network exposure, unless it crosses a documented DebridPulse safety boundary.

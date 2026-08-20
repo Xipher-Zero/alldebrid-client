@@ -74,12 +74,11 @@ class AllDebridService:
     async def _post(self, base: str, endpoint: str,
                     data: Optional[Dict] = None,
                     retries: int = 1) -> Dict[str, Any]:
-        await acquire_alldebrid_request_slot()
-
         url = f"{base}/{endpoint}"
         last_error: Optional[Exception] = None
         attempts = max(1, int(retries or 1))
         for attempt in range(1, attempts + 1):
+            await acquire_alldebrid_request_slot()
             result = None
             try:
                 async with aiohttp.ClientSession(headers=self._headers()) as s:

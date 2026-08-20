@@ -34,7 +34,7 @@ DebridPulse can manage its own built-in aria2 instance or safely use a shared ex
 
 | Feature | Description |
 |---|---|
-| **Direct debrid links** | Submit ordinary HTTP/HTTPS links from AllDebrid-supported hosts directly from the Dashboard |
+| **Unified Dashboard submission** | Paste HTTP/HTTPS direct links and magnet URIs into one mixed-input control, or use the same Add action with an empty field to choose a `.torrent` file |
 | **Batch link submission** | Submit up to 100 unique direct links in one tracked transaction |
 | **Magnet links** | Submit one or more magnets through AllDebrid |
 | **Torrent files** | Upload `.torrent` files directly to AllDebrid |
@@ -61,7 +61,7 @@ DebridPulse can manage its own built-in aria2 instance or safely use a shared ex
 
 Direct hoster links are first-class DebridPulse transfers rather than untracked aria2 jobs.
 
-Paste one or more HTTP/HTTPS links into the direct-link field on the Dashboard. DebridPulse then:
+Paste one or more HTTP/HTTPS links into the unified Dashboard submission field (direct links and magnets may be mixed, one item per line). DebridPulse then:
 
 1. validates and records the original URL;
 2. asks AllDebrid to unlock the link;
@@ -128,7 +128,7 @@ git clone https://github.com/Xipher-Zero/debridpulse.git
 cd debridpulse
 ```
 
-Review `docker-compose.yml` before starting it. Adapt host paths, UID/GID, timezone, networking, and persistent storage to your environment.
+Review `docker-compose.yml` before starting it. Adapt host paths, UID/GID, timezone, networking, and persistent storage to your environment. The generic example uses bridge networking and an explicit `8080:8080` port mapping; use host networking only when your platform specifically requires it.
 
 Then start DebridPulse:
 
@@ -222,8 +222,8 @@ The Dashboard is intended for current activity and common download submission.
 
 It provides:
 
-- direct-link submission;
-- magnet and `.torrent` submission;
+- one unified direct-link/magnet submission field;
+- `.torrent` file selection from the same Add control when the field is empty;
 - import and recovery controls;
 - current queue state;
 - completion and error counts;

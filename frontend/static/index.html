@@ -229,23 +229,10 @@
         </div>
       </div>
 
-      <!-- ── Add Direct Debrid Links ──────────────────────────────────────── -->
+      <!-- ── Unified transfer submission ───────────────────────────────────── -->
       <div class="card" style="margin-bottom:14px">
         <div class="card-header">
-          <span class="card-title">⬇️ Add Links to Generate and Download Debrid Links</span>
-        </div>
-        <div style="padding:12px 16px">
-          <div class="direct-link-entry">
-            <textarea class="input direct-link-input" id="q-debrid-links" rows="1" placeholder="https://example-hoster.com/file/… or paste multiple links, one per line" oninput="resizeDebridLinkInput(this)" onkeydown="if((event.ctrlKey||event.metaKey)&&event.key==='Enter')addDebridLinks()"></textarea>
-            <button class="btn btn-primary" id="btn-add-debrid-links" onclick="addDebridLinks()" style="padding:9px 20px" title="Generate each link through AllDebrid and queue the resulting downloads in aria2">Add</button>
-          </div>
-        </div>
-      </div>
-
-      <!-- ── Add Magnet or Torrent File ─────────────────────────────────────── -->
-      <div class="card" style="margin-bottom:14px">
-        <div class="card-header">
-          <span class="card-title">🧲 Add Magnet Links or a Torrent File</span>
+          <span class="card-title">⬇️ Add Links, Magnets, or Torrent File</span>
           <div style="display:flex;gap:6px">
             <button class="btn btn-ghost btn-sm" id="btn-import-existing" onclick="importExisting(this)" title="Import all AllDebrid magnets not yet in the local database">⬇ Import</button>
             <button class="btn btn-warn btn-sm" id="btn-recover-all" onclick="recoverAll(this)" title="Reset stuck or errored torrents — re-dispatches from AllDebrid">⟳ Recover All</button>
@@ -253,9 +240,10 @@
         </div>
         <div style="padding:12px 16px">
           <div class="direct-link-entry">
-            <textarea class="input direct-link-input" id="q-magnet" rows="1" placeholder="magnet:?xt=urn:btih:… or paste multiple lines, one per line" oninput="resizeDebridLinkInput(this)" onkeydown="if((event.ctrlKey||event.metaKey)&&event.key==='Enter')quickAdd()"></textarea>
-            <button class="btn btn-primary" id="btn-add-magnet" onclick="quickAdd()" style="padding:9px 20px" title="Add entered magnet links, or choose a .torrent file when the field is empty">Add</button>
+            <textarea class="input direct-link-input" id="q-transfer-input" rows="2" placeholder="https://example-hoster.com/file/…&#10;magnet:?xt=urn:btih:…" oninput="resizeDebridLinkInput(this)" onkeydown="if((event.ctrlKey||event.metaKey)&&event.key==='Enter')addDashboardEntries()"></textarea>
+            <button class="btn btn-primary" id="btn-add-transfer" onclick="addDashboardEntries()" style="padding:9px 20px" title="Submit direct links and magnets through AllDebrid; when empty, choose a .torrent file">Add</button>
           </div>
+          <div style="margin-top:6px;font-size:11px;color:var(--text3)">One item per line. Leave empty and click Add to choose a .torrent file.</div>
         </div>
       </div>
 

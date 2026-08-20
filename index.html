@@ -290,10 +290,10 @@ footer{padding:48px 5vw;border-top:1px solid var(--brd);display:flex;align-items
         </div>
         <pre id="cc1"><span class="kw">services</span>:
   <span class="kw">debridpulse</span>:
-    <span class="cm">image</span>: <span class="str">ghcr.io/xipher-zero/debridpulse:v1.0.0</span>
+    <span class="cm">image</span>: <span class="str">ghcr.io/xipher-zero/debridpulse:v1.0.6</span>
     <span class="cm">container_name</span>: <span class="str">debridpulse</span>
     <span class="cm">restart</span>: <span class="str">unless-stopped</span>
-    <span class="cm">network_mode</span>: <span class="str">host</span>
+    <span class="cm">ports</span>: <span class="str">["8080:8080"]</span>
     <span class="cm">environment</span>:
       - <span class="str">TZ=Europe/Berlin</span>
       - <span class="str">LOG_LEVEL=INFO</span>
@@ -310,14 +310,14 @@ footer{padding:48px 5vw;border-top:1px solid var(--brd);display:flex;align-items
         <pre id="cc2"><span class="str">docker run -d \
   --name debridpulse \
   --restart unless-stopped \
-  --network host \
+  -p 8080:8080 \
   -e TZ=Europe/Berlin \
   -e CONFIG_PATH=/app/config/config.json \
   -e DB_PATH=/app/data/debridpulse.db \
   -v /mnt/appdata/debridpulse/config:/app/config \
   -v /mnt/appdata/debridpulse/data:/app/data \
   -v /mnt/downloads/debridpulse:/download \
-  ghcr.io/xipher-zero/debridpulse:v1.0.0</span></pre>
+  ghcr.io/xipher-zero/debridpulse:v1.0.6</span></pre>
       </div>
     </div>
   </div>

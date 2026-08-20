@@ -206,8 +206,8 @@ async def version_check():
         cache["ts"] = now
         return result
     except Exception as exc:
-        logger.warning("Version check failed: %s", exc)
-        return {"current": current, "latest": None, "update_available": False, "error": str(exc)}
+        logger.warning("Version check failed: %s", sanitize_exception(exc))
+        return {"current": current, "latest": None, "update_available": False, "error": sanitize_exception(exc)}
 
 
 @router.put("/settings")
@@ -232,7 +232,7 @@ async def update_settings(new: AppSettings):
         try:
             await transfer_service.apply_aria2_memory_tuning()
         except Exception as exc:
-            logger.warning("Could not apply aria2 memory settings immediately: %s", exc)
+            logger.warning("Could not apply aria2 memory settings immediately: %s", sanitize_exception(exc))
     elif getattr(previous, "aria2_mode", "external") == "builtin":
         await aria2_runtime.stop()
     data = _public_settings(clean)
@@ -362,7 +362,7 @@ async def aria2_runtime_status():
             diagnostics = await transfer_service.aria2.memory_diagnostics()
             speed_stat  = await transfer_service.aria2.get_global_stat()
     except Exception as exc:
-        diagnostics = {"error": str(exc)}
+        diagnostics = {"error": sanitize_exception(exc)}
     return {**status, "diagnostics": diagnostics, **speed_stat}
 
 
@@ -1785,23 +1785,9 @@ async def get_analytics(window_hours: int = Query(24, ge=1, le=720)):
 @router.post("/recovery/run")
 async def run_recovery():
     """Manually trigger an auto-recovery pass."""
-    from services.recovery import run_recovery_checks
-    result = await run_recovery_checks()
+    result = await transfer_service.reconciliation.recover()
     return {"ok": True, "result": result}
 
-
-# ── MediaInfo ─────────────────────────────────────────────────────────────────
-
-@router.get("/mediainfo")
-async def get_mediainfo_endpoint(path: str = Query(..., description="Local file path")):
-    """Return technical metadata for a file inside the configured download root."""
-    from services.mediainfo import get_mediainfo
-    try:
-        return await get_mediainfo(path)
-    except PermissionError as exc:
-        raise HTTPException(403, _sanitize_error(exc))
-    except FileNotFoundError:
-        raise HTTPException(404, "File not found")
 
 # ── AllDebrid orphan cleanup ───────────────────────────────────────────────────
 

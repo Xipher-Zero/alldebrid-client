@@ -16,6 +16,7 @@ def test_service_root_and_explicit_components_exist():
     ):
         assert name in root
     assert "bind_architecture" in root
+    assert "def __getattr__" not in root
 
 
 def test_runtime_monkey_patching_is_removed():

@@ -9,8 +9,7 @@
 #     - PUID=1000
 #     - PGID=1000
 #
-# When PUID/PGID are omitted the app runs as the 'appuser' created in the
-# Dockerfile (UID 1000 / GID 1000) — still non-root.
+# When PUID/PGID are omitted DebridPulse uses the image defaults (99:100).
 # To run as root deliberately set PUID=0.
 
 set -e
@@ -53,11 +52,18 @@ umask "${UMASK}" 2>/dev/null || true
 # /app/data    — SQLite DB, backups, and aria2 session/log files
 # /app/config  — config.json
 # /download    — the mounted download target (most important for other containers)
-for DIR in /app/data /app/config /download; do
+for DIR in /app/data /app/config; do
     if [ -d "${DIR}" ]; then
         chown -R "${PUID}:${PGID}" "${DIR}" 2>/dev/null || true
     fi
 done
+if [ -d /download ]; then
+    if [ "${CHOWN_DOWNLOADS_RECURSIVE:-false}" = "true" ]; then
+        chown -R "${PUID}:${PGID}" /download 2>/dev/null || true
+    else
+        chown "${PUID}:${PGID}" /download 2>/dev/null || true
+    fi
+fi
 chmod 700 /app/config /app/data 2>/dev/null || true
 [ -f /app/config/config.json ] && chmod 600 /app/config/config.json 2>/dev/null || true
 

@@ -61,7 +61,13 @@ def _sql_date(field: str) -> str:
 
 from services.transfer_service import transfer_service
 from services.aria2_runtime import runtime as aria2_runtime
-from services.aria2 import aria2_download_to_dict
+from services.event_bus import bind_publisher
+from api.serializers import (
+    public_aria2_download,
+    public_download_file,
+    public_payload,
+    public_torrent,
+)
 
 logger = logging.getLogger("alldebrid.routes")
 router = APIRouter()
@@ -353,7 +359,7 @@ async def aria2_runtime_status():
     speed_stat = {"download_speed": 0, "upload_speed": 0, "active": 0}
     try:
         if status.get("running"):
-            diagnostics = await transfer_service._aria2_get_memory_diagnostics()
+            diagnostics = await transfer_service.aria2.memory_diagnostics()
             speed_stat  = await transfer_service.aria2.get_global_stat()
     except Exception as exc:
         diagnostics = {"error": str(exc)}
@@ -435,7 +441,7 @@ async def aria2_downloads():
         downloads = await transfer_service.owned_aria2_downloads(downloads)
     except Exception as e:
         raise HTTPException(502, _sanitize_error(e))
-    items = [aria2_download_to_dict(download) for download in downloads]
+    items = [public_aria2_download(download) for download in downloads]
     groups = {
         "active": [item for item in items if item["status"] == "active"],
         "waiting": [item for item in items if item["status"] in {"waiting", "paused"}],
@@ -521,7 +527,7 @@ async def list_torrents(
             f"SELECT COUNT(*) AS cnt FROM torrents t {where}", params
         )
         total = total_row["cnt"] if total_row else 0
-        return {"items": rows, "total": total}
+        return {"items": [public_torrent(row) for row in rows], "total": total}
 
 
 @router.post("/torrents/add-magnet")
@@ -531,7 +537,7 @@ async def add_magnet(body: dict):
         raise HTTPException(400, "magnet is required")
     try:
         row = await transfer_service.add_magnet_direct(magnet, source="manual")
-        return row
+        return public_payload(row)
     except ValueError as exc:
         raise HTTPException(400, _sanitize_error(exc))
     except Exception as exc:
@@ -563,11 +569,12 @@ async def add_torrent_file(file: UploadFile = File(...)):
         raise HTTPException(413, "Torrent file exceeds the 16 MB upload limit")
 
     try:
-        return await transfer_service.add_torrent_file_direct(
+        result = await transfer_service.add_torrent_file_direct(
             data,
             filename,
             source="manual_file",
         )
+        return public_payload(result)
     except ValueError as exc:
         raise HTTPException(400, _sanitize_error(exc))
     except Exception as exc:
@@ -585,7 +592,7 @@ async def add_debrid_links(body: dict):
     else:
         raise HTTPException(400, "links must be a list or newline-separated string")
     try:
-        return await transfer_service.add_direct_links(links)
+        return public_payload(await transfer_service.add_direct_links(links))
     except ValueError as exc:
         raise HTTPException(400, _sanitize_error(exc))
     except Exception as exc:
@@ -608,7 +615,7 @@ async def check_torrent_duplicate(body: dict):
 @router.post("/torrents/import-existing")
 async def import_existing():
     results = await transfer_service.import_existing_magnets()
-    return {"imported": len(results), "items": results}
+    return {"imported": len(results), "items": public_payload(results)}
 
 
 @router.get("/torrents/diagnose")
@@ -726,7 +733,7 @@ async def torrent_files_preview(torrent_id: int):
     if not row["alldebrid_id"]:
         raise HTTPException(400, "Torrent has no AllDebrid ID — not ready yet")
     try:
-        files_data = await transfer_service.ad().get_magnet_files([str(row["alldebrid_id"])])
+        files_data = await transfer_service.provider.client().get_magnet_files([str(row["alldebrid_id"])])
         from services.alldebrid import flatten_files
         for entry in files_data:
             if str(entry.get("id", "")) == str(row["alldebrid_id"]):
@@ -735,8 +742,7 @@ async def torrent_files_preview(torrent_id: int):
                     "source": "alldebrid",
                     "files": [
                         {
-                            "link":     f.get("link", ""),
-                            "filename": f.get("filename") or f.get("name") or f.get("link", ""),
+                            "filename": f.get("path") or f.get("name") or "download",
                             "size_bytes": int(f.get("size") or 0),
                         }
                         for f in flat
@@ -780,7 +786,11 @@ async def get_torrent(torrent_id: int):
             "SELECT * FROM download_files WHERE torrent_id=? ORDER BY id", (torrent_id,))
         events = await db.fetchall(
             "SELECT * FROM events WHERE torrent_id=? ORDER BY created_at DESC LIMIT 50", (torrent_id,))
-        return {**dict(row), "files": [dict(f) for f in files], "events": [dict(e) for e in events]}
+        return {
+            **public_torrent(row),
+            "files": [public_download_file(file_row) for file_row in files],
+            "events": [dict(event) for event in events],
+        }
 
 
 @router.delete("/torrents/{torrent_id}")
@@ -1376,15 +1386,23 @@ async def wipe_database_admin(body: dict | None = None):
     if not (body or {}).get("confirm"):
         raise HTTPException(400, "Wipe confirmation required")
 
+    try:
+        quiesce_result = await transfer_service.quiesce_for_database_wipe()
+    except Exception as exc:
+        raise HTTPException(409, _sanitize_error(exc))
+
     backup_result = None
     if getattr(cfg, "db_backup_before_wipe", True):
         from services.db_maintenance import run_database_backup
         backup_result = await run_database_backup()
+        if backup_result.get("skipped"):
+            raise HTTPException(409, "Pre-wipe database backup is required but disabled")
+        if backup_result.get("errors"):
+            raise HTTPException(500, "Pre-wipe database backup failed; wipe aborted")
 
     from services.db_maintenance import wipe_database
-    result = await wipe_database()
-    transfer_service.reset_services()
-    return {**result, "backup": backup_result}
+    result = await wipe_database(verified_quiesced=True)
+    return {**result, "backup": backup_result, "quiesced": quiesce_result}
 
 
 
@@ -1583,6 +1601,9 @@ async def _sse_broadcast(event_type: str, data: dict) -> None:
             _sse_subscribers.discard(q)
 
 
+bind_publisher(_sse_broadcast)
+
+
 async def _sse_generator(request: Request) -> AsyncGenerator[str, None]:
     """Yield SSE frames until the client disconnects."""
     queue: asyncio.Queue = asyncio.Queue(maxsize=100)
@@ -1773,22 +1794,14 @@ async def run_recovery():
 
 @router.get("/mediainfo")
 async def get_mediainfo_endpoint(path: str = Query(..., description="Local file path")):
-    """
-    Return technical metadata (codec, resolution, HDR, audio) for a local file.
-    Uses ffprobe (preferred) or pymediainfo as fallback.
-    Result is cached in-process per file path.
-    """
-    from pathlib import Path as _Path
-    # Security: only allow paths inside configured download folder
-    cfg = load_settings()
-    dl_root = str(_Path(getattr(cfg, "download_folder", "/download")).resolve())
-    resolved = str(_Path(path).resolve())
-    if not resolved.startswith(dl_root):
-        raise HTTPException(403, "Path outside download folder")
-    if not _Path(resolved).is_file():
-        raise HTTPException(404, "File not found")
+    """Return technical metadata for a file inside the configured download root."""
     from services.mediainfo import get_mediainfo
-    return await get_mediainfo(resolved)
+    try:
+        return await get_mediainfo(path)
+    except PermissionError as exc:
+        raise HTTPException(403, _sanitize_error(exc))
+    except FileNotFoundError:
+        raise HTTPException(404, "File not found")
 
 # ── AllDebrid orphan cleanup ───────────────────────────────────────────────────
 

@@ -8,7 +8,6 @@ from core.logging_utils import sanitize_exception
 from core.performance import async_timer
 from core.version import normalize_version_tag
 from services.transfer_service import transfer_service
-from services.reconcile_cycle import reconcile_download_client_cycle
 
 logger = logging.getLogger("alldebrid.scheduler")
 _tasks = []
@@ -109,7 +108,7 @@ async def sync_download_clients_loop():
     while True:
         try:
             async with async_timer("scheduler.download_client_sync"):
-                await reconcile_download_client_cycle(transfer_service)
+                await transfer_service.reconciliation.reconcile()
         except Exception as e:
             logger.error(f"Download client sync error: {e}")
         await asyncio.sleep(max(2, get_settings().aria2_poll_interval_seconds))
@@ -192,7 +191,7 @@ async def aria2_restart_loop():
 
     The restart is deferred until aria2 has no active downloads to avoid
     interrupting in-progress transfers. After restart, _dispatch re-queues
-    all pending files from the DB within one poll cycle (≤1 second).
+    all pending files from the DB within one poll cycle (normally ≤2 seconds).
 
     Controlled by aria2_restart_interval_hours (0 = disabled).
     """
@@ -320,16 +319,6 @@ async def events_ttl_loop() -> None:
         await asyncio.sleep(86400)  # run once every 24 hours
 
 
-async def recovery_loop():
-    """Low-frequency integrity pass through the same reconciliation authority."""
-    await asyncio.sleep(120)
-    while True:
-        try:
-            await transfer_service.reconciliation.recover()
-        except Exception as exc:
-            logger.debug("recovery_loop error: %s", exc)
-        await asyncio.sleep(300)
-
 
 async def disk_guard_loop():
     """
@@ -355,6 +344,10 @@ async def disk_guard_loop():
 
 
 async def start_scheduler():
+    if any(not task.done() for task in _tasks):
+        logger.debug("Scheduler already running")
+        return
+    _tasks.clear()
     _tasks.append(asyncio.create_task(sync_status_loop()))
     _tasks.append(asyncio.create_task(full_sync_loop()))
     _tasks.append(asyncio.create_task(sync_download_clients_loop()))
@@ -367,15 +360,17 @@ async def start_scheduler():
     _tasks.append(asyncio.create_task(aria2_restart_loop()))
     _tasks.append(asyncio.create_task(update_check_loop()))
     _tasks.append(asyncio.create_task(events_ttl_loop()))
-    _tasks.append(asyncio.create_task(recovery_loop()))
     _tasks.append(asyncio.create_task(disk_guard_loop()))
     logger.info("Scheduler started")
 
 
 async def stop_scheduler():
-    for t in _tasks:
-        t.cancel()
+    tasks = list(_tasks)
     _tasks.clear()
+    for task in tasks:
+        task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 async def stats_snapshot_loop():

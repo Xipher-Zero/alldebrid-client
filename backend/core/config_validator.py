@@ -82,7 +82,7 @@ def _validate(cfg) -> List[Tuple[str, str, Any, Any]]:
     numeric_bounds = {
         "max_concurrent_downloads":       (1, 20),
         "aria2_max_active_downloads":     (1, 20),
-        "aria2_poll_interval_seconds":    (1, 300),
+        "aria2_poll_interval_seconds":    (2, 300),
         "aria2_operation_timeout_seconds":(5, 300),
         "aria2_builtin_port":             (1, 65535),
         "aria2_builtin_log_max_mb":        (1, 1024),
@@ -99,7 +99,7 @@ def _validate(cfg) -> List[Tuple[str, str, Any, Any]]:
         "poll_interval_seconds":          (5, 3600),
         "alldebrid_rate_limit_per_minute":(0, 600),
         "stuck_download_timeout_hours":   (0, 168),
-        "full_sync_interval_minutes":     (1, 1440),
+        "full_sync_interval_minutes":     (0, 1440),
         "backup_keep_days":               (1, 365),
         "backup_interval_hours":          (1, 168),
         "db_backup_keep_days":            (1, 365),
@@ -108,6 +108,9 @@ def _validate(cfg) -> List[Tuple[str, str, Any, Any]]:
         "stats_report_interval_hours":    (0, 168),
         "stats_report_window_hours":      (1, 8760),
         "min_file_size_mb":               (0, 100_000),
+        "extract_max_files":              (1, 1_000_000),
+        "extract_max_expanded_gb":        (1, 10_000),
+        "extract_max_compression_ratio":  (1, 100_000),
     }
     for field, (lo, hi) in numeric_bounds.items():
         val = getattr(cfg, field, None)
@@ -115,7 +118,7 @@ def _validate(cfg) -> List[Tuple[str, str, Any, Any]]:
             continue
         if not isinstance(val, (int, float)):
             warn(field, f"expected number, got {type(val).__name__}", val, lo)
-        elif lo > 0 and val < lo:
+        elif val < lo:
             warn(field, f"value {val} below minimum {lo} — clamped", val, lo)
         elif val > hi:
             warn(field, f"value {val} above maximum {hi} — clamped", val, hi)

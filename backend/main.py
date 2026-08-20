@@ -8,6 +8,7 @@ from pathlib import Path
 from fastapi import FastAPI, Request, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from api.routes import router
 from core.branding import APP_METADATA_TITLE, APP_NAME, APP_SHORT_NAME
@@ -66,6 +67,9 @@ async def lifespan(app: FastAPI):
         web_ui=f"http://0.0.0.0:{getattr(cfg, 'port', 8080)}",
         auth=("enabled" if getattr(cfg, "auth_username", "") and getattr(cfg, "auth_password", "") else "disabled"),
     )
+    if not (str(getattr(cfg, "auth_username", "") or "").strip() and str(getattr(cfg, "auth_password", "") or "").strip()):
+        logger.warning("HTTP authentication is disabled; restrict DebridPulse to a trusted network or authenticated reverse proxy")
+
     try:
         from core.config import get_settings, apply_settings, save_settings
         from core.config_validator import validate_and_sanitise
@@ -82,7 +86,7 @@ async def lifespan(app: FastAPI):
         stuck = await _reset_stuck_downloads_sqlite()
         for row in stuck:
             if row["alldebrid_id"]:
-                asyncio.create_task(transfer_service._start_download(
+                asyncio.create_task(transfer_service.control.start_download(
                     row["id"], str(row["alldebrid_id"]), str(row["name"] or "")
                 ))
     except Exception as exc:
@@ -101,7 +105,7 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning("Startup reconciliation failed: %s", sanitize_exception(exc))
     try:
-        await transfer_service.run_aria2_housekeeping()
+        await transfer_service.aria2.housekeeping()
     except Exception as exc:
         logger.warning("Startup aria2 housekeeping failed: %s", sanitize_exception(exc))
 
@@ -113,6 +117,50 @@ async def lifespan(app: FastAPI):
         await aria2_runtime.stop()
     except Exception as exc:
         logger.warning("Built-in aria2 shutdown failed: %s", sanitize_exception(exc))
+
+
+class _RequestBodyTooLarge(Exception):
+    pass
+
+
+class RequestBodyLimitMiddleware:
+    def __init__(self, app: ASGIApp, max_bytes: int):
+        self.app = app
+        self.max_bytes = max(1, int(max_bytes))
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope.get("type") != "http" or str(scope.get("method") or "").upper() not in {"POST", "PUT", "PATCH", "DELETE"}:
+            await self.app(scope, receive, send)
+            return
+        headers = {key.lower(): value for key, value in scope.get("headers", [])}
+        raw_length = headers.get(b"content-length", b"")
+        try:
+            if raw_length and int(raw_length) > self.max_bytes:
+                response = Response(content="Request body too large", status_code=413)
+                await response(scope, receive, send)
+                return
+        except ValueError:
+            pass
+        seen = 0
+        async def limited_receive() -> Message:
+            nonlocal seen
+            message = await receive()
+            if message.get("type") == "http.request":
+                seen += len(message.get("body", b""))
+                if seen > self.max_bytes:
+                    raise _RequestBodyTooLarge
+            return message
+        try:
+            await self.app(scope, limited_receive, send)
+        except _RequestBodyTooLarge:
+            response = Response(content="Request body too large", status_code=413)
+            await response(scope, receive, send)
+
+
+try:
+    _MAX_REQUEST_BODY_BYTES = max(1024 * 1024, min(100 * 1024 * 1024, int(os.getenv("DEBRIDPULSE_MAX_REQUEST_BYTES", str(20 * 1024 * 1024)))))
+except ValueError:
+    _MAX_REQUEST_BODY_BYTES = 20 * 1024 * 1024
 
 
 app = FastAPI(
@@ -140,6 +188,9 @@ async def permission_error_handler(_request: Request, _exc: PermissionError):
     return Response(content="Forbidden", status_code=403)
 
 
+app.add_middleware(RequestBodyLimitMiddleware, max_bytes=_MAX_REQUEST_BODY_BYTES)
+
+
 _cors_origins = [origin.strip() for origin in os.getenv("CORS_ORIGINS", "").split(",") if origin.strip()]
 if _cors_origins:
     app.add_middleware(
@@ -156,9 +207,14 @@ if _cors_origins:
 
 @app.middleware("http")
 async def request_id_middleware(request: Request, call_next):
-    req_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
+    req_id = str(request.headers.get("X-Request-ID") or "").strip()
+    if not req_id or len(req_id) > 128:
+        req_id = str(uuid.uuid4())
     response = await call_next(request)
     response.headers["X-Request-ID"] = req_id
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    response.headers.setdefault("X-Frame-Options", "DENY")
     return response
 
 # ── Optional HTTP Basic Auth ───────────────────────────────────────────────────

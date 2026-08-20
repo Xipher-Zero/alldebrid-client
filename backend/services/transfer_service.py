@@ -130,6 +130,22 @@ class TransferService:
         """Delete remains a materialization-engine operation in V1, explicitly exposed."""
         return await self._engine.delete_torrent(*args, **kwargs)
 
+    async def quiesce_for_database_wipe(self):
+        """Physically park owned aria2 work before destructive DB maintenance."""
+        pause_result = await self.pause_all_downloads()
+        failed = int((pause_result or {}).get("failed") or 0)
+        if failed:
+            raise RuntimeError(f"Could not confirm pause for {failed} transfer(s)")
+        # Prove the daemon is reachable before trusting an observational snapshot.
+        await self.aria2.test()
+        owned = await self.aria2.get_owned()
+        live = [item for item in owned if item.status in {"active", "waiting"}]
+        if live:
+            raise RuntimeError(
+                f"Database wipe refused: {len(live)} owned aria2 job(s) are still live"
+            )
+        return {"pause": pause_result, "owned_checked": len(owned)}
+
     def reset_services(self):
         self.control.reset_runtime_state()
         return self._engine.reset_services()

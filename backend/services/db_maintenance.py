@@ -191,7 +191,9 @@ def list_database_backups() -> list[dict]:
     return entries
 
 
-async def wipe_database() -> dict:
+async def wipe_database(*, verified_quiesced: bool = False) -> dict:
+    if not verified_quiesced:
+        raise RuntimeError("Database wipe requires verified quiesced transfer state")
     async with get_db() as db:
         await db.execute("DELETE FROM debridpulse_aria2_owned_gids")
         await db.execute("DELETE FROM transfer_pause_intents")

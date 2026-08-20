@@ -33,6 +33,12 @@ jobs:
         run: |
           cd backend
           pip install -r requirements-dev.txt
+          pip install ruff
+
+      - name: Check undefined Python names
+        run: |
+          cd backend
+          ruff check api core db services main.py --select F821
 
       - name: Run all tests
         run: |

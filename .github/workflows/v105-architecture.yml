@@ -33,7 +33,7 @@ jobs:
         run: |
           python tools/v105_refactor.py
           python tools/v105_refactor_fix1.py
-          python tools/v105_refactor_fix2.py
+          python tools/v105_refactor_fix3.py
 
       - name: Install test and security dependencies
         run: |
@@ -91,7 +91,7 @@ jobs:
             fi
           done < .v105_changed_paths
 
-          git rm -- tools/v105_refactor.py tools/v105_refactor_fix1.py tools/v105_refactor_fix2.py .github/workflows/v105-architecture.yml
+          git rm -- tools/v105_refactor.py tools/v105_refactor_fix1.py tools/v105_refactor_fix2.py tools/v105_refactor_fix3.py .github/workflows/v105-architecture.yml
           git diff --cached --check
           git status --short
 
@@ -144,8 +144,7 @@ jobs:
 
           healthy=0
           for _ in $(seq 1 30); do
-            if docker exec "$container_name" curl --fail --silent --show-error \
-              http://127.0.0.1:8080/api/health >/dev/null; then
+            if docker exec "$container_name" curl --fail --silent --show-error http://127.0.0.1:8080/api/health >/dev/null; then
               healthy=1
               break
             fi

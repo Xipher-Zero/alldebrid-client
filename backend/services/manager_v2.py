@@ -5499,6 +5499,10 @@ class TorrentManager:
                 )
             ).fetchall()
             await db.execute("UPDATE torrents SET status='deleted', updated_at=CURRENT_TIMESTAMP WHERE id=?", (torrent_id,))
+            await db.execute(
+                "DELETE FROM deferred_provider_submissions WHERE torrent_id=?",
+                (torrent_id,),
+            )
             await db.commit()
 
         for file_row in file_rows:

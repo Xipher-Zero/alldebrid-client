@@ -15,10 +15,18 @@ from pathlib import Path
 logger = logging.getLogger("alldebrid.backup")
 
 
+def _chmod_private(path: Path, mode: int) -> None:
+    try:
+        os.chmod(path, mode)
+    except OSError:
+        pass
+
+
 def _sqlite_backup(source: Path, destination: Path) -> None:
     with sqlite3.connect(str(source), timeout=30) as src:
         with sqlite3.connect(str(destination), timeout=30) as dst:
             src.backup(dst)
+    _chmod_private(destination, 0o600)
 
 
 def _cfg():
@@ -43,9 +51,11 @@ async def run_backup() -> dict:
     keep_days = max(1, int(getattr(cfg, "backup_keep_days", 7)))
 
     backup_folder.mkdir(parents=True, exist_ok=True)
+    _chmod_private(backup_folder, 0o700)
     ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     backup_dir = backup_folder / ts
     backup_dir.mkdir(parents=True, exist_ok=True)
+    _chmod_private(backup_dir, 0o700)
 
     backed_up = []
     errors = []
@@ -54,7 +64,9 @@ async def run_backup() -> dict:
     try:
         from core.config import CONFIG_PATH
         if CONFIG_PATH.exists():
-            shutil.copy2(CONFIG_PATH, backup_dir / "config.json")
+            config_backup = backup_dir / "config.json"
+            shutil.copy2(CONFIG_PATH, config_backup)
+            _chmod_private(config_backup, 0o600)
             backed_up.append("config.json")
     except Exception as e:
         errors.append(f"config: {e}")

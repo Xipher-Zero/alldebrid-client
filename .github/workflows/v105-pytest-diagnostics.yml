@@ -32,11 +32,14 @@ jobs:
           python tools/v105_refactor.py
           python tools/v105_refactor_fix1.py
           python tools/v105_refactor_fix3.py
+          python tools/v105_refactor_fix4.py
 
       - name: Capture transformed source tree
         shell: bash
         run: |
-          tar --exclude='__pycache__' --exclude='*.pyc' -czf v105-transformed-tree.tar.gz VERSION backend frontend tools .v105_changed_paths
+          tar --exclude='__pycache__' --exclude='*.pyc' -czf v105-transformed-tree.tar.gz \
+            VERSION LICENSE NOTICE README.md index.html .github/workflows/fork-image.yml \
+            licenses backend frontend tools .v105_changed_paths
 
       - name: Upload transformed source tree
         uses: actions/upload-artifact@v4

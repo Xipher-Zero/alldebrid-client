@@ -109,7 +109,7 @@ async def sync_download_clients_loop():
     while True:
         try:
             async with async_timer("scheduler.download_client_sync"):
-                await reconcile_download_client_cycle(manager)
+                await reconcile_download_client_cycle(transfer_service)
         except Exception as e:
             logger.error(f"Download client sync error: {e}")
         await asyncio.sleep(max(2, get_settings().aria2_poll_interval_seconds))
@@ -277,8 +277,7 @@ async def update_check_loop() -> None:
 
             if latest and _v(latest) > _v(current) and latest != _last_notified:
                 logger.info("Update available: %s → %s", current, latest)
-                from services.notifications import notifier
-                await notifier.send_update(
+                await transfer_service.notifications.client().send_update(
                     current_version=current,
                     latest_version=latest,
                     release_url=rel.get("html_url", ""),

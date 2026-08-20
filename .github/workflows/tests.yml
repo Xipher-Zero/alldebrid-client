@@ -34,6 +34,21 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
+          # Preserve the active /recovery/run feature while removing its
+          # transitional wrapper module: route it straight through the
+          # authoritative ReconciliationService boundary first.
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('backend/api/routes.py')
+          source = path.read_text()
+          old = '''    from services.recovery import run_recovery_checks\n    result = await run_recovery_checks()'''
+          new = '''    result = await transfer_service.reconciliation.recover()'''
+          if source.count(old) != 1:
+              raise SystemExit(f'expected one recovery wrapper route, found {source.count(old)}')
+          path.write_text(source.replace(old, new, 1))
+          PY
+
           python - <<'PY'
           from pathlib import Path
           path = Path('tools/v106_direct_cleanup.py')
@@ -83,6 +98,13 @@ jobs:
           if count != 1:
               raise SystemExit(f'expected one stale dashboard input regression, found {count}')
           scope.write_text(source)
+
+          contracts = Path('backend/tests/test_v106_audit_contracts.py')
+          source = contracts.read_text()
+          addition = '''\n\ndef test_recovery_route_survives_without_transitional_wrapper():\n    root = Path(__file__).resolve().parents[1]\n    routes = (root / "api" / "routes.py").read_text()\n    block = routes.split('async def run_recovery():', 1)[1].split('# ──', 1)[0]\n    assert 'transfer_service.reconciliation.recover()' in block\n    assert 'services.recovery' not in block\n    assert not (root / "services" / "recovery.py").exists()\n'''
+          if 'test_recovery_route_survives_without_transitional_wrapper' in source:
+              raise SystemExit('recovery boundary contract already present unexpectedly')
+          contracts.write_text(source.rstrip() + addition + '\n')
           PY
 
       - name: Install validation tools

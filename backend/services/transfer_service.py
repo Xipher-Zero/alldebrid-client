@@ -26,7 +26,7 @@ class TransferService:
         self.provider = ProviderGateway(materialization_engine)
         self.ownership = OwnershipLedger(materialization_engine)
         self.aria2 = Aria2Gateway(materialization_engine, self.ownership)
-        self.state_machine = TransferStateMachine(materialization_engine)
+        self.state_machine = TransferStateMachine(materialization_engine, self.repository)
         self.control = TransferControlService(materialization_engine, self.repository, self.state_machine)
         self.state_machine.bind_control(self.control)
         self.dispatch = DispatchCoordinator(materialization_engine, self.control, self.ownership)

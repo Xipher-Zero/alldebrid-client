@@ -70,7 +70,6 @@ class ReconciliationService:
         if self.engine.download_client_name() != "aria2":
             return
         await self.control.ensure_initialized()
-        globally_paused = bool(get_settings().paused)
         active_token = _cycle_active.set(True)
         try:
             async with self.engine._aria2_state_lock:
@@ -84,6 +83,11 @@ class ReconciliationService:
                     if snapshot_token is not None:
                         _cycle_snapshot.reset(snapshot_token)
 
+                # Pause All persists intent before it waits for this same state
+                # lock. Read the operator gate only after the lock is ours and
+                # after status reconciliation, otherwise a cycle that was
+                # queued behind Pause All could act on a stale pre-lock value.
+                globally_paused = bool(get_settings().paused)
                 if globally_paused:
                     async with async_timer("reconcile.global_pause"):
                         await self.control.enforce_global_pause()

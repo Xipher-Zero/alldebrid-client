@@ -34,6 +34,7 @@ jobs:
           python tools/v105_refactor.py
           python tools/v105_refactor_fix1.py
           python tools/v105_refactor_fix3.py
+          python tools/v105_refactor_fix4.py
 
       - name: Install test and security dependencies
         run: |
@@ -67,10 +68,11 @@ jobs:
       - name: Architecture residue audit
         run: |
           set -euo pipefail
-          ! grep -RniE 'asyncpg|postgresql|DB_TYPE=postgres' backend --exclude-dir=tests
+          ! grep -RniE 'asyncpg|postgresql|_is_postgres|postgres_(host|port|db|user|password|schema|ssl|application_name)|/admin/migrate|test-postgres' backend frontend --exclude-dir=tests
+          ! grep -Rni 'transfer_service\.aria2()' backend --exclude-dir=tests
           ! grep -Rni 'allow_origins=\["\*"\]' backend/main.py
           ! grep -RniE 'self\.manager\.[A-Za-z0-9_]+\s*=' backend/services/transfer_control.py
-          ! grep -RniE 's-postgres_|btn-test-postgres|PostgreSQL \(external\)|symlink-settings' frontend/static/app.js
+          ! grep -RniE 's-postgres_|btn-test-postgres|PostgreSQL \(external\)|symlink-settings' frontend
           test ! -e backend/db/migration.py
           test ! -e backend/services/global_pause_semantics.py
           test ! -e backend/services/pause_parent_status.py
@@ -91,11 +93,19 @@ jobs:
             fi
           done < .v105_changed_paths
 
-          git rm -- tools/v105_refactor.py tools/v105_refactor_fix1.py tools/v105_refactor_fix2.py tools/v105_refactor_fix3.py .github/workflows/v105-architecture.yml
+          git rm -- \
+            tools/v105_refactor.py \
+            tools/v105_refactor_fix1.py \
+            tools/v105_refactor_fix2.py \
+            tools/v105_refactor_fix3.py \
+            tools/v105_refactor_fix4.py \
+            .github/workflows/v105-architecture.yml \
+            .github/workflows/v105-pytest-diagnostics.yml
+          rm -f .v105_changed_paths
           git diff --cached --check
           git status --short
 
-      - name: Commit validated architecture
+      - name: Commit validated architecture locally
         id: commit
         shell: bash
         run: |
@@ -104,11 +114,10 @@ jobs:
           final_sha="$(git rev-parse HEAD)"
           short_sha="$(git rev-parse --short=7 HEAD)"
           version="$(tr -d '\r\n' < VERSION)"
+          test "$version" = "1.0.5"
           echo "sha=$final_sha" >> "$GITHUB_OUTPUT"
           echo "short=$short_sha" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          git push origin HEAD:work/v1.0.5-architecture
-          git push origin HEAD:staging/v1.0.5-architecture
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd
@@ -206,3 +215,11 @@ jobs:
           cache-to: type=gha,mode=max
           provenance: mode=max
           sbom: true
+
+      - name: Promote validated candidate to work and staging
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ steps.commit.outputs.sha }}"
+          git push origin HEAD:work/v1.0.5-architecture
+          git push origin HEAD:staging/v1.0.5-architecture

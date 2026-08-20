@@ -133,6 +133,13 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+
+@app.exception_handler(PermissionError)
+async def permission_error_handler(_request: Request, _exc: PermissionError):
+    """Do not turn service-layer authorization failures into HTTP 500 responses."""
+    return Response(content="Forbidden", status_code=403)
+
+
 _cors_origins = [origin.strip() for origin in os.getenv("CORS_ORIGINS", "").split(",") if origin.strip()]
 if _cors_origins:
     app.add_middleware(

@@ -345,11 +345,13 @@ def test_pass3_polling_noops_do_not_refresh_transfer_freshness():
     assert "stable provider polling" in provider.lower()
 
     aggregate = (REPO_ROOT / "backend/services/transfer_state_machine.py").read_text()
+    repository = (REPO_ROOT / "backend/services/transfer_repository.py").read_text()
 
     assert "if progress != current_progress or status != current_status:" in aggregate
     assert "if int(progress) != int(current_progress) or status != current_status:" in aggregate
-    assert "await db.executemany(" in aggregate
     assert "updates.append((progress, status, transfer_id))" in aggregate
+    assert "self.repository.persist_parent_progress(updates)" in aggregate
+    assert "await db.executemany(" in repository
 
     sync = manager.split(
         "async def sync_aria2_downloads", 1

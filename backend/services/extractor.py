@@ -306,32 +306,19 @@ def _extract_rar_to(archive: Path, dest: Path) -> None:
     candidates = [""] + passwords if passwords else [""]
 
     for binary in ("7z", "7za", "7zz"):
-        if _tool_available(binary):
-            _preflight_7z(archive, binary, candidates)
-            for pw in candidates:
-                cmd = [binary, "x", "-mmt=1", str(archive), f"-o{dest}", "-y"]
-                if pw:
-                    cmd.insert(-1, f"-p{pw}")
-                rc, _out = _run_tool(cmd)
-                if rc == 0:
-                    return
-            break
-
-    if _tool_available("unrar"):
+        if not _tool_available(binary):
+            continue
+        _preflight_7z(archive, binary, candidates)
         for pw in candidates:
-            cmd = ["unrar", "x", "-y", str(archive), str(dest) + "/"]
+            cmd = [binary, "x", "-mmt=1", str(archive), f"-o{dest}", "-y"]
             if pw:
-                cmd.insert(2, f"-p{pw}")
+                cmd.insert(-1, f"-p{pw}")
             rc, _out = _run_tool(cmd)
             if rc == 0:
                 return
+        raise RuntimeError(f"{binary} failed to extract {archive.name}")
 
-    if _tool_available("unrar-free"):
-        rc, _out = _run_tool(["unrar-free", "-x", str(archive), str(dest) + "/"])
-        if rc == 0:
-            return
-
-    raise RuntimeError("No RAR extraction tool available (p7zip-full or unrar-free required)")
+    raise RuntimeError("Safe RAR extraction requires a 7z-compatible binary")
 
 
 def _extract_rar(archive: Path, dest: Path) -> None:

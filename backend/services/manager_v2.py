@@ -21,6 +21,7 @@ from services.alldebrid import AllDebridAPIError, AllDebridService, flatten_file
 from services.aria2 import Aria2ConnectionError, Aria2DownloadStatus, Aria2RPCError, Aria2Service
 from services.aria2_runtime import aria2_global_options, effective_rpc_config, is_builtin_mode
 from services.extractor import archive_paths_from_downloads, get_extractor
+from services.event_bus import publish
 from services.notifications import NotificationService
 from services.torrent_state import (
     TorrentStatus,
@@ -756,8 +757,7 @@ class TorrentManager:
         progress: float,
     ) -> None:
         try:
-            from api.routes import _sse_broadcast
-            await _sse_broadcast(
+            await publish(
                 "torrent_updated",
                 {
                     "id": torrent_id,
@@ -769,7 +769,7 @@ class TorrentManager:
             )
         except Exception as exc:
             logger.debug(
-                "Direct-link SSE broadcast failed for transfer %s: %s",
+                "Direct-link event publication failed for transfer %s: %s",
                 torrent_id,
                 exc,
             )

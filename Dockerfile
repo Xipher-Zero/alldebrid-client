@@ -16,8 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     aria2 \
     curl \
     gosu \
-    p7zip-full \
-    unrar-free && rm -rf /var/lib/apt/lists/*
+    p7zip-full && rm -rf /var/lib/apt/lists/*
 
 # Python deps
 COPY backend/requirements.txt .

@@ -18,6 +18,14 @@ def test_state_machine_does_not_import_http_layer():
     assert "from services.event_bus import publish" in source
 
 
+def test_state_machine_uses_repository_instead_of_database_layer():
+    source = (Path(__file__).resolve().parents[1] / "services" / "transfer_state_machine.py").read_text()
+    assert "from db.database" not in source
+    assert "get_db(" not in source
+    assert "self.repository.parent_progress_rows()" in source
+    assert "self.repository.persist_parent_progress(updates)" in source
+
+
 @pytest.mark.asyncio
 async def test_external_gateway_rejects_foreign_gid(monkeypatch):
     import services.aria2_gateway as gateway_module

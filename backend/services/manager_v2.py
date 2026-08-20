@@ -20,7 +20,7 @@ from core.logging_utils import sanitize_exception, sanitize_log_value
 import aiosqlite  # noqa: F401 — used by tests via unittest.mock.patch
 from db.database import get_db
 from services.alldebrid import AllDebridAPIError, AllDebridService, flatten_files
-from services.aria2 import Aria2ConnectionError, Aria2RPCError, Aria2Service
+from services.aria2 import Aria2ConnectionError, Aria2DownloadStatus, Aria2RPCError, Aria2Service
 from services.aria2_runtime import aria2_global_options, effective_rpc_config, is_builtin_mode
 from services.extractor import archive_paths_from_downloads, get_extractor
 from services.notifications import NotificationService
@@ -3745,10 +3745,6 @@ class TorrentManager:
 
         return all_downloads
 
-        logger.info(
-            "Startup aria2 reconciliation: %d file(s) checked, %d finalized, %d reset",
-            len(rows), len(touched), len(reset_torrents),
-        )
 
     async def _engine_update_aria2_parent_progress(self, all_downloads=None):
         """Aggregate per-file aria2 progress into each active parent torrent.

@@ -2110,7 +2110,6 @@ class TorrentManager:
         # longer generates a write + broadcast cycle merely to say nothing changed.
         if visible_changed:
             try:
-                from api.routes import _sse_broadcast
                 progress_item = {
                     "id": row["id"],
                     "status": persisted_status,
@@ -2118,7 +2117,7 @@ class TorrentManager:
                     "progress": persisted_progress,
                     "status_changed": status_changed,
                 }
-                await _sse_broadcast(
+                await publish(
                     "torrent_updated",
                     {
                         **progress_item,
@@ -3840,8 +3839,7 @@ class TorrentManager:
         # SSE: aggregate aria2 progress update
         if broadcast_needed:
             try:
-                from api.routes import _sse_broadcast
-                await _sse_broadcast(
+                await publish(
                     "torrent_updated",
                     {
                         "progress_only": not any(
@@ -4003,8 +4001,7 @@ class TorrentManager:
 
                 if status_changed:
                     try:
-                        from api.routes import _sse_broadcast
-                        await _sse_broadcast(
+                        await publish(
                             "torrent_updated",
                             {
                                 "id": torrent_id,
@@ -4353,13 +4350,12 @@ class TorrentManager:
         await self._log_event(torrent_id, "info", "Finished")
         # Push live update to SSE subscribers
         try:
-            from api.routes import _sse_broadcast
-            await _sse_broadcast("torrent_updated", {
+            await publish("torrent_updated", {
                 "id": torrent_id,
                 "status": "completed",
                 "name": name,
             })
-            await _sse_broadcast("stats_changed", {})
+            await publish("stats_changed", {})
         except Exception:
             pass
 
@@ -4531,13 +4527,12 @@ class TorrentManager:
             )
         # Push live update to SSE subscribers
         try:
-            from api.routes import _sse_broadcast
-            await _sse_broadcast("torrent_updated", {
+            await publish("torrent_updated", {
                 "id": torrent_id,
                 "status": "error",
                 "name": str(row["name"] if row else ""),
             })
-            await _sse_broadcast("stats_changed", {})
+            await publish("stats_changed", {})
         except Exception as exc:
             logger.debug(
                 "Unable to broadcast missing-provider state for transfer %s: %s",
@@ -4850,13 +4845,12 @@ class TorrentManager:
             await db.commit()
 
         try:
-            from api.routes import _sse_broadcast
-            await _sse_broadcast("torrent_updated", {
+            await publish("torrent_updated", {
                 "id": torrent_id,
                 "status": "error",
                 "provider_status": "missing",
             })
-            await _sse_broadcast("stats_changed", {})
+            await publish("stats_changed", {})
         except Exception:
             pass
 

@@ -243,6 +243,8 @@ async def update_check_loop() -> None:
     await asyncio.sleep(300)  # 5 min initial delay
     _last_notified: str = ""
     while True:
+        # Keep a valid backoff even if settings retrieval itself fails.
+        interval_h = 12
         try:
             cfg = get_settings()
             interval_h = max(0, _coerce_int_setting(

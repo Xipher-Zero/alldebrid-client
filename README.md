@@ -151,7 +151,7 @@ Fork-owned images are published to GHCR.
 Versioned V1 images use the release tag:
 
 ```text
-ghcr.io/xipher-zero/debridpulse:v1.0.0
+ghcr.io/xipher-zero/debridpulse:v1.0.6
 ```
 
 Example:
@@ -169,7 +169,7 @@ docker run -d \
   -v /path/to/debridpulse/config:/app/config \
   -v /path/to/debridpulse/data:/app/data \
   -v /path/to/downloads:/download \
-  ghcr.io/xipher-zero/debridpulse:v1.0.0
+  ghcr.io/xipher-zero/debridpulse:v1.0.6
 ```
 
 Adjust the paths and UID/GID for your system.
@@ -200,7 +200,7 @@ Configure:
 
 ### Extract
 
-Configure optional archive extraction.
+Configure optional archive extraction. DebridPulse enforces per-archive file-count, expanded-size, and compression-ratio limits. External 7z/RAR extraction is performed in an isolated staging directory and validated before files are merged into the download tree.
 
 ### Notifications
 
@@ -334,11 +334,21 @@ The primary implementation areas are:
 backend/
   api/
     routes.py
+    serializers.py
+  core/
+    scheduler.py
   services/
-    alldebrid.py
-    aria2.py
-    aria2_runtime.py
-    manager_v2.py
+    transfer_service.py
+    transfer_repository.py
+    transfer_state_machine.py
+    transfer_control_service.py
+    dispatch_coordinator.py
+    reconciliation_service.py
+    provider_gateway.py
+    aria2_gateway.py
+    ownership_ledger.py
+    extraction_safety.py
+    manager_v2.py        # V1 provider/materialization implementation
   db/
     database.py
 

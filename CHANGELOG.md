@@ -1,5 +1,51 @@
 # Changelog
 
+## [1.0.6] — 2026-08-20
+
+### Corrective architecture and security audit
+
+- Removed the transparent `TransferService.__getattr__` fallback and made application-visible provider, aria2, control, dispatch, reconciliation, extraction, notification, and persistence boundaries explicit.
+- Moved parent state persistence behind `TransferRepository`; `TransferStateMachine` now performs derivation and event publication without importing the database or HTTP layers.
+- Centralized external-aria2 mutation authorization at the gateway so foreign GIDs cannot be paused, resumed, or removed by DebridPulse.
+- Added browser-facing serializers that strip magnets, source/unlocked download URLs, and aria2 request URIs from ordinary API responses.
+- Hardened database wipe with verified transfer quiescence and fail-closed pre-wipe backup requirements.
+- Hardened backup rotation with DebridPulse ownership manifests so unrelated directories under a configured backup root are never recursively removed.
+- Added bounded request-body handling, baseline browser security headers, and retained same-origin mutation checks for Basic Auth browser sessions.
+- Added extraction file-count, expanded-size, and compression-ratio budgets; external 7z/RAR extraction now uses isolated staging plus pre/post validation before merging files into the destination.
+- Moved AllDebrid request rate limiting into the provider networking layer, including multipart uploads.
+- Reduced scheduler authority to one reconciliation loop, made scheduler lifecycle idempotent, and made recursive `/download` ownership repair explicit opt-in instead of startup behavior.
+- Removed the obsolete hidden Runtime Database settings card and synchronized release documentation, compose metadata, API docs paths, and SQLite-only product surfaces.
+
+## [1.0.5] — 2026-08-20
+
+### Architecture and release hardening
+
+- Introduced the explicit V1 service root and component boundaries for provider access, transfer persistence/state/control, dispatch, reconciliation, extraction, notifications, aria2 access, and ownership tracking.
+- Completed the SQLite-only runtime transition and promoted pause-intent and aria2-ownership state to first-class persisted schema.
+- Made live SQLite backups WAL-safe through the SQLite online-backup API and included operational tables in database exports and wipes.
+- Fixed scheduler and notification undefined-name/null-client failures, retained the dedicated added-download webhook, and added an undefined-name CI gate.
+- Added real-path media containment and same-origin mutation protection for authenticated browser sessions.
+- Preserved the v1.0.3/v1.0.4 pause, queue, reconciliation, source-retention, and shared-external-aria2 safety contracts through the architectural refactor.
+
+## [1.0.4] — 2026-08-20
+
+### Performance and reconciliation
+
+- Reused authoritative aria2 snapshots across reconciliation work, reduced redundant RPC/database work, and added hot SQLite indexes and instrumentation for the transfer cycle.
+- Coalesced progress/status updates and preserved incremental SSE behavior instead of forcing full UI refreshes.
+- Preserved external aria2 ownership filtering and safe grandfathering when live DebridPulse jobs exceed a newly lowered concurrency limit.
+- Retained durable selective pause intent, strict operator confirmation, deferred queue refill, and provider source-URL preservation while reducing reconciliation overhead.
+
+## [1.0.3] — 2026-08-20
+
+### Pause/resume reliability
+
+- Added durable selective pause intent distinct from observed aria2 state and strict fresh GID confirmation for operator pause/resume actions.
+- Defined Resume One under Pause All without allowing global pause to be bypassed, and kept no-slot resumed work queued rather than incorrectly user-paused.
+- Added missing-GID confirmation/negative caching so transient RPC/control snapshots cannot trigger destructive recovery.
+- Preserved completed siblings during lost-GID recovery when source URLs are known and retained provider source URLs before generated download URLs replace them.
+- Ensured external aria2 operations remain ownership-scoped and do not mutate unrelated daemon state.
+
 ## [1.0.2] — 2026-08-19
 
 ### Responsiveness

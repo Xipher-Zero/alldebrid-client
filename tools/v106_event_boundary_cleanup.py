@@ -8,8 +8,8 @@ call_token = "_sse_broadcast("
 manager, import_count = re.subn(import_pattern, "", manager)
 if import_count != 6:
     raise RuntimeError(f"expected 6 remaining route imports, found {import_count}")
-if manager.count(call_token) != 6:
-    raise RuntimeError(f"expected 6 remaining SSE calls, found {manager.count(call_token)}")
+if manager.count(call_token) != 9:
+    raise RuntimeError(f"expected 9 remaining SSE calls, found {manager.count(call_token)}")
 manager = manager.replace(call_token, "publish(")
 manager_path.write_text(manager)
 

@@ -21,7 +21,18 @@ TABLES = [
     "download_files",
     "events",
     "stats_snapshots",
+    "transfer_pause_intents",
+    "debridpulse_aria2_owned_gids",
 ]
+
+_TABLE_ORDER = {
+    "torrents": "id",
+    "download_files": "id",
+    "events": "id",
+    "stats_snapshots": "id",
+    "transfer_pause_intents": "torrent_id",
+    "debridpulse_aria2_owned_gids": "gid",
+}
 
 
 def _folder() -> Path:
@@ -65,7 +76,8 @@ async def run_database_backup() -> dict:
     try:
         async with get_db() as db:
             for table in TABLES:
-                rows = await db.fetchall(f"SELECT * FROM {table} ORDER BY id")
+                order_key = _TABLE_ORDER[table]
+                rows = await db.fetchall(f"SELECT * FROM {table} ORDER BY {order_key}")
                 payload["tables"][table] = rows
     except Exception as exc:
         errors.append(f"export: {exc}")
@@ -124,6 +136,8 @@ def list_database_backups() -> list[dict]:
 
 async def wipe_database() -> dict:
     async with get_db() as db:
+        await db.execute("DELETE FROM debridpulse_aria2_owned_gids")
+        await db.execute("DELETE FROM transfer_pause_intents")
         await db.execute("DELETE FROM download_files")
         await db.execute("DELETE FROM events")
         await db.execute("DELETE FROM stats_snapshots")
@@ -136,6 +150,9 @@ async def wipe_database() -> dict:
             logger.debug("sqlite_sequence reset skipped: %s", exc)
         await db.commit()
 
+    # Drop in-memory mirrors only after the durable wipe commits successfully.
+    from services.transfer_service import transfer_service
+    transfer_service.reset_services()
     logger.warning("Database wipe completed")
     return {"ok": True, "wiped_tables": TABLES}
 

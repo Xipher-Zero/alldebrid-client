@@ -27,6 +27,8 @@ class Aria2Gateway:
         return await self.engine.aria2().get_global_options()
 
     async def change_global_options(self, options):
+        if not is_builtin_mode():
+            raise PermissionError("Global aria2 options are read-only in external mode")
         return await self.engine.aria2().change_global_options(options)
 
     async def status(self, gid: str):

@@ -2,12 +2,15 @@
 Database maintenance helpers for explicit database backups and wipe operations.
 
 Backups are exported as JSON snapshots of the authoritative SQLite database.
+Rotation only removes directories carrying a DebridPulse database-backup
+ownership manifest so a shared backup root cannot delete unrelated data.
 """
 from __future__ import annotations
 
 import json
 import logging
 import os
+import re
 import shutil
 from datetime import date, datetime, time, timezone
 from pathlib import Path
@@ -35,6 +38,10 @@ _TABLE_ORDER = {
     "debridpulse_aria2_owned_gids": "gid",
 }
 
+_BACKUP_DIR_RE = re.compile(r"^\d{8}_\d{6}$")
+_MANIFEST_NAME = ".debridpulse-db-backup.json"
+_MANIFEST_KIND = "debridpulse-database-backup"
+
 
 def _chmod_private(path: Path, mode: int) -> None:
     try:
@@ -61,6 +68,35 @@ def _json_default(value):
     if isinstance(value, bytes):
         return value.decode("utf-8", errors="replace")
     raise TypeError(f"Object of type {value.__class__.__name__} is not JSON serializable")
+
+
+def _write_manifest(backup_dir: Path, *, timestamp: str, errors: list[str]) -> None:
+    manifest = backup_dir / _MANIFEST_NAME
+    manifest.write_text(
+        json.dumps(
+            {
+                "kind": _MANIFEST_KIND,
+                "timestamp": timestamp,
+                "errors": list(errors),
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    _chmod_private(manifest, 0o600)
+
+
+def _managed_backup_dir(path: Path) -> bool:
+    if not path.is_dir() or not _BACKUP_DIR_RE.fullmatch(path.name):
+        return False
+    manifest = path / _MANIFEST_NAME
+    if not manifest.is_file():
+        return False
+    try:
+        payload = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return isinstance(payload, dict) and payload.get("kind") == _MANIFEST_KIND
 
 
 async def run_database_backup() -> dict:
@@ -94,8 +130,18 @@ async def run_database_backup() -> dict:
 
     json_path = backup_dir / "database.json"
     if not errors:
-        json_path.write_text(json.dumps(payload, indent=2, default=_json_default), encoding="utf-8")
-        _chmod_private(json_path, 0o600)
+        try:
+            json_path.write_text(
+                json.dumps(payload, indent=2, default=_json_default), encoding="utf-8"
+            )
+            _chmod_private(json_path, 0o600)
+        except Exception as exc:
+            errors.append(f"write: {exc}")
+
+    try:
+        _write_manifest(backup_dir, timestamp=ts, errors=errors)
+    except Exception as exc:
+        errors.append(f"manifest: {exc}")
 
     removed = _rotate_old_backups(backup_folder, _keep_days())
     result = {
@@ -117,7 +163,7 @@ def _rotate_old_backups(folder: Path, keep_days: int) -> int:
     removed = 0
     cutoff = datetime.now(timezone.utc).timestamp() - (keep_days * 86400)
     for entry in folder.iterdir():
-        if not entry.is_dir():
+        if not _managed_backup_dir(entry):
             continue
         try:
             if entry.stat().st_mtime < cutoff:
@@ -134,14 +180,14 @@ def list_database_backups() -> list[dict]:
         return []
     entries = []
     for d in sorted(folder.iterdir(), reverse=True):
-        if not d.is_dir():
+        if not _managed_backup_dir(d):
             continue
         try:
-            files = [f.name for f in d.iterdir() if f.is_file()]
+            files = [f.name for f in d.iterdir() if f.is_file() and f.name != _MANIFEST_NAME]
             size = sum(f.stat().st_size for f in d.iterdir() if f.is_file())
             entries.append({"name": d.name, "files": files, "size_bytes": size})
-        except Exception:
-            continue
+        except Exception as exc:
+            logger.debug("Database backup dir listing failed for %s: %s", d.name, exc)
     return entries
 
 
@@ -167,26 +213,15 @@ async def wipe_database() -> dict:
     logger.warning("Database wipe completed")
     return {"ok": True, "wiped_tables": TABLES}
 
+
 async def cleanup_old_events(keep_days: int = 30) -> dict:
     """Delete events older than ``keep_days`` days.
 
     IMPORTANT: Only the *events* table is pruned — torrents and download_files
-    are never touched.  Old events are just audit-log entries; their removal
-    does not affect any torrent state, duplicate-prevention logic, or download
-    tracking.  The torrent row (with its ``hash`` UNIQUE constraint and
-    ``status``) is the single source of truth for "has this been downloaded".
-
-    Safe to call repeatedly — idempotent.
-
-    Args:
-        keep_days: How many days of events to keep (default 30).
-                   Events older than this are deleted.  Must be >= 1.
-
-    Returns:
-        dict with ``deleted`` (row count) and ``keep_days``.
+    are never touched. Old events are audit-log entries; their removal does not
+    affect torrent state, duplicate-prevention logic, or download tracking.
     """
     keep_days = max(1, int(keep_days))
-
     cutoff_expr = f"datetime('now', '-{keep_days} days')"
 
     async with get_db() as db:

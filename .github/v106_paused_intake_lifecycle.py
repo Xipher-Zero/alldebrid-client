@@ -184,7 +184,7 @@ def test_deleting_deferred_torrent_purges_stored_payload():
     assert "DELETE FROM deferred_provider_submissions WHERE torrent_id=?" in segment
 '''
 
-write(test_path, tests + append + "\n")
+write(test_path, (tests + append).rstrip() + "\n")
 
 # The exact source changes must be present before CI gets to run.
 manager = read("backend/services/manager_v2.py")

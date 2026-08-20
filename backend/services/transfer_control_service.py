@@ -24,6 +24,12 @@ class TransferControlService:
     async def ensure_initialized(self):
         return await self.coordinator.ensure_initialized()
 
+    def reset_runtime_state(self) -> None:
+        """Drop cached intent state so the next use reloads the authoritative DB."""
+        self.coordinator._pause_intents.clear()
+        self.coordinator._lost_strikes.clear()
+        self.coordinator._initialized = False
+
     def _set_global_paused(self, paused: bool) -> None:
         cfg = get_settings()
         if bool(cfg.paused) == bool(paused):

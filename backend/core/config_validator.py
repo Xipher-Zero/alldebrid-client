@@ -12,6 +12,8 @@ import logging
 import re
 from typing import Any, Dict, List, Tuple
 
+from core.logging_utils import sanitize_log_value
+
 logger = logging.getLogger("alldebrid.config")
 
 
@@ -53,9 +55,6 @@ def _validate(cfg) -> List[Tuple[str, str, Any, Any]]:
         warn("discord_username", "legacy notification identity migrated to DebridPulse",
              cfg.discord_username, "DebridPulse")
 
-    if getattr(cfg, "postgres_application_name", "") == "alldebrid-client":
-        warn("postgres_application_name", "legacy database identity migrated to debridpulse",
-             cfg.postgres_application_name, "debridpulse")
 
     # ── URLs ──────────────────────────────────────────────────────────────────
     for field in ("aria2_url",):
@@ -109,7 +108,6 @@ def _validate(cfg) -> List[Tuple[str, str, Any, Any]]:
         "stats_report_interval_hours":    (0, 168),
         "stats_report_window_hours":      (1, 8760),
         "min_file_size_mb":               (0, 100_000),
-        "postgres_port":                  (1, 65535),
     }
     for field, (lo, hi) in numeric_bounds.items():
         val = getattr(cfg, field, None)
@@ -123,9 +121,6 @@ def _validate(cfg) -> List[Tuple[str, str, Any, Any]]:
             warn(field, f"value {val} above maximum {hi} — clamped", val, hi)
 
     # ── String sanity ─────────────────────────────────────────────────────────
-    if cfg.db_type not in ("sqlite", "postgres"):
-        warn("db_type", f"unknown value '{cfg.db_type}' — reset to sqlite",
-             cfg.db_type, "sqlite")
 
     if cfg.download_client not in ("aria2",):
         warn("download_client", f"unknown value '{cfg.download_client}' — reset to aria2",
@@ -151,32 +146,32 @@ def _validate(cfg) -> List[Tuple[str, str, Any, Any]]:
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def validate_and_sanitise(cfg) -> Any:
-    """
-    Validate cfg (AppSettings instance), log all issues, and return a sanitised copy.
-    Fields with a fixed_value are corrected; fields without are only warned about.
-    """
-    from core.config import AppSettings  # avoid circular import
+    """Validate settings without ever echoing configured secrets to logs."""
+    from core.config import AppSettings
 
     issues = _validate(cfg)
     if not issues:
         logger.info("Config validation: OK — no issues found")
         return cfg
 
+    sensitive = {
+        "alldebrid_api_key", "aria2_secret", "discord_webhook_url",
+        "discord_webhook_added", "stats_report_webhook_url",
+        "auth_password", "extraction_password",
+    }
     fixes: Dict[str, Any] = {}
     for field, msg, bad, fixed in issues:
+        shown = "<redacted>" if field in sensitive else sanitize_log_value(bad, max_length=160)
         if fixed is not None:
-            logger.warning("Config [%s]: %s  (was: %r → now: %r)", field, msg, bad, fixed)
+            logger.warning("Config [%s]: %s (was: %s -> corrected)", field, msg, shown)
             fixes[field] = fixed
         else:
-            logger.warning("Config [%s]: %s  (value: %r)", field, msg, bad)
+            logger.warning("Config [%s]: %s (value: %s)", field, msg, shown)
 
     if not fixes:
         return cfg
-
-    # Apply fixes
     data = cfg.model_dump()
     data.update(fixes)
     sanitised = AppSettings(**{k: v for k, v in data.items() if k in AppSettings.model_fields})
-    logger.info("Config validation: %d issue(s) found, %d field(s) corrected",
-                len(issues), len(fixes))
+    logger.info("Config validation: %d issue(s) found, %d field(s) corrected", len(issues), len(fixes))
     return sanitised

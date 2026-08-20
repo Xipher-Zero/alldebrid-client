@@ -54,8 +54,8 @@ async def run_backup() -> dict:
 
     # 2. SQLite database
     try:
-        from db.database import DB_PATH, _is_postgres
-        if not _is_postgres() and DB_PATH.exists():
+        from db.database import DB_PATH
+        if DB_PATH.exists():
             shutil.copy2(DB_PATH, backup_dir / DB_PATH.name)
             backed_up.append(DB_PATH.name)
     except Exception as e:

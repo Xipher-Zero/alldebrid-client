@@ -22,7 +22,6 @@ anyio==4.13.0
     # via
     #   starlette
     #   watchfiles
-asyncpg==0.31.0
     # via -r backend/requirements.in
 attrs==26.1.0
     # via aiohttp

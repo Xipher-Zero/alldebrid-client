@@ -1,7 +1,7 @@
 """
 Comprehensive statistics and reporting module.
 
-SQLite/PostgreSQL compatible — all queries go through _DbConnection._adapt().
+SQLite-backed — all queries go through the shared database wrapper.
 Per-table time filters use the correct timestamp column for each table:
   torrents:       created_at
   download_files: updated_at  (has no created_at)

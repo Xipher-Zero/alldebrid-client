@@ -2,7 +2,7 @@
 REST API routes for DebridPulse.
 
 Conventions:
-- All DB access uses get_db() (supports both SQLite and PostgreSQL).
+- All DB access uses get_db() against the authoritative SQLite store.
 - Pydantic models for request bodies are defined inline.
 - No inline `import` statements — all imports are at module level.
 """
@@ -31,7 +31,7 @@ from core.config import (
 from core.config_validator import validate_and_sanitise
 from core.logging_utils import sanitize_exception, sanitize_log_value
 from core.version import normalize_version_tag, read_version
-from db.database import DB_PATH, _is_postgres, get_db
+from db.database import DB_PATH, get_db
 
 
 def _sanitize_error(exc: Exception) -> str:
@@ -47,55 +47,19 @@ def _sanitize_error(exc: Exception) -> str:
 
 # ── SQL dialect helpers ────────────────────────────────────────────────────────
 def _sql_now_minus(interval: str) -> str:
-    """Return a SQL expression for (NOW - interval) that works on both SQLite and PostgreSQL.
-
-    interval examples: '1 hour', '1 day', '7 days', '30 days', '1 year', '90 days'
-    """
-    if _is_postgres():
-        return f"NOW() - INTERVAL '{interval}'"
-    # SQLite: rewrite '1 hour' -> '-1 hour', '7 days' -> '-7 days', etc.
     parts = interval.split()
     n, unit = parts[0], parts[1]
     return f"datetime('now','-{n} {unit}')"
 
 
 def _sql_strftime(fmt: str, field: str) -> str:
-    """Return a SQL date-format expression for the given field.
-
-    fmt uses strftime-style placeholders: %H, %M, %Y, %m, %d
-
-    For PostgreSQL, literal text in the format string (e.g. ':00') must be
-    quoted with double-quotes inside the TO_CHAR format string, because
-    digits like '0' are format codes in PostgreSQL TO_CHAR (unlike strftime).
-    """
-    if _is_postgres():
-        # Map strftime codes -> TO_CHAR codes, then quote any remaining literal text
-        pg_fmt = (fmt
-                  .replace("%Y", "YYYY")
-                  .replace("%m", "MM")
-                  .replace("%d", "DD")
-                  .replace("%H", "HH24")
-                  .replace("%M", "MI"))
-        # Any remaining non-PG-code characters (like ':00') must be wrapped in
-        # double-quotes so PostgreSQL treats them as literals, not format codes.
-        # Split on known PG format codes and re-join with quoted literals.
-        import re as _re
-        parts = _re.split(r"(YYYY|MM|DD|HH24|MI|SS)", pg_fmt)
-        quoted = "".join(
-            part if part in ("YYYY", "MM", "DD", "HH24", "MI", "SS") else (
-                '"' + part + '"' if part else ""
-            )
-            for part in parts
-        )
-        return f"TO_CHAR({field}, '{quoted}')"
     return f"strftime('{fmt}', {field})"
 
 
 def _sql_date(field: str) -> str:
-    """Return DATE(field) — same syntax on both SQLite and PostgreSQL."""
     return f"DATE({field})"
 
-from services.manager_v2 import manager
+from services.transfer_service import transfer_service
 from services.aria2_runtime import runtime as aria2_runtime
 from services.aria2 import aria2_download_to_dict
 
@@ -159,14 +123,26 @@ def _is_public_url(url: str) -> bool:
 
 
 # ── Settings ───────────────────────────────────────────────────────────────────
+_SECRET_SETTINGS = {
+    "alldebrid_api_key", "aria2_secret", "discord_webhook_url",
+    "discord_webhook_added", "stats_report_webhook_url",
+    "auth_password", "extraction_password",
+}
+
+
+def _public_settings(settings: AppSettings) -> dict:
+    data = settings.model_dump()
+    for field in _SECRET_SETTINGS:
+        if field in data:
+            data[f"{field}_configured"] = bool(str(data.get(field) or "").strip())
+            data[field] = ""
+    data["database_backend"] = "sqlite"
+    return data
+
 
 @router.get("/settings")
 async def get_settings_ep():
-    data = get_settings().model_dump()
-    env_db_type = os.getenv("DB_TYPE", "").strip()
-    if env_db_type in ("sqlite", "postgres"):
-        data["_db_type_locked"] = True
-    return data
+    return _public_settings(get_settings())
 
 
 @router.get("/health")
@@ -231,42 +207,29 @@ async def version_check():
 @router.put("/settings")
 async def update_settings(new: AppSettings):
     previous = get_settings()
-    env_db_type = os.getenv("DB_TYPE", "").strip()
-    if env_db_type in ("sqlite", "postgres"):
-        new = new.model_copy(update={"db_type": env_db_type})
-    clean = validate_and_sanitise(new)
-    # ── Sync derived fields before saving ───────────────────────────────────
-    # max_concurrent_downloads is the application-level source of truth for
-    # ADC-owned parallel downloads. Keep the dispatcher field in sync without
-    # treating it as authority over a shared external aria2 daemon.
+    merged = new.model_dump()
+    for field in _SECRET_SETTINGS:
+        if field in merged and not str(merged.get(field) or "").strip():
+            merged[field] = getattr(previous, field, "")
+    clean = validate_and_sanitise(AppSettings(**merged))
     if getattr(clean, "max_concurrent_downloads", None) is not None:
-        try:
-            clean = clean.model_copy(update={
-                "aria2_max_active_downloads": clean.max_concurrent_downloads
-            })
-        except Exception as _e:
-            logger.debug("Could not sync aria2_max_active_downloads: %s", _e)
+        clean = clean.model_copy(update={"aria2_max_active_downloads": clean.max_concurrent_downloads})
     save_settings(clean)
     apply_settings(clean)
-    manager.reset_services()
+    transfer_service.reset_services()
     if getattr(clean, "aria2_mode", "external") == "builtin":
-        if (
-            getattr(previous, "aria2_mode", "external") == "builtin"
-            and getattr(previous, "aria2_builtin_port", 6800) != getattr(clean, "aria2_builtin_port", 6800)
-        ):
+        if (getattr(previous, "aria2_mode", "external") == "builtin"
+                and getattr(previous, "aria2_builtin_port", 6800) != getattr(clean, "aria2_builtin_port", 6800)):
             await aria2_runtime.restart()
         else:
             await aria2_runtime.ensure_started()
-    elif getattr(previous, "aria2_mode", "external") == "builtin":
-        await aria2_runtime.stop()
-    if getattr(clean, "aria2_mode", "external") == "builtin":
         try:
-            await manager.apply_aria2_memory_tuning()
+            await transfer_service.apply_aria2_memory_tuning()
         except Exception as exc:
             logger.warning("Could not apply aria2 memory settings immediately: %s", exc)
-    data = clean.model_dump()
-    if env_db_type in ("sqlite", "postgres"):
-        data["_db_type_locked"] = True
+    elif getattr(previous, "aria2_mode", "external") == "builtin":
+        await aria2_runtime.stop()
+    data = _public_settings(clean)
     data["ok"] = True
     return data
 
@@ -288,7 +251,8 @@ async def upload_avatar(request: Request, file: UploadFile = File(...)):
     if ct not in ALLOWED:
         raise HTTPException(400, f"Unsupported type '{ct}'. Allowed: PNG, JPG, GIF, WebP")
 
-    data = await file.read()
+    data = await file.read(MAX_BYTES + 1)
+    await file.close()
     if len(data) > MAX_BYTES:
         raise HTTPException(413, f"File too large ({len(data)//1024} KB). Limit: 4 MB")
 
@@ -368,7 +332,7 @@ async def test_alldebrid():
 @router.post("/settings/test-aria2")
 async def test_aria2():
     try:
-        result = await manager.test_aria2()
+        result = await transfer_service.test_aria2()
         return {"ok": True, **result}
     except Exception as e:
         raise HTTPException(502, _sanitize_error(e))
@@ -377,7 +341,7 @@ async def test_aria2():
 @router.post("/settings/aria2-housekeeping")
 async def run_aria2_housekeeping_ep():
     try:
-        return await manager.run_aria2_housekeeping()
+        return await transfer_service.run_aria2_housekeeping()
     except Exception as e:
         raise HTTPException(502, _sanitize_error(e))
 
@@ -389,8 +353,8 @@ async def aria2_runtime_status():
     speed_stat = {"download_speed": 0, "upload_speed": 0, "active": 0}
     try:
         if status.get("running"):
-            diagnostics = await manager._aria2_get_memory_diagnostics()
-            speed_stat  = await manager.aria2().get_global_stat()
+            diagnostics = await transfer_service._aria2_get_memory_diagnostics()
+            speed_stat  = await transfer_service.aria2.get_global_stat()
     except Exception as exc:
         diagnostics = {"error": str(exc)}
     return {**status, "diagnostics": diagnostics, **speed_stat}
@@ -407,13 +371,13 @@ async def aria2_global_stat():
             "ok": True,
             "mode": "builtin",
             "external_control": False,
-            **await manager.aria2().get_global_stat(),
+            **await transfer_service.aria2.get_global_stat(),
         }
 
     # External aria2 may be shared with unrelated applications. Observe only
     # jobs whose GIDs DebridPulse has recorded as its own.
-    active_downloads = await manager.aria2().get_active()
-    owned_active = await manager._aria2_owned_downloads(active_downloads)
+    active_downloads = await transfer_service.aria2.get_active()
+    owned_active = await transfer_service.owned_aria2_downloads(active_downloads)
 
     return {
         "ok": True,
@@ -432,21 +396,21 @@ async def aria2_global_stat():
 @router.post("/aria2/runtime/start")
 async def aria2_runtime_start():
     status = await aria2_runtime.start()
-    manager.reset_services()
+    transfer_service.reset_services()
     return status
 
 
 @router.post("/aria2/runtime/stop")
 async def aria2_runtime_stop():
     status = await aria2_runtime.stop()
-    manager.reset_services()
+    transfer_service.reset_services()
     return status
 
 
 @router.post("/aria2/runtime/restart")
 async def aria2_runtime_restart():
     status = await aria2_runtime.restart()
-    manager.reset_services()
+    transfer_service.reset_services()
     return status
 
 
@@ -454,7 +418,7 @@ async def aria2_runtime_restart():
 async def aria2_runtime_apply():
     try:
         await aria2_runtime.apply_options()
-        result = await manager.run_aria2_housekeeping()
+        result = await transfer_service.run_aria2_housekeeping()
         return {"ok": True, **result}
     except Exception as e:
         raise HTTPException(502, _sanitize_error(e))
@@ -464,11 +428,11 @@ async def aria2_runtime_apply():
 async def aria2_downloads():
     cfg = get_settings()
     try:
-        downloads = await manager.aria2().get_all(
+        downloads = await transfer_service.aria2.get_all(
             getattr(cfg, "aria2_waiting_window", 100),
             getattr(cfg, "aria2_stopped_window", 100),
         )
-        downloads = await manager._aria2_owned_downloads(downloads)
+        downloads = await transfer_service.owned_aria2_downloads(downloads)
     except Exception as e:
         raise HTTPException(502, _sanitize_error(e))
     items = [aria2_download_to_dict(download) for download in downloads]
@@ -496,44 +460,12 @@ async def aria2_download_action(gid: str, action: str):
     if action not in {"pause", "resume", "remove"}:
         raise HTTPException(400, "Unsupported aria2 action")
     try:
-        result = await manager.control_aria2_gid(gid, action)
+        result = await transfer_service.control_aria2_gid(gid, action)
         return {"ok": True, "gid": gid, "action": action, **result}
     except PermissionError as e:
         raise HTTPException(403, _sanitize_error(e))
     except Exception as e:
         raise HTTPException(502, _sanitize_error(e))
-
-
-@router.post("/settings/test-postgres")
-async def test_postgres():
-    """Tests the PostgreSQL connection with current settings."""
-    cfg = get_settings()
-    if getattr(cfg, "db_type", "sqlite") != "postgres":
-        raise HTTPException(400, "PostgreSQL is not configured as the database type")
-    try:
-        import asyncpg
-    except ImportError:
-        raise HTTPException(500, "asyncpg is not installed — run: pip install asyncpg")
-    try:
-        ssl_val = "require" if cfg.postgres_ssl else "disable"
-        dsn = (
-            f"postgresql://{cfg.postgres_user}:{cfg.postgres_password}"
-            f"@{cfg.postgres_host}:{cfg.postgres_port}/{cfg.postgres_db}"
-            f"?sslmode={ssl_val}"
-        )
-        conn = await asyncpg.connect(dsn, timeout=10)
-        version = await conn.fetchval("SELECT version()")
-        await conn.close()
-        return {
-            "ok":       True,
-            "host":     cfg.postgres_host,
-            "port":     cfg.postgres_port,
-            "database": cfg.postgres_db,
-            "user":     cfg.postgres_user,
-            "version":  (version or "").split(",")[0],
-        }
-    except Exception as e:
-        raise HTTPException(502, f"PostgreSQL connection failed: {_sanitize_error(e)}")
 
 
 # ── Torrents ───────────────────────────────────────────────────────────────────
@@ -598,7 +530,7 @@ async def add_magnet(body: dict):
     if not magnet:
         raise HTTPException(400, "magnet is required")
     try:
-        row = await manager.add_magnet_direct(magnet, source="manual")
+        row = await transfer_service.add_magnet_direct(magnet, source="manual")
         return row
     except ValueError as exc:
         raise HTTPException(400, _sanitize_error(exc))
@@ -631,7 +563,7 @@ async def add_torrent_file(file: UploadFile = File(...)):
         raise HTTPException(413, "Torrent file exceeds the 16 MB upload limit")
 
     try:
-        return await manager.add_torrent_file_direct(
+        return await transfer_service.add_torrent_file_direct(
             data,
             filename,
             source="manual_file",
@@ -653,7 +585,7 @@ async def add_debrid_links(body: dict):
     else:
         raise HTTPException(400, "links must be a list or newline-separated string")
     try:
-        return await manager.add_direct_links(links)
+        return await transfer_service.add_direct_links(links)
     except ValueError as exc:
         raise HTTPException(400, _sanitize_error(exc))
     except Exception as exc:
@@ -675,7 +607,7 @@ async def check_torrent_duplicate(body: dict):
 
 @router.post("/torrents/import-existing")
 async def import_existing():
-    results = await manager.import_existing_magnets()
+    results = await transfer_service.import_existing_magnets()
     return {"imported": len(results), "items": results}
 
 
@@ -744,7 +676,7 @@ async def recover_all_ready():
                 reset_count = len(ids)
 
         # Step 2: Import and dispatch all ready AllDebrid magnets.
-        result = await manager.import_existing_magnets()
+        result = await transfer_service.import_existing_magnets()
         started = sum(1 for r in result if r.get("should_queue") and r.get("status") == "ready")
         # Build breakdown for diagnosis
         from collections import Counter
@@ -794,7 +726,7 @@ async def torrent_files_preview(torrent_id: int):
     if not row["alldebrid_id"]:
         raise HTTPException(400, "Torrent has no AllDebrid ID — not ready yet")
     try:
-        files_data = await manager.ad().get_magnet_files([str(row["alldebrid_id"])])
+        files_data = await transfer_service.ad().get_magnet_files([str(row["alldebrid_id"])])
         from services.alldebrid import flatten_files
         for entry in files_data:
             if str(entry.get("id", "")) == str(row["alldebrid_id"]):
@@ -854,7 +786,7 @@ async def get_torrent(torrent_id: int):
 @router.delete("/torrents/{torrent_id}")
 async def delete_torrent(torrent_id: int, from_alldebrid: bool = True):
     try:
-        await manager.delete_torrent(torrent_id, delete_from_ad=from_alldebrid)
+        await transfer_service.delete_torrent(torrent_id, delete_from_ad=from_alldebrid)
         return {"ok": True}
     except ValueError as e:
         raise HTTPException(404, _sanitize_error(e))
@@ -881,7 +813,7 @@ async def retry_torrent(torrent_id: int):
 
     if str(row.get("source") or "") == "direct_link":
         try:
-            return await manager.retry_direct_link_collection(torrent_id)
+            return await transfer_service.retry_direct_link_collection(torrent_id)
         except ValueError as exc:
             raise HTTPException(400, _sanitize_error(exc))
         except Exception as exc:
@@ -910,7 +842,7 @@ async def retry_torrent(torrent_id: int):
             )
             await db.commit()
         try:
-            await manager.add_magnet_direct(magnet, source=str(row.get("source") or "manual"))
+            await transfer_service.add_magnet_direct(magnet, source=str(row.get("source") or "manual"))
         except Exception as exc:
             async with get_db() as db:
                 await db.execute(
@@ -958,7 +890,7 @@ async def retry_torrent(torrent_id: int):
 @router.post("/torrents/{torrent_id}/pause")
 async def pause_torrent(torrent_id: int):
     try:
-        await manager.pause_torrent(torrent_id)
+        await transfer_service.pause_torrent(torrent_id)
         return {"ok": True}
     except Exception as e:
         raise HTTPException(400, _sanitize_error(e))
@@ -967,21 +899,10 @@ async def pause_torrent(torrent_id: int):
 @router.post("/torrents/{torrent_id}/resume")
 async def resume_torrent(torrent_id: int):
     try:
-        await manager.resume_torrent(torrent_id)
-        globally_paused = bool(get_settings().paused)
-        if globally_paused:
-            # An individual Resume means queue processing is active again.
-            # Other parents remain selectively paused; they no longer keep a
-            # hidden global gate over ready successors.
-            cfg = get_settings().model_copy(update={"paused": False})
-            save_settings(cfg)
-            apply_settings(cfg)
-            globally_paused = False
-            await manager.advance_aria2_queue()
-        return {"ok": True, "paused": globally_paused}
+        await transfer_service.resume_torrent(torrent_id)
+        return {"ok": True, "paused": bool(get_settings().paused)}
     except Exception as e:
         raise HTTPException(400, _sanitize_error(e))
-
 
 class LabelUpdate(BaseModel):
     label: str = ""
@@ -1013,14 +934,14 @@ async def bulk_action(body: BulkAction):
         try:
             tid = int(tid)
             if body.action == "delete":
-                await manager.delete_torrent(tid, delete_from_ad=True)
+                await transfer_service.delete_torrent(tid, delete_from_ad=True)
             elif body.action == "retry":
                 async with get_db() as db:
                     transfer = await db.fetchone(
                         "SELECT source FROM torrents WHERE id=?", (tid,)
                     )
                 if transfer and str(transfer.get("source") or "") == "direct_link":
-                    await manager.retry_direct_link_collection(tid)
+                    await transfer_service.retry_direct_link_collection(tid)
                 else:
                     async with get_db() as db:
                         await db.execute(
@@ -1044,9 +965,9 @@ async def bulk_action(body: BulkAction):
                     )
                     await db.commit()
             elif body.action == "pause":
-                await manager.pause_torrent(tid)
+                await transfer_service.pause_torrent(tid)
             elif body.action == "resume":
-                await manager.resume_torrent(tid)
+                await transfer_service.resume_torrent(tid)
             elif body.action == "remove_label":
                 async with get_db() as db:
                     await db.execute(
@@ -1082,7 +1003,7 @@ async def performance_diagnostics():
     return {
         "timers": performance_snapshot(),
         "database": db_runtime_metrics(),
-        "aria2": manager.aria2().rpc_metrics(),
+        "aria2": transfer_service.aria2.rpc_metrics(),
     }
 
 
@@ -1143,13 +1064,7 @@ async def get_stats():
         else None
     )
 
-    env_db = os.getenv("DB_TYPE", "").strip()
-    act_db = getattr(get_settings(), "db_type", "sqlite")
-    db_type = (
-        "sqlite_fallback"
-        if act_db == "sqlite" and env_db == "postgres"
-        else act_db
-    )
+    db_type = "sqlite"
 
     result = {
         "version": read_version(),
@@ -1249,7 +1164,6 @@ async def get_stats_detail(period: str = "all"):
                 f"GROUP BY {_grp} ORDER BY date ASC")
         elif period == "24h":
             # Group and label by hour — both SELECT and GROUP BY use the same expression
-            # to satisfy PostgreSQL's strict grouping rules.
             _grp = _sql_strftime("%H:00", "completed_at")
             daily_completions = await db.fetchall(
                 f"SELECT {_grp} as date, COUNT(*) as count "
@@ -1289,24 +1203,13 @@ async def get_stats_detail(period: str = "all"):
 
 @router.post("/processing/pause")
 async def pause_processing():
-    cfg = get_settings()
-    cfg = cfg.model_copy(update={"paused": True})
-    save_settings(cfg)
-    apply_settings(cfg)
-    result = await manager.pause_all_downloads()
-    return {"ok": True, "paused": True, **result}
-
+    result = await transfer_service.pause_all_downloads()
+    return {"ok": True, "paused": bool(get_settings().paused), **result}
 
 @router.post("/processing/resume")
 async def resume_processing():
-    result = await manager.resume_all_downloads()
-    cfg = get_settings()
-    cfg = cfg.model_copy(update={"paused": False})
-    save_settings(cfg)
-    apply_settings(cfg)
-    await manager.advance_aria2_queue()
-    return {"ok": True, "paused": False, **result}
-
+    result = await transfer_service.resume_all_downloads()
+    return {"ok": True, "paused": bool(get_settings().paused), **result}
 
 # ── Changelog ──────────────────────────────────────────────────────────────────
 
@@ -1355,52 +1258,6 @@ async def get_changelog():
 
 
 # ── Admin ──────────────────────────────────────────────────────────────────────
-
-@router.post("/admin/migrate")
-async def run_migration(req: dict):
-    """Runs a database migration. direction: sqlite_to_postgres | postgres_to_sqlite"""
-    direction = req.get("direction", "")
-    dry_run   = bool(req.get("dry_run", False))
-    force     = bool(req.get("force", False))
-
-    if direction not in ("sqlite_to_postgres", "postgres_to_sqlite"):
-        raise HTTPException(400, f"Unknown direction: {direction!r}")
-
-    cfg = get_settings()
-    try:
-        ssl    = "require" if cfg.postgres_ssl else "disable"
-        pg_dsn = (
-            f"postgresql://{cfg.postgres_user}:{cfg.postgres_password}"
-            f"@{cfg.postgres_host}:{cfg.postgres_port}/{cfg.postgres_db}"
-            f"?sslmode={ssl}"
-        )
-    except Exception as e:
-        raise HTTPException(500, f"PostgreSQL configuration not available: {_sanitize_error(e)}")
-
-    from db.migration import migrate_postgres_to_sqlite, migrate_sqlite_to_postgres
-    try:
-        if direction == "sqlite_to_postgres":
-            result = await migrate_sqlite_to_postgres(DB_PATH, pg_dsn, force=force, dry_run=dry_run)
-        else:
-            result = await migrate_postgres_to_sqlite(pg_dsn, DB_PATH, force=force, dry_run=dry_run)
-    except Exception as e:
-        raise HTTPException(500, f"Migration failed: {_sanitize_error(e)}")
-
-    if not result.success:
-        raise HTTPException(500, result.error or "Migration failed")
-
-    return {
-        "ok":             True,
-        "tables_migrated": result.tables_migrated,
-        "warnings":       result.warnings,
-        "summary":        result.summary(),
-    }
-
-
-@router.get("/admin/migrate/validate")
-async def validate_migration(direction: str = "sqlite_to_postgres"):
-    return await run_migration({"direction": direction, "dry_run": True, "force": False})
-
 
 @router.post("/admin/backup")
 async def trigger_backup():
@@ -1526,7 +1383,7 @@ async def wipe_database_admin(body: dict | None = None):
 
     from services.db_maintenance import wipe_database
     result = await wipe_database()
-    manager.reset_services()
+    transfer_service.reset_services()
     return {**result, "backup": backup_result}
 
 
@@ -1541,7 +1398,7 @@ async def aria2_get_global_options():
     try:
         cfg = get_settings()
         external = getattr(cfg, "aria2_mode", "external") != "builtin"
-        opts = await manager.aria2().get_global_options()
+        opts = await transfer_service.aria2.get_global_options()
         return {
             "ok": True,
             "mode": "external" if external else "builtin",
@@ -1596,7 +1453,7 @@ async def aria2_set_global_options(body: dict):
         raise HTTPException(400, "No valid options provided")
     try:
         if not external:
-            await manager.aria2().change_global_options(options)
+            await transfer_service.aria2.change_global_options(options)
         # Persist so the limits survive an aria2 restart
         if cfg_updates:
             current = load_settings()
@@ -1607,9 +1464,9 @@ async def aria2_set_global_options(body: dict):
         # If max_concurrent_downloads changed, reset the Manager Semaphore so
         # the next _start_download picks up the new limit immediately.
         if "max_concurrent_downloads" in cfg_updates:
-            manager.reset_services()
+            transfer_service.reset_services()
             try:
-                await manager.advance_aria2_queue()
+                await transfer_service.advance_aria2_queue()
             except Exception as exc:
                 logger.debug("aria2 quick slot dispatch skipped: %s", sanitize_exception(exc))
         return {
@@ -1684,15 +1541,15 @@ async def export_stats(hours: int = Query(24, ge=1, le=8760)):
 @router.post("/admin/full-sync")
 async def trigger_full_sync():
     """Manually trigger a full AllDebrid reconciliation (all torrents incl. error/queued)."""
-    from services.manager_v2 import manager
-    updated = await manager.full_alldebrid_sync()
+    from services.transfer_service import transfer_service
+    updated = await transfer_service.full_alldebrid_sync()
     return {"ok": True, "updated": updated, "message": f"{updated} torrents updated"}
 
 
 @router.post("/admin/deep-sync")
 async def trigger_deep_sync():
     t0 = time.monotonic()
-    await manager.deep_sync_aria2_finished()
+    await transfer_service.deep_sync_aria2_finished()
     return {"ok": True, "elapsed_seconds": round(time.monotonic() - t0, 2)}
 
 
@@ -1781,7 +1638,7 @@ async def disk_guard_status():
     Returns free_gb, min_free_gb, and whether the guard is active
     (downloads currently paused due to low disk space).
     """
-    return await manager.check_disk_space_guard()
+    return await transfer_service.check_disk_space_guard()
 
 
 @router.get("/metrics")
@@ -1886,7 +1743,7 @@ async def set_torrent_priority(torrent_id: int, body: dict):
             (priority, torrent_id),
         )
         await db.commit()
-    _sse_broadcast("torrent_updated", {"torrent_id": torrent_id, "priority": priority})
+    await _sse_broadcast("torrent_updated", {"torrent_id": torrent_id, "priority": priority})
     return {"ok": True, "torrent_id": torrent_id, "priority": priority}
 
 
@@ -1942,5 +1799,5 @@ async def cleanup_alldebrid_orphans_endpoint():
     tracked by the local DB (or already marked deleted locally).
     Returns the number of magnets removed.
     """
-    deleted = await manager.cleanup_alldebrid_orphans()
+    deleted = await transfer_service.cleanup_alldebrid_orphans()
     return {"ok": True, "deleted": deleted}

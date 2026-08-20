@@ -19,16 +19,7 @@ class AppSettings(BaseModel):
     log_pretty: bool = False
     log_format: str = "plain"
 
-    # Database
-    db_type: str = "sqlite"
-    postgres_host: str = "localhost"
-    postgres_port: int = 5432
-    postgres_db: str = "debridpulse"
-    postgres_user: str = "debridpulse"
-    postgres_password: str = ""
-    postgres_schema: str = "public"
-    postgres_ssl: bool = False
-    postgres_application_name: str = "debridpulse"
+    # Persistence — SQLite is the only runtime database.
 
     # Download control
     download_folder: str = "/download"
@@ -38,12 +29,7 @@ class AppSettings(BaseModel):
     aria2_max_upload_limit: int = 0    # bytes/s, 0=unlimited
 
     # Download delivery
-    download_client: str = "aria2"  # "aria2" or "symlink"
-    # Symlink downloader: instead of downloading files via aria2, create symlinks
-    # pointing to the AllDebrid CDN unlocked URLs inside symlink_path.
-    # Useful for setups with an rclone AllDebrid mount where the cloud storage is
-    # directly accessible. Leave empty to use the main download_folder.
-    symlink_path: str = ""
+    download_client: str = "aria2"
     aria2_mode: str = "builtin"  # built-in is the default; no extra setup required
     aria2_url: str = "http://127.0.0.1:6800/jsonrpc"
     aria2_secret: str = ""
@@ -216,9 +202,6 @@ _settings: AppSettings = AppSettings()
 
 
 def _build_effective_settings(loaded: dict) -> AppSettings:
-    env_db_type = os.getenv("DB_TYPE", "").strip()
-    if env_db_type:
-        loaded["db_type"] = env_db_type
     return AppSettings(**{k: v for k, v in loaded.items() if k in AppSettings.model_fields})
 
 
@@ -264,10 +247,27 @@ def load_settings() -> AppSettings:
 
 
 def save_settings(s: AppSettings):
+    """Atomically persist configuration with secret-safe filesystem permissions."""
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(CONFIG_PATH.parent, 0o700)
+    except OSError:
+        pass
     data = s.model_dump()
-    with open(CONFIG_PATH, "w") as f:
+    tmp = CONFIG_PATH.with_name(CONFIG_PATH.name + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    try:
+        os.chmod(tmp, 0o600)
+    except OSError:
+        pass
+    os.replace(tmp, CONFIG_PATH)
+    try:
+        os.chmod(CONFIG_PATH, 0o600)
+    except OSError:
+        pass
 
 
 def apply_settings(s: AppSettings):

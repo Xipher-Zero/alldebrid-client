@@ -120,7 +120,7 @@ def test_release_surfaces_do_not_advertise_removed_watch_folder_workflow():
     assert "/app/data/processed" not in release_surfaces
 
 
-def test_v1_does_not_ship_the_broken_internal_postgres_sidecar_mode():
+def test_v1_runtime_database_scope_is_sqlite_only():
     assert not (REPO_ROOT / "docker-compose.postgres.yml").exists()
     surfaces = "\n".join(
         (REPO_ROOT / path).read_text().casefold()
@@ -128,11 +128,12 @@ def test_v1_does_not_ship_the_broken_internal_postgres_sidecar_mode():
             "backend/api/routes.py",
             "backend/core/config.py",
             "frontend/static/app.js",
-            "docs/postgresql.md",
+            "backend/db/database.py",
         )
     )
     assert "postgres_internal" not in surfaces
-    assert "external postgresql" in (REPO_ROOT / "docs/postgresql.md").read_text().casefold()
+    assert "postgresql" not in surfaces
+    assert "asyncpg" not in surfaces
 
 
 def test_direct_link_input_expands_to_five_lines_and_resets_after_submit():
@@ -255,25 +256,35 @@ def test_global_pause_control_exposes_mixed_selective_pause_state():
     resume_route = routes.split("async def resume_processing():", 1)[1].split(
         "# ── Changelog", 1
     )[0]
-    assert "await manager.pause_all_downloads()" in pause_route
-    assert "await manager.resume_all_downloads()" in resume_route
-    assert "await manager.advance_aria2_queue()" in resume_route
+    assert "await transfer_service.pause_all_downloads()" in pause_route
+    assert "await transfer_service.resume_all_downloads()" in resume_route
+    assert "save_settings" not in pause_route
+    assert "apply_settings" not in resume_route
+
+    control_service = (REPO_ROOT / "backend/services/transfer_control_service.py").read_text()
+    assert "self._set_global_paused(True)" in control_service
+    assert "self._set_global_paused(False)" in control_service
+    assert "self.coordinator._schedule_queue()" in control_service
 
     manager = (REPO_ROOT / "backend/services/manager_v2.py").read_text()
     sync_handler = manager.split("async def sync_aria2_downloads(self):", 1)[1].split(
         "async def _reset_torrent_for_redownload", 1
     )[0]
     dispatch_handler = manager.split(
-        "async def _dispatch_pending_aria2_queue", 1
-    )[1].split("async def sync_download_clients", 1)[0]
+        "async def _engine_dispatch_pending_aria2_queue", 1
+    )[1].split("async def _schedule_ready_aria2_parents", 1)[0]
+    ready_handler = manager.split(
+        "async def _schedule_ready_aria2_parents", 1
+    )[1].split("async def _engine_advance_aria2_queue_locked", 1)[0]
+    advance_handler = manager.split(
+        "async def _engine_advance_aria2_queue_locked", 1
+    )[1].split("async def _remove_owned_aria2_gid", 1)[0]
     assert "if self.is_paused()" not in sync_handler.split("all_downloads =", 1)[0]
     assert 'self.download_client_name() != "aria2" or self.is_paused()' in dispatch_handler
-    assert "async def _schedule_ready_aria2_parents" in dispatch_handler
-    assert "status='ready'" in dispatch_handler
-    assert "provider_status='ready'" in dispatch_handler
-    assert "async def _advance_aria2_queue_locked" in dispatch_handler
-    assert "targeted_manual_resume" not in dispatch_handler
-    assert "allow_while_paused" not in dispatch_handler
+    assert "status='ready'" in ready_handler
+    assert "provider_status='ready'" in ready_handler
+    assert "targeted_manual_resume" not in dispatch_handler + ready_handler + advance_handler
+    assert "allow_while_paused" not in dispatch_handler + ready_handler + advance_handler
 
 
 def test_topbar_uses_live_aria2_speed_with_human_download_units():
@@ -317,8 +328,8 @@ def test_topbar_uses_live_aria2_speed_with_human_download_units():
     assert "#aria2-speed-badge.external-control" in styles
 
     assert "async def get_active(self)" in aria2_service
-    assert "owned_active = await manager._aria2_owned_downloads(active_downloads)" in routes
-    assert "downloads = await manager._aria2_owned_downloads(downloads)" in routes
+    assert "owned_active = await transfer_service.owned_aria2_downloads(active_downloads)" in routes
+    assert "downloads = await transfer_service.owned_aria2_downloads(downloads)" in routes
     assert '"external_control": True' in routes
 
 

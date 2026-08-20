@@ -7,7 +7,7 @@ from core.config import get_settings
 from core.logging_utils import sanitize_exception
 from core.performance import async_timer
 from core.version import normalize_version_tag
-from services.manager_v2 import manager
+from services.transfer_service import transfer_service
 from services.reconcile_cycle import reconcile_download_client_cycle
 
 logger = logging.getLogger("alldebrid.scheduler")
@@ -55,19 +55,19 @@ async def sync_status_loop():
     while True:
         try:
             async with async_timer("scheduler.provider_poll"):
-                await manager.sync_alldebrid_status()
+                await transfer_service.sync_alldebrid_status()
         except Exception as e:
             logger.error(f"Status sync error: {e}")
         try:
-            await manager.cleanup_no_peer_errors()
+            await transfer_service.cleanup_no_peer_errors()
         except Exception as e:
             logger.error(f"No-peer cleanup error: {e}")
         try:
-            await manager.cleanup_alldebrid_orphans()
+            await transfer_service.cleanup_alldebrid_orphans()
         except Exception as e:
             logger.debug(f"AllDebrid orphan cleanup error: {e}")
         try:
-            await manager.cleanup_stuck_downloads()
+            await transfer_service.cleanup_stuck_downloads()
         except Exception as e:
             logger.error(f"Stuck download cleanup error: {e}")
         await asyncio.sleep(get_settings().poll_interval_seconds)
@@ -91,7 +91,7 @@ async def full_sync_loop():
             continue
         try:
             async with async_timer("scheduler.provider_inventory"):
-                result = await manager.reconcile_provider_inventory()
+                result = await transfer_service.reconcile_provider_inventory()
             if result.get("imported") or result.get("updated"):
                 logger.info(
                     "Provider inventory: %d imported, %d reconciled from %d item(s)",
@@ -130,7 +130,7 @@ async def deep_sync_loop():
             continue
         await asyncio.sleep(interval_min * 60)
         try:
-            await manager.deep_sync_aria2_finished()
+            await transfer_service.deep_sync_aria2_finished()
         except Exception as e:
             logger.error(f"Deep aria2 sync error: {e}")
 
@@ -160,7 +160,7 @@ async def aria2_housekeeping_loop():
             continue
         await asyncio.sleep(interval_min * 60)
         try:
-            await manager.run_aria2_housekeeping()
+            await transfer_service.run_aria2_housekeeping()
         except Exception as e:
             logger.error(f"aria2 housekeeping error: {e}")
 
@@ -322,16 +322,11 @@ async def events_ttl_loop() -> None:
 
 
 async def recovery_loop():
-    """Auto-recovery: detect and heal stuck states every 5 minutes."""
-    await asyncio.sleep(120)         # wait for full startup before first check
+    """Low-frequency integrity pass through the same reconciliation authority."""
+    await asyncio.sleep(120)
     while True:
         try:
-            from services.recovery import run_recovery_checks
-            result = await run_recovery_checks()
-            if any([result["orphaned_queued_files"],
-                    result["missed_completions"],
-                    result["deadlock_reset"]]):
-                logger.info("recovery: %s", result)
+            await transfer_service.reconciliation.recover()
         except Exception as exc:
             logger.debug("recovery_loop error: %s", exc)
         await asyncio.sleep(300)
@@ -354,7 +349,7 @@ async def disk_guard_loop():
         interval = max(10, int(getattr(cfg, "disk_guard_interval_seconds", 60) or 60))
         if min_gb > 0:
             try:
-                await manager.check_disk_space_guard()
+                await transfer_service.check_disk_space_guard()
             except Exception as e:
                 logger.debug(f"disk_guard check error: {e}")
         await asyncio.sleep(interval)

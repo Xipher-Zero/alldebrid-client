@@ -17,7 +17,7 @@ _SENSITIVE_QUERY_RE = re.compile(
     r"(?i)([?&](?:api[_-]?key|apikey|token|secret|password|pass|key)=)([^&\s\"']+)"
 )
 _AUTH_HEADER_RE = re.compile(r"(?i)(authorization\s*[:=]\s*(?:bearer|token|basic)\s+)[^\s,\"']+")
-_PG_DSN_RE = re.compile(r"(postgres(?:ql)?://[^:\s/@]+:)([^@\s]+)(@)", re.IGNORECASE)
+_CREDENTIAL_URL_RE = re.compile(r"([a-z][a-z0-9+.-]*://[^:\s/@]+:)([^@\s]+)(@)", re.IGNORECASE)
 
 
 def _short_hash(value: str) -> str:
@@ -31,7 +31,7 @@ def sanitize_log_value(value: Any, max_length: int = 300) -> str:
     if value is None:
         return ""
     msg = str(value)
-    msg = _PG_DSN_RE.sub(r"\1<redacted>\3", msg)
+    msg = _CREDENTIAL_URL_RE.sub(r"\1<redacted>\3", msg)
     msg = _AUTH_HEADER_RE.sub(r"\1<redacted>", msg)
     msg = _WEBHOOK_URL_RE.sub("<webhook-url>", msg)
     msg = _MAGNET_RE.sub(lambda m: f"<magnet:{_short_hash(m.group(1).lower())}>", msg)
@@ -62,7 +62,7 @@ def configure_logging(level: str = "INFO", pretty: bool = False, log_format: str
         datefmt="%Y-%m-%d %H:%M:%S",
     )
     logging.getLogger().setLevel(numeric_level)
-    for lib in ("uvicorn.access", "uvicorn.error", "httpx", "aiosqlite", "asyncpg"):
+    for lib in ("uvicorn.access", "uvicorn.error", "httpx", "aiosqlite"):
         logging.getLogger(lib).setLevel(logging.WARNING)
 
 

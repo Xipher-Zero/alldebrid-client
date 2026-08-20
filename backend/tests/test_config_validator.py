@@ -31,11 +31,6 @@ class TestValidateAndSanitise:
         # data URIs are cleared (Discord rejects them; user must configure a valid PNG/JPG URL)
         assert result.discord_avatar_url == ""
 
-    def test_invalid_db_type_reset(self):
-        cfg = make_cfg(db_type="mysql")
-        result = validate_and_sanitise(cfg)
-        assert result.db_type == "sqlite"
-
     def test_invalid_download_client_reset(self):
         cfg = make_cfg(download_client="transmission")
         result = validate_and_sanitise(cfg)
@@ -60,11 +55,6 @@ class TestValidateAndSanitise:
         result = validate_and_sanitise(cfg)
         assert result.alldebrid_agent == "DebridPulse"
         assert result.discord_username == "DebridPulse"
-
-    def test_legacy_postgres_application_identity_migrates_to_debridpulse(self):
-        cfg = make_cfg(postgres_application_name="alldebrid-client")
-        result = validate_and_sanitise(cfg)
-        assert result.postgres_application_name == "debridpulse"
 
     def test_custom_application_identity_is_preserved(self):
         cfg = make_cfg(alldebrid_agent="My downloader", discord_username="My notifier")
@@ -105,27 +95,19 @@ class TestValidateAndSanitise:
         result = validate_and_sanitise(cfg)
         assert result.backup_keep_days == 1
 
-    def test_postgres_port_clamped(self):
-        cfg = make_cfg(postgres_port=99999)
-        result = validate_and_sanitise(cfg)
-        assert result.postgres_port == 65535
-
     def test_stats_report_window_clamped(self):
         cfg = make_cfg(stats_report_window_hours=999999)
         result = validate_and_sanitise(cfg)
         assert result.stats_report_window_hours == 8760
-
-    def test_multiple_fixes_applied(self):
-        cfg = make_cfg(
-            discord_avatar_url="data:image/png;base64,xxx",
-            db_type="oracle",
-        )
-        result = validate_and_sanitise(cfg)
-        assert not result.discord_avatar_url.startswith("data:")
-        assert result.db_type == "sqlite"
 
     def test_returns_same_object_when_no_fixes(self):
         # Use explicit safe values to ensure no validator rule fires
         cfg = make_cfg(discord_avatar_url="")  # empty is valid (no avatar)
         result = validate_and_sanitise(cfg)
         assert result.model_dump() == cfg.model_dump()
+    def test_removed_server_database_keys_are_ignored(self):
+        cfg = make_cfg(db_type="postgres", postgres_host="db", postgres_port=5432)
+        result = validate_and_sanitise(cfg)
+        assert not hasattr(result, "db_type")
+        assert not hasattr(result, "postgres_host")
+        assert not hasattr(result, "postgres_port")

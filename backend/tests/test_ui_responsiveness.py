@@ -83,7 +83,7 @@ def test_settings_put_response_is_reused_without_followup_get():
         REPO_ROOT / "backend/api/routes.py"
     ).read_text()
 
-    assert "data = clean.model_dump()" in routes
+    assert "data = _public_settings(clean)" in routes
     assert 'data["ok"] = True' in routes
 
     settings_put_assignments = re.findall(
@@ -124,7 +124,6 @@ def test_secondary_operator_controls_get_pending_feedback():
         "btn-test-alldebrid",
         "btn-test-aria2",
         "btn-test-discord",
-        "btn-test-postgres",
     ):
         assert f'id="{control_id}"' in html
 
@@ -136,7 +135,6 @@ def test_secondary_operator_controls_get_pending_feedback():
         "async function testDiscord(button)",
         "async function testAD(button)",
         "async function testAria2(button)",
-        "async function testPostgres(button)",
         "async function triggerFullSync(button)",
         "async function aria2RuntimeAction(action, button)",
         "async function runAria2Housekeeping(button)",
@@ -346,16 +344,12 @@ def test_pass3_polling_noops_do_not_refresh_transfer_freshness():
     assert "persisted_progress = current_progress if local_delivery_active else progress" in provider
     assert "stable provider polling" in provider.lower()
 
-    aggregate = manager.split(
-        "async def _update_aria2_parent_progress", 1
-    )[1].split(
-        "async def _update_file_state", 1
-    )[0]
+    aggregate = (REPO_ROOT / "backend/services/transfer_state_machine.py").read_text()
 
-    assert "persist_progress_changed = progress != current_progress" in aggregate
-    assert "broadcast_progress_changed = int(progress) != int(current_progress)" in aggregate
+    assert "if progress != current_progress or status != current_status:" in aggregate
+    assert "if int(progress) != int(current_progress) or status != current_status:" in aggregate
     assert "await db.executemany(" in aggregate
-    assert "updates.append((progress, parent_status, torrent_id))" in aggregate
+    assert "updates.append((progress, status, transfer_id))" in aggregate
 
     sync = manager.split(
         "async def sync_aria2_downloads", 1

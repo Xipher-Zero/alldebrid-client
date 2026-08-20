@@ -23,9 +23,9 @@ def test_sanitize_log_value_redacts_discord_webhook_urls():
     assert "<webhook-url>" in safe
 
 
-def test_sanitize_log_value_redacts_postgres_passwords_and_query_tokens():
+def test_sanitize_log_value_redacts_url_passwords_and_query_tokens():
     raw = (
-        "postgresql://alldebrid:very-secret@db:5432/alldebrid"
+        "https://u:very-secret@x.test/a"
         "?sslmode=disable&apikey=abc123&token=def456"
     )
 
@@ -34,7 +34,7 @@ def test_sanitize_log_value_redacts_postgres_passwords_and_query_tokens():
     assert "very-secret" not in safe
     assert "abc123" not in safe
     assert "def456" not in safe
-    assert "postgresql://alldebrid:<redacted>@db:5432/alldebrid" in safe
+    assert "https://u:<redacted>@x.test/a" in safe
 
 
 def test_startup_banner_uses_logger_and_expected_links(caplog):

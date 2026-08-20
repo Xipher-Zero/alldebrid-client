@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
 class _FakeAnalyticsDb:
-    backend = "postgres"
+    backend = "sqlite"
 
     def __init__(self):
         self.fetchone_calls = []
@@ -36,7 +36,7 @@ class _FakeAnalyticsDb:
 
 
 @pytest.mark.asyncio
-async def test_queue_analytics_uses_datetime_params_and_postgres_hourly_sql():
+async def test_queue_analytics_uses_datetime_params_and_sqlite_time_functions():
     from services.analytics import get_queue_analytics
 
     fake_db = _FakeAnalyticsDb()
@@ -49,17 +49,13 @@ async def test_queue_analytics_uses_datetime_params_and_postgres_hourly_sql():
         result = await get_queue_analytics(24)
 
     assert "error" not in result
-    all_params = [
-        params
-        for _, params in fake_db.fetchone_calls + fake_db.fetchall_calls
-        if params
-    ]
+    all_params = [params for _, params in fake_db.fetchone_calls + fake_db.fetchall_calls if params]
     assert all_params
     assert all(isinstance(params[0], datetime) for params in all_params)
-    assert any("EXTRACT(EPOCH FROM (completed_at - created_at))" in sql for sql, _ in fake_db.fetchone_calls)
-    assert not any("JULIANDAY" in sql for sql, _ in fake_db.fetchone_calls)
-    assert any("DATE_TRUNC('hour', completed_at)" in sql for sql, _ in fake_db.fetchall_calls)
-    assert not any("STRFTIME" in sql for sql, _ in fake_db.fetchall_calls)
+    assert any("JULIANDAY" in sql for sql, _ in fake_db.fetchone_calls)
+    assert any("STRFTIME" in sql for sql, _ in fake_db.fetchall_calls)
+    assert not any("EXTRACT(EPOCH" in sql for sql, _ in fake_db.fetchone_calls)
+    assert not any("DATE_TRUNC" in sql for sql, _ in fake_db.fetchall_calls)
 
 
 def test_stats_export_payload_accepts_date_values():

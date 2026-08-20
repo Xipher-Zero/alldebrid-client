@@ -18,7 +18,7 @@ import aiohttp
 from core.config import AppSettings, get_settings
 from core.logging_utils import sanitize_exception, sanitize_log_value
 import aiosqlite  # noqa: F401 — used by tests via unittest.mock.patch
-from db.database import _is_postgres, get_db
+from db.database import get_db
 from services.alldebrid import AllDebridAPIError, AllDebridService, flatten_files
 from services.aria2 import Aria2ConnectionError, Aria2RPCError, Aria2Service
 from services.aria2_runtime import aria2_global_options, effective_rpc_config, is_builtin_mode
@@ -360,6 +360,7 @@ MAX_CONCURRENT_AD_UPLOADS = 5
 
 class TorrentManager:
     def __init__(self):
+        self._architecture = None
         self._ad: Optional[AllDebridService] = None
         self._aria2: Optional[Aria2Service] = None
         self._sem: Optional[asyncio.Semaphore] = None
@@ -380,6 +381,11 @@ class TorrentManager:
 
     def is_paused(self) -> bool:
         return bool(get_settings().paused)
+
+    def notify(self):
+        if self._architecture is not None:
+            return self._architecture.notifications.client()
+        return self._engine_notify()
 
     def reset_services(self):
         self._ad = None
@@ -412,7 +418,7 @@ class TorrentManager:
                 return
             async with get_db() as db:
                 await db.execute(
-                    """CREATE TABLE IF NOT EXISTS adc_aria2_owned_gids (
+                    """CREATE TABLE IF NOT EXISTS debridpulse_aria2_owned_gids (
                            gid TEXT PRIMARY KEY,
                            download_file_id INTEGER,
                            torrent_id INTEGER,
@@ -422,7 +428,7 @@ class TorrentManager:
                 # Bootstrap ownership for jobs created before this ledger
                 # existed, while the original DB association still proves it.
                 await db.execute(
-                    """INSERT INTO adc_aria2_owned_gids
+                    """INSERT INTO debridpulse_aria2_owned_gids
                            (gid, download_file_id, torrent_id)
                        SELECT download_id, id, torrent_id
                          FROM download_files
@@ -432,7 +438,7 @@ class TorrentManager:
                 )
                 rows = await db.fetchall(
                     """SELECT gid
-                         FROM adc_aria2_owned_gids
+                         FROM debridpulse_aria2_owned_gids
                         WHERE gid IS NOT NULL
                        UNION
                        SELECT download_id AS gid
@@ -462,7 +468,7 @@ class TorrentManager:
         await self._ensure_aria2_ownership_table()
         async with get_db() as db:
             await db.execute(
-                """INSERT INTO adc_aria2_owned_gids
+                """INSERT INTO debridpulse_aria2_owned_gids
                        (gid, download_file_id, torrent_id)
                    VALUES (?, ?, ?)
                    ON CONFLICT(gid) DO UPDATE SET
@@ -551,7 +557,7 @@ class TorrentManager:
         await self.aria2().remove(gid)
         return True
 
-    async def control_aria2_gid(self, gid: str, action: str) -> dict:
+    async def _engine_control_aria2_gid(self, gid: str, action: str) -> dict:
         """Apply a user action only to a GID owned by DebridPulse."""
         gid = str(gid or "").strip()
         if action not in {"pause", "resume", "remove"}:
@@ -583,7 +589,7 @@ class TorrentManager:
             self._sem = asyncio.Semaphore(get_settings().max_concurrent_downloads)
         return self._sem
 
-    def notify(self) -> NotificationService:
+    def _engine_notify(self) -> NotificationService:
         cfg = get_settings()
         return NotificationService(
             webhook_url=cfg.discord_webhook_url,
@@ -615,9 +621,7 @@ class TorrentManager:
         )
 
     def download_client_name(self) -> str:
-        cfg = get_settings()
-        client = str(getattr(cfg, "download_client", "aria2") or "aria2").strip().lower()
-        return client if client in ("aria2", "symlink") else "aria2"
+        return "aria2"
 
     async def add_magnet_direct(self, magnet: str, source: str = "manual") -> dict:
         if self.is_paused():
@@ -1862,11 +1866,7 @@ class TorrentManager:
             # Check 1: local download stuck
             stuck_local = []
             if timeout_hours and timeout_hours > 0:
-                # Use portable SQL: NOW()-INTERVAL for PostgreSQL, datetime() for SQLite
-                if _is_postgres():
-                    _cutoff_local = f"NOW() - INTERVAL '{int(timeout_hours)} hours'"
-                else:
-                    _cutoff_local = f"datetime('now','-{int(timeout_hours)} hours')"
+                _cutoff_local = f"datetime('now','-{int(timeout_hours)} hours')"
                 stuck_local = await (await db.execute(
                     f"""SELECT id, name, alldebrid_id, status FROM torrents
                        WHERE status IN ('queued', 'downloading')
@@ -1874,7 +1874,7 @@ class TorrentManager:
                 )).fetchall()
 
             # Check 2: AllDebrid processing stuck > 24h (configurable separately)
-            _cutoff_ad = "NOW() - INTERVAL '24 hours'" if _is_postgres() else "datetime('now','-24 hours')"
+            _cutoff_ad = "datetime('now','-24 hours')"
             stuck_ad = await (await db.execute(
                 f"""SELECT id, name, alldebrid_id, status FROM torrents
                    WHERE status IN ('processing', 'uploading')
@@ -2382,7 +2382,7 @@ class TorrentManager:
                 provider="AllDebrid",
             )
 
-    def _schedule_ready_parent_download(
+    def _engine_schedule_ready_parent_download(
         self, torrent_id: int, ad_id: str, name: str
     ) -> bool:
         """Claim and schedule one provider-ready parent exactly once.
@@ -2423,7 +2423,7 @@ class TorrentManager:
         task.add_done_callback(_finished)
         return True
 
-    async def _start_download(self, torrent_id: int, ad_id: str, name: str):
+    async def _engine_start_download(self, torrent_id: int, ad_id: str, name: str):
         if self.is_paused() or torrent_id in self._active:
             return
         # Atomically claim this torrent_id BEFORE any await to prevent TOCTOU:
@@ -2515,14 +2515,10 @@ class TorrentManager:
         finally:
             self._active.discard(torrent_id)
 
-    async def _download(self, torrent_id: int, ad_id: str, name: str):
+    async def _engine_download(self, torrent_id: int, ad_id: str, name: str):
         cfg = get_settings()
         client_name = self.download_client_name()
 
-        # Route to symlink downloader if configured
-        if client_name == "symlink":
-            await self._download_symlink(torrent_id, ad_id, name)
-            return
 
         initial_status = "queued"  # aria2 is the only non-symlink client
 
@@ -2893,11 +2889,11 @@ class TorrentManager:
         stopped = int(getattr(cfg, "aria2_stopped_window", 100) or 100)
         return max(10, min(1000, waiting)), max(10, min(1000, stopped))
 
-    async def _aria2_get_all(self):
+    async def _engine_aria2_get_all(self):
         waiting, stopped = self._aria2_state_windows()
         return await self.aria2().get_all(waiting_limit=waiting, stopped_limit=stopped)
 
-    async def _aria2_confirm_gid(self, gid: str):
+    async def _engine_aria2_confirm_gid(self, gid: str):
         """Resolve one GID atomically after a bulk snapshot misses it.
 
         aria2's active, waiting, and stopped lists are separate RPC snapshots.
@@ -2920,7 +2916,7 @@ class TorrentManager:
         waiting, stopped = self._aria2_state_windows()
         return await self.aria2().get_memory_diagnostics(waiting_limit=waiting, stopped_limit=stopped)
 
-    async def _dispatch_pending_aria2_queue(self, all_downloads=None):
+    async def _engine_dispatch_pending_aria2_queue(self, all_downloads=None):
         """
         The single authoritative gate between our DB and aria2.
 
@@ -3213,7 +3209,7 @@ class TorrentManager:
                 scheduled += 1
         return scheduled
 
-    async def _advance_aria2_queue_locked(self) -> int:
+    async def _engine_advance_aria2_queue_locked(self) -> int:
         """Advance both local file slots and provider-ready parent work."""
         if (
             self.download_client_name() != "aria2"
@@ -3229,7 +3225,7 @@ class TorrentManager:
         async with self._aria2_state_lock:
             return await self._advance_aria2_queue_locked()
 
-    async def sync_download_clients(self):
+    async def _engine_sync_download_clients(self):
         async with self._aria2_state_lock:
             if self.download_client_name() == "aria2":
                 await self.sync_aria2_downloads()
@@ -3495,7 +3491,7 @@ class TorrentManager:
         # the queue once after reconciliation, avoiding two competing kicks.
         await self._update_aria2_parent_progress(all_downloads)
 
-    async def _reset_torrent_for_redownload(self, torrent_id: int, reason: str):
+    async def _engine_reset_torrent_for_redownload(self, torrent_id: int, reason: str):
         """Clear download_files and mark torrent as downloading so the sync loop
         ignores it while _start_download/_download re-runs and re-registers
         the new URIs with aria2. Status is updated to 'queued' or 'paused' once
@@ -3754,7 +3750,7 @@ class TorrentManager:
             len(rows), len(touched), len(reset_torrents),
         )
 
-    async def _update_aria2_parent_progress(self, all_downloads=None):
+    async def _engine_update_aria2_parent_progress(self, all_downloads=None):
         """Aggregate per-file aria2 progress into each active parent torrent.
 
         Completed files remain represented by their persisted size after aria2
@@ -4175,7 +4171,7 @@ class TorrentManager:
         except Exception as exc:
             logger.debug("page cache drop skipped: %s", exc)
 
-    async def pause_torrent(self, torrent_id: int):
+    async def _engine_pause_torrent(self, torrent_id: int):
         async with self._aria2_state_lock:
             return await self._pause_torrent_locked(torrent_id)
 
@@ -4216,7 +4212,7 @@ class TorrentManager:
         # files and provider-ready parents immediately.
         await self._advance_aria2_queue_locked()
 
-    async def resume_torrent(self, torrent_id: int):
+    async def _engine_resume_torrent(self, torrent_id: int):
         async with self._aria2_state_lock:
             return await self._resume_torrent_locked(torrent_id)
 
@@ -4259,7 +4255,7 @@ class TorrentManager:
         # the same authoritative queue path used by pause and polling.
         await self._advance_aria2_queue_locked()
 
-    async def pause_all_downloads(self) -> dict:
+    async def _engine_pause_all_downloads(self) -> dict:
         """Pause every active DebridPulse-owned aria2 transfer.
 
         The application-level paused setting prevents new work from being
@@ -4295,7 +4291,7 @@ class TorrentManager:
                 )
         return {"paused": paused, "failed": failed}
 
-    async def resume_all_downloads(self) -> dict:
+    async def _engine_resume_all_downloads(self) -> dict:
         """Resume every paused DebridPulse-owned aria2 transfer."""
         if self.download_client_name() != "aria2":
             return {"resumed": 0, "failed": 0}
@@ -4416,105 +4412,6 @@ class TorrentManager:
                 torrent_id, ad_id,
             )
         return deleted
-
-    async def _download_symlink(self, torrent_id: int, ad_id: str, name: str):
-        """Symlink downloader: create symlinks pointing to AllDebrid CDN URLs.
-
-        Instead of downloading files via aria2, this mode creates a .strm-style
-        symlink (actually a plain text file with the unlocked URL) or a real OS
-        symlink when the rclone AllDebrid mount is available.
-
-        Behaviour:
-        - Fetches the ready-file list from AllDebrid (same as aria2 mode).
-        - Unlocks each link in parallel.
-        - Creates <symlink_path>/<torrent_name>/<filename>.url files containing
-          the unlocked HTTPS URL for consumers that can follow remote media links.
-        - If ``symlink_path`` is empty, falls back to ``download_folder``.
-        - Marks the torrent as completed immediately — no aria2 involvement.
-        """
-        cfg = get_settings()
-        base_dir = Path(
-            str(getattr(cfg, "symlink_path", "") or "").strip()
-            or str(getattr(cfg, "download_folder", "/download") or "/download")
-        )
-        torrent_dir = base_dir / safe_name(name or f"torrent_{torrent_id}")
-
-        try:
-            file_infos = await self._fetch_ready_files(ad_id)
-        except TransientAllDebridStateError:
-            logger.info("_download_symlink: AllDebrid not yet ready for %s — resetting to ready", torrent_id)
-            async with get_db() as db:
-                await db.execute(
-                    "UPDATE torrents SET status='ready', updated_at=CURRENT_TIMESTAMP WHERE id=?",
-                    (torrent_id,),
-                )
-                await db.commit()
-            return
-        except Exception as exc:
-            await self._fail_torrent(torrent_id, f"Symlink: fetch failed: {_sanitize_error(exc)}", notify=True)
-            return
-
-        if not file_infos:
-            await self._fail_torrent(torrent_id, "Symlink: no downloadable files returned from AllDebrid", notify=True)
-            return
-
-        # Unlock all links in parallel (same concurrency as aria2 mode)
-        async def _unlock_one(fi: dict):
-            try:
-                result = await _retry_async(self.ad().unlock_link, str(fi.get("link", "")))
-                return fi, result.get("link") or result.get("data", {}).get("link", "")
-            except Exception as exc:
-                logger.warning("_download_symlink: unlock failed for %s: %s", fi.get("link", ""), exc)
-                return fi, None
-
-        unlock_results = await asyncio.gather(*[_unlock_one(fi) for fi in file_infos])
-
-        # Write .url files
-        errors = 0
-        created = 0
-        try:
-            torrent_dir.mkdir(parents=True, exist_ok=True)
-        except Exception as exc:
-            await self._fail_torrent(torrent_id, f"Symlink: cannot create directory {torrent_dir}: {exc}", notify=True)
-            return
-
-        for fi, unlocked_url in unlock_results:
-            raw_name = str(fi.get("filename") or fi.get("name") or f"file_{created}")
-            safe = safe_name(raw_name)
-            url_file = torrent_dir / (safe + ".url")
-            if unlocked_url:
-                try:
-                    url_file.write_text(unlocked_url, encoding="utf-8")
-                    created += 1
-                    logger.debug("_download_symlink: created %s", str(url_file))
-                except Exception as exc:
-                    logger.warning("_download_symlink: cannot write file: %s", exc)
-                    errors += 1
-            else:
-                errors += 1
-
-        if errors and not created:
-            await self._fail_torrent(torrent_id, f"Symlink: all {errors} file(s) failed to unlock", notify=True)
-            return
-
-        # Mark completed — no aria2 required
-        async with get_db() as db:
-            await db.execute(
-                """UPDATE torrents
-                   SET status='completed', local_path=?, progress=1.0, updated_at=CURRENT_TIMESTAMP
-                   WHERE id=?""",
-                (str(torrent_dir), torrent_id),
-            )
-            if errors:
-                await db.execute(
-                    "INSERT INTO events (torrent_id, level, message) VALUES (?, 'warn', ?)",
-                    (torrent_id, f"Symlink: {created} URL file(s) created, {errors} failed"),
-                )
-            await db.commit()
-
-        logger.info("_download_symlink: %d URL file(s) created for torrent %s", created, torrent_id)
-        await self._delete_magnet_after_completion(torrent_id, ad_id)
-        await self._mark_finished(torrent_id, name)
 
     async def _mark_finished(self, torrent_id: int, name: str = ""):
         await self._log_event(torrent_id, "info", "Finished")
@@ -5361,20 +5258,86 @@ class TorrentManager:
         except Exception as _e:
             logger.debug("aria2 remove failed for gid (already gone): %s", _e)
 
+    def bind_architecture(self, architecture) -> None:
+        """Bind explicit v1.0.5 services once; no runtime method replacement."""
+        if self._architecture is not None and self._architecture is not architecture:
+            raise RuntimeError("TorrentManager architecture already bound")
+        self._architecture = architecture
+
+    async def _aria2_get_all(self):
+        if self._architecture is not None:
+            return await self._architecture.reconciliation.get_all()
+        return await self._engine_aria2_get_all()
+
+    async def _aria2_confirm_gid(self, gid: str):
+        if self._architecture is not None:
+            return await self._architecture.reconciliation.confirm_gid(gid)
+        return await self._engine_aria2_confirm_gid(gid)
+
+    async def _dispatch_pending_aria2_queue(self, *args, **kwargs):
+        if self._architecture is not None:
+            return await self._architecture.dispatch.dispatch_queue(*args, **kwargs)
+        return await self._engine_dispatch_pending_aria2_queue(*args, **kwargs)
+
+    async def _advance_aria2_queue_locked(self, *args, **kwargs):
+        if self._architecture is not None:
+            return await self._architecture.dispatch.advance_queue_locked(*args, **kwargs)
+        return await self._engine_advance_aria2_queue_locked(*args, **kwargs)
+
+    def _schedule_ready_parent_download(self, *args, **kwargs):
+        if self._architecture is not None:
+            return self._architecture.dispatch.schedule_ready_parent(*args, **kwargs)
+        return self._engine_schedule_ready_parent_download(*args, **kwargs)
+
+    async def _start_download(self, *args, **kwargs):
+        if self._architecture is not None:
+            return await self._architecture.control.start_download(*args, **kwargs)
+        return await self._engine_start_download(*args, **kwargs)
+
+    async def _download(self, *args, **kwargs):
+        if self._architecture is not None:
+            return await self._architecture.control.download(*args, **kwargs)
+        return await self._engine_download(*args, **kwargs)
+
+    async def _reset_torrent_for_redownload(self, *args, **kwargs):
+        if self._architecture is not None:
+            return await self._architecture.control.reset_for_redownload(*args, **kwargs)
+        return await self._engine_reset_torrent_for_redownload(*args, **kwargs)
+
+    async def _update_aria2_parent_progress(self, *args, **kwargs):
+        if self._architecture is not None:
+            return await self._architecture.control.update_parent_progress(*args, **kwargs)
+        return await self._engine_update_aria2_parent_progress(*args, **kwargs)
+
+    async def sync_download_clients(self):
+        if self._architecture is not None:
+            return await self._architecture.reconciliation.reconcile()
+        return await self._engine_sync_download_clients()
+
+    async def pause_torrent(self, torrent_id: int):
+        if self._architecture is not None:
+            return await self._architecture.control.pause_transfer(torrent_id)
+        return await self._engine_pause_torrent(torrent_id)
+
+    async def resume_torrent(self, torrent_id: int):
+        if self._architecture is not None:
+            return await self._architecture.control.resume_transfer(torrent_id)
+        return await self._engine_resume_torrent(torrent_id)
+
+    async def pause_all_downloads(self):
+        if self._architecture is not None:
+            return await self._architecture.control.pause_all()
+        return await self._engine_pause_all_downloads()
+
+    async def resume_all_downloads(self):
+        if self._architecture is not None:
+            return await self._architecture.control.resume_all()
+        return await self._engine_resume_all_downloads()
+
+    async def control_aria2_gid(self, *args, **kwargs):
+        if self._architecture is not None:
+            return await self._architecture.control.control_gid(*args, **kwargs)
+        return await self._engine_control_aria2_gid(*args, **kwargs)
+
 
 manager = TorrentManager()
-
-# Install singleton-only reliability coordinators explicitly after construction.
-# TorrentManager instances created by unit tests or future backend adapters remain
-# unmodified unless they opt into these coordinators themselves.
-from services.transfer_control import install_transfer_control as _install_transfer_control
-from services.pause_parent_status import install_parent_progress_guard as _install_parent_progress_guard
-from services.global_pause_semantics import install_global_pause_semantics as _install_global_pause_semantics
-
-_install_transfer_control(manager)
-_install_parent_progress_guard(manager)
-_install_global_pause_semantics(manager)
-
-del _install_transfer_control
-del _install_parent_progress_guard
-del _install_global_pause_semantics

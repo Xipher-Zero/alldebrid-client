@@ -58,6 +58,8 @@ for DIR in /app/data /app/config /download; do
         chown -R "${PUID}:${PGID}" "${DIR}" 2>/dev/null || true
     fi
 done
+chmod 700 /app/config /app/data 2>/dev/null || true
+[ -f /app/config/config.json ] && chmod 600 /app/config/config.json 2>/dev/null || true
 
 # ── Hand off to the app ───────────────────────────────────────────────────────
 if [ "${PUID}" = "0" ]; then

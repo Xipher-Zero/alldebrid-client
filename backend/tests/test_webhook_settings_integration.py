@@ -86,8 +86,8 @@ class SettingsSaveTests(unittest.IsolatedAsyncioTestCase):
 
         with patch("api.routes.save_settings", side_effect=fake_save), \
              patch("api.routes.apply_settings", side_effect=fake_apply), \
-             patch.object(routes.manager, "apply_aria2_memory_tuning", AsyncMock(return_value={"ok": True})), \
-             patch.object(routes.manager, "reset_services", MagicMock()):
+             patch.object(routes.transfer_service, "apply_aria2_memory_tuning", AsyncMock(return_value={"ok": True})), \
+             patch.object(routes.transfer_service, "reset_services", MagicMock()):
             result = await routes.update_settings(
                 routes.AppSettings(discord_avatar_url="data:image/png;base64,abc123")
             )
@@ -108,8 +108,8 @@ class SettingsSaveTests(unittest.IsolatedAsyncioTestCase):
 
         with patch("api.routes.save_settings", side_effect=fake_save), \
              patch("api.routes.apply_settings", side_effect=fake_apply), \
-             patch.object(routes.manager, "apply_aria2_memory_tuning", AsyncMock(return_value={"ok": True})), \
-             patch.object(routes.manager, "reset_services", MagicMock()):
+             patch.object(routes.transfer_service, "apply_aria2_memory_tuning", AsyncMock(return_value={"ok": True})), \
+             patch.object(routes.transfer_service, "reset_services", MagicMock()):
             result = await routes.update_settings(
                 routes.AppSettings(
                     stats_report_interval_hours=12,
@@ -121,12 +121,10 @@ class SettingsSaveTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["stats_report_interval_hours"], 12)
         self.assertEqual(result["stats_report_window_hours"], 168)
-        self.assertEqual(
-            result["stats_report_webhook_url"],
-            "https://discord.com/api/webhooks/test",
-        )
+        self.assertEqual(result["stats_report_webhook_url"], "")
         self.assertEqual(saved["cfg"].stats_report_interval_hours, 12)
         self.assertEqual(saved["cfg"].stats_report_window_hours, 168)
+        self.assertEqual(saved["cfg"].stats_report_webhook_url, "https://discord.com/api/webhooks/test")
 
     async def test_aria2_global_options_applies_slot_change_to_live_settings(self):
         saved = {}
@@ -145,9 +143,9 @@ class SettingsSaveTests(unittest.IsolatedAsyncioTestCase):
         with patch("api.routes.load_settings", return_value=current), \
              patch("api.routes.save_settings", side_effect=fake_save), \
              patch("api.routes.apply_settings", side_effect=fake_apply), \
-             patch.object(routes.manager, "aria2", return_value=fake_aria2), \
-             patch.object(routes.manager, "reset_services", MagicMock()) as reset_services, \
-             patch.object(routes.manager, "advance_aria2_queue", AsyncMock()) as advance:
+             patch.object(routes.transfer_service, "aria2", new=fake_aria2), \
+             patch.object(routes.transfer_service, "reset_services", MagicMock()) as reset_services, \
+             patch.object(routes.transfer_service, "advance_aria2_queue", AsyncMock()) as advance:
             result = await routes.aria2_set_global_options({"max_concurrent_downloads": 2})
 
         self.assertEqual(result["applied"]["max-concurrent-downloads"], "2")
@@ -223,44 +221,9 @@ class TorrentListingRouteTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ProcessingPauseRouteTests(unittest.IsolatedAsyncioTestCase):
-    async def test_individual_resume_exits_global_pause_and_advances_queue(self):
-        cfg = routes.AppSettings(paused=True)
-        saved = []
-
-        with patch.object(routes.manager, "resume_torrent", AsyncMock()) as resume, \
-             patch.object(routes.manager, "advance_aria2_queue", AsyncMock()) as advance, \
-             patch("api.routes.get_settings", return_value=cfg), \
-             patch("api.routes.save_settings", side_effect=saved.append), \
-             patch("api.routes.apply_settings") as apply:
-            result = await routes.resume_torrent(71)
-
-        resume.assert_awaited_once_with(71)
-        advance.assert_awaited_once_with()
-        self.assertEqual(result, {"ok": True, "paused": False})
-        self.assertFalse(saved[0].paused)
-        apply.assert_called_once_with(saved[0])
-
-    async def test_individual_resume_leaves_other_items_selectively_paused(self):
-        cfg = routes.AppSettings(paused=True)
-
-        with patch.object(routes.manager, "resume_torrent", AsyncMock()) as resume, \
-             patch.object(routes.manager, "advance_aria2_queue", AsyncMock()) as advance, \
-             patch("api.routes.get_settings", return_value=cfg), \
-             patch("api.routes.save_settings") as save, \
-             patch("api.routes.apply_settings") as apply:
-            result = await routes.resume_torrent(72)
-
-        self.assertEqual(result, {"ok": True, "paused": False})
-        resume.assert_awaited_once_with(72)
-        advance.assert_awaited_once_with()
-        self.assertFalse(save.call_args.args[0].paused)
-        apply.assert_called_once_with(save.call_args.args[0])
-
-    async def test_individual_resume_does_not_reapply_unpaused_settings(self):
+    async def test_individual_resume_delegates_to_control_service(self):
         cfg = routes.AppSettings(paused=False)
-
-        with patch.object(routes.manager, "resume_torrent", AsyncMock()) as resume, \
-             patch.object(routes.manager, "advance_aria2_queue", AsyncMock()) as advance, \
+        with patch.object(routes.transfer_service, "resume_torrent", AsyncMock()) as resume, \
              patch("api.routes.get_settings", return_value=cfg), \
              patch("api.routes.save_settings") as save, \
              patch("api.routes.apply_settings") as apply:
@@ -268,7 +231,6 @@ class ProcessingPauseRouteTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result, {"ok": True, "paused": False})
         resume.assert_awaited_once_with(73)
-        advance.assert_not_awaited()
         save.assert_not_called()
         apply.assert_not_called()
 
@@ -287,7 +249,7 @@ class Aria2LiveStatRouteTests(unittest.IsolatedAsyncioTestCase):
         cfg = SimpleNamespace(aria2_mode="builtin")
 
         with patch("api.routes.get_settings", return_value=cfg), \
-             patch.object(routes.manager, "aria2", return_value=fake_aria2):
+             patch.object(routes.transfer_service, "aria2", new=fake_aria2):
             result = await routes.aria2_global_stat()
 
         self.assertEqual(
@@ -318,10 +280,10 @@ class Aria2LiveStatRouteTests(unittest.IsolatedAsyncioTestCase):
         cfg = SimpleNamespace(aria2_mode="external")
 
         with patch("api.routes.get_settings", return_value=cfg), \
-             patch.object(routes.manager, "aria2", return_value=fake_aria2), \
+             patch.object(routes.transfer_service, "aria2", new=fake_aria2), \
              patch.object(
-                 routes.manager,
-                 "_aria2_owned_downloads",
+                 routes.transfer_service,
+                 "owned_aria2_downloads",
                  ownership_filter,
              ):
             result = await routes.aria2_global_stat()
@@ -387,8 +349,7 @@ class DatabaseBackupServiceTests(unittest.IsolatedAsyncioTestCase):
 
         try:
             with patch("services.db_maintenance.get_settings", return_value=cfg), \
-                 patch("services.db_maintenance.get_db", return_value=_db_ctx()), \
-                 patch("services.db_maintenance._is_postgres", return_value=False):
+                 patch("services.db_maintenance.get_db", return_value=_db_ctx()):
                 result = await db_maintenance.run_database_backup()
 
             self.assertEqual(result["errors"], [])

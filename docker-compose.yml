@@ -4,20 +4,6 @@
 #
 #   1. SQLite (default — no setup needed):
 #      docker compose up -d
-#
-#   2. PostgreSQL external (own instance):
-#      Select PostgreSQL and configure the connection in Settings → Database.
-#
-# ── Unraid note ───────────────────────────────────────────────────────────────
-# The app uses network_mode: host to avoid conflicts with Unraid's shfs
-# (the FUSE layer that serves /mnt/user shares). Custom Docker bridge networks
-# can cause ALL shares to disappear on Unraid — host mode prevents this.
-#
-# With host mode the app is directly reachable on the host IP:
-#   http://<unraid-ip>:8080
-#
-# If you use PostgreSQL, configure the external server's host IP directly in
-# Settings → Database (e.g. 192.168.1.x or the database container's IP).
 
 services:
 

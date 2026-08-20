@@ -1,17 +1,4 @@
-#!/usr/bin/env python3
 from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[1]
-
-main = ROOT / "backend/main.py"
-text = main.read_text(encoding="utf-8")
-text = text.replace(
-    "from db.database import init_db, _is_postgres, DB_PATH",
-    "from db.database import init_db, DB_PATH",
-)
-main.write_text(text, encoding="utf-8")
-
-(ROOT / "backend/tests/test_v105_architecture.py").write_text(r'''from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -25,7 +12,7 @@ def test_service_root_and_explicit_components_exist():
     for name in (
         "ProviderGateway", "TransferRepository", "DispatchCoordinator",
         "Aria2Gateway", "OwnershipLedger", "TransferStateMachine",
-        "TransferControlService", "ReconciliationService", "ExtractionService",
+        "TransferControlService", "ReconciliationService", "ExtractionService", "NotificationService",
     ):
         assert name in root
     assert "bind_architecture" in root
@@ -81,9 +68,17 @@ def test_reconciliation_keeps_v104_snapshot_and_negative_cache_invariants():
     assert "confirmed_missing" in src
     assert "aria2.confirm_gid_cache_hits" in src
     assert "await self.engine._engine_aria2_get_all()" in src
-''', encoding="utf-8")
 
-manifest = ROOT / ".v105_changed_paths"
-paths = {line.strip() for line in manifest.read_text().splitlines() if line.strip()}
-paths.update({"backend/main.py", "backend/tests/test_v105_architecture.py"})
-manifest.write_text("\n".join(sorted(paths)) + "\n", encoding="utf-8")
+
+def test_removed_runtime_scope_is_not_exposed_in_frontend():
+    js = text("frontend/static/app.js")
+    for stale in ("PostgreSQL (external)", "s-postgres_host", "btn-test-postgres", "symlink-settings"):
+        assert stale not in js
+
+
+def test_fastapi_lifespan_has_single_context_manager_boundary():
+    main = text("backend/main.py")
+    assert "@asynccontextmanager\n@asynccontextmanager\nasync def lifespan" not in main
+    assert main.count("@asynccontextmanager\nasync def lifespan(app: FastAPI):") == 1
+    assert "_PG_CONNECT_RETRIES" not in main
+    assert "_PG_CONNECT_DELAY" not in main

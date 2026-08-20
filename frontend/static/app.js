@@ -234,10 +234,6 @@ function coalesceAsync(fn) {
 }
 
 
-function toggleSymlinkSettings(val) {
-  var el = document.getElementById('symlink-settings');
-  if (el) el.style.display = (val === 'symlink') ? 'block' : 'none';
-}
 
 // ── Format ─────────────────────────────────────────────────────────────────
 function fmtSize(b) {
@@ -670,12 +666,7 @@ async function loadStats() {
       updateAria2TopbarBadge({active: s.active_downloads||0});
       // ── DB info + dot ──────────────────────────────────────────────────
       // Database status remains in the persistent lower-left status rail.
-      setDot('db',
-        s.db_type === 'sqlite_fallback' ? 'error' : 'ok',
-        s.db_type === 'sqlite_fallback' ? 'DB: SQLite (fallback)'
-          : s.db_type === 'postgres'    ? 'DB: PostgreSQL'
-          : 'DB: SQLite'
-      );
+      setDot('db', 'ok', 'DB: SQLite');
       return true; // signal success to caller
     } catch(e) {
       console.warn('loadStats attempt', attempt, 'failed:', e.message);
@@ -1686,21 +1677,8 @@ function renderSettings() {
       <div class="scard-body">
         <div class="form-group">
           <label class="form-label">Delivery Mode</label>
-          <select class="input" id="s-download_client" onchange="toggleSymlinkSettings(this.value)">
-            <option value="aria2" ${(s.download_client||'aria2')==='aria2'?'selected':''}>aria2 (via JSON-RPC)</option>
-            <option value="symlink" ${s.download_client==='symlink'?'selected':''}>Symlink / .url files (rclone mount)</option>
-          </select>
-          <span class="form-hint">
-            <b>aria2</b> — unlocks AllDebrid links and hands them to aria2 for actual download.<br>
-            <b>Symlink</b> — creates .url files containing the unlocked CDN link. Ideal for rclone AllDebrid mounts.
-          </span>
-          <div id="symlink-settings" style="display:${s.download_client==='symlink'?'block':'none'};margin-top:10px;border-left:3px solid var(--accent);padding-left:12px">
-            <div class="form-group">
-              <label class="form-label">Symlink / .url Output Path</label>
-              <input class="input" id="s-symlink_path" value="${s.symlink_path||''}" placeholder="Leave empty to use Built-in aria2 Download Folder"/>
-              <span class="form-hint">Directory where .url files are written. Defaults to Built-in aria2 Download Folder if empty.</span>
-            </div>
-          </div>
+          <input class="input" id="s-download_client" value="aria2" disabled/>
+          <span class="form-hint">DebridPulse delivers unlocked provider links through aria2.</span>
           <details class="info-details">
             <summary>How do the delivery modes work?</summary>
             <div class="info-details-body">
@@ -2268,71 +2246,11 @@ function renderSettings() {
       <div class="scard">
       <div class="scard-header">🗄️ Database</div>
       <div class="scard-body">
-        <div style="background:rgba(245,196,81,.08);border:1px solid rgba(245,196,81,.24);border-radius:6px;padding:8px 12px;margin-bottom:12px;font-size:12px;color:var(--text2)">
-          💾 <b>Save settings first</b>, then use <b>Test DB</b> to verify the connection.
-        </div>
         <div class="form-group">
-          <label class="form-label">Database Type</label>
-          <select class="input" id="s-db_type"
-            onchange="document.getElementById('pg-settings').style.display=this.value==='postgres'?'block':'none';updateSettingsFooterActions('tab-database')"
-            ${s._db_type_locked?'disabled':''}>
-            <option value="sqlite" ${(s.db_type||'sqlite')==='sqlite'?'selected':''}>SQLite (default)</option>
-            <option value="postgres" ${s.db_type==='postgres'?'selected':''}>PostgreSQL (external)</option>
-          </select>
-          ${s._db_type_locked ? '<span class="form-hint" style="color:var(--accent)">⚙️ DB_TYPE is set via docker-compose and cannot be changed here.</span>' : '<span class="form-hint">Use PostgreSQL to connect to an external database server. See docs/postgresql.md.</span>'}
+          <label class="form-label">Runtime Database</label>
+          <input class="input" value="SQLite (internal, WAL)" disabled/>
+          <span class="form-hint">SQLite is the authoritative and only runtime database in DebridPulse 1.0.5.</span>
         </div>
-        <div id="pg-settings" style="display:${s.db_type==='postgres'?'block':'none'}">
-          <div class="form-group">
-            <label class="form-label">Host</label>
-            <input class="input" id="s-postgres_host" value="${s.postgres_host||'localhost'}"/>
-          </div>
-          <div class="form-group">
-            <label class="form-label">Port</label>
-            <input class="input" type="number" id="s-postgres_port" value="${s.postgres_port||5432}"/>
-          </div>
-          <div class="form-group">
-            <label class="form-label">Database</label>
-            <input class="input" id="s-postgres_db" value="${s.postgres_db||'debridpulse'}"/>
-          </div>
-          <div class="form-group">
-            <label class="form-label">User</label>
-            <input class="input" id="s-postgres_user" value="${s.postgres_user||'debridpulse'}"/>
-          </div>
-          <div class="form-group">
-            <label class="form-label">Password</label>
-            <input class="input" type="password" id="s-postgres_password" value="${s.postgres_password||''}"/>
-          </div>
-          <div class="form-group">
-            <label class="form-label">Schema</label>
-            <input class="input" id="s-postgres_schema" value="${s.postgres_schema||'public'}"/>
-          </div>
-          <div class="toggle-row">
-            <div class="toggle-info"><div class="tl">SSL</div><div class="ts">Use SSL for PostgreSQL connection</div></div>
-            <label class="toggle"><input type="checkbox" id="s-postgres_ssl" ${s.postgres_ssl?'checked':''}><span class="slider"></span></label>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <div class="scard" style="border-color:rgba(245,196,81,.34)">
-      <div class="scard-header">🔄 Data Migration</div>
-      <div class="scard-body">
-        <div style="font-size:12px;color:var(--text2);margin-bottom:12px">
-          Migrate all data between SQLite and PostgreSQL. <b>Save settings first</b> before running migration.<br>
-          <span style="color:var(--accent)">⚠️ This will overwrite all data in the target database.</span>
-        </div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <button class="btn btn-ghost btn-sm" onclick="runMigration('sqlite_to_postgres', false)">
-            📤 SQLite → PostgreSQL
-          </button>
-          <button class="btn btn-ghost btn-sm" onclick="runMigration('postgres_to_sqlite', false)">
-            📥 PostgreSQL → SQLite
-          </button>
-          <button class="btn btn-ghost btn-sm" onclick="runMigration('sqlite_to_postgres', true)" style="opacity:.6">
-            🔍 Dry Run (SQLite→PG)
-          </button>
-        </div>
-        <div id="migration-result" style="margin-top:10px;font-size:12px;display:none"></div>
       </div>
     </div>
 
@@ -2432,12 +2350,6 @@ function getFormSettings() {
     aria2_continue_downloads: c('aria2_continue_downloads'),
     aria2_lowest_speed_limit: t('aria2_lowest_speed_limit') || '0',
     aria2_max_upload_limit: n('aria2_max_upload_limit', 0),
-    db_type: t('db_type'),
-    postgres_host: t('postgres_host'), postgres_port: n('postgres_port'),
-    postgres_db: t('postgres_db'), postgres_user: t('postgres_user'),
-    postgres_password: t('postgres_password'), postgres_schema: t('postgres_schema'),
-    postgres_ssl: c('postgres_ssl'),
-    postgres_application_name: t('postgres_application_name'),
     discord_username: t('discord_username') || 'DebridPulse',
     discord_avatar_url: t('discord_avatar_url'),
     discord_webhook_url: t('discord_webhook_url'),
@@ -2704,10 +2616,6 @@ function switchSettingsTab(id) {
 function updateSettingsFooterActions(activeTab) {
   document.querySelectorAll('[data-settings-test-tab]').forEach(button => {
     let visible = button.dataset.settingsTestTab === activeTab;
-    if (button.id === 'btn-test-postgres') {
-      const dbType = document.getElementById('s-db_type')?.value || settingsData.db_type || 'sqlite';
-      visible = visible && dbType === 'postgres';
-    }
     button.hidden = !visible;
   });
 }
@@ -3382,51 +3290,7 @@ async function triggerStatsSnapshot(button) {
   }
 }
 
-async function runMigration(direction, dryRun) {
-  const resultEl = document.getElementById('migration-result');
-  resultEl.style.display = 'block';
-  resultEl.style.color = 'var(--text2)';
-  resultEl.textContent = '⏳ Running migration…';
-  try {
-    const r = await api('POST', '/admin/migrate', { direction, dry_run: dryRun, force: true });
-    resultEl.style.color = 'var(--green)';
-    resultEl.textContent = '✓ ' + (r.summary || 'Migration complete');
-    if (!dryRun) {
-      setTimeout(() => { loadStats(); loadRecent(); }, 1000);
-    }
-  } catch(e) {
-    resultEl.style.color = 'var(--red)';
-    resultEl.textContent = '✗ ' + e.message;
-  }
-}
 
-async function testPostgres(button) {
-  setButtonPending(
-    button,
-    true,
-    'Testing…'
-  );
-
-  try {
-    const r =
-      await api(
-        'POST',
-        '/settings/test-postgres'
-      );
-
-    toast(
-      `PostgreSQL ${r.version} — ${r.host}:${r.port}/${r.database} ✓`,
-      'success'
-    );
-  } catch(e) {
-    toast(
-      e.message,
-      'error'
-    );
-  } finally {
-    setButtonPending(button, false);
-  }
-}
 
 // ── Init ───────────────────────────────────────────────────────────────────
 (async()=>{

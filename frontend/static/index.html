@@ -731,7 +731,7 @@
                 <div style="padding:6px 0 0 12px">
                   <b>Event Log Retention (days)</b> — Events older than this are deleted daily. Torrent rows are never deleted — duplicate prevention is unaffected. 0 = keep forever.<br>
                   <b>Backup</b> — Automatic JSON backups of the database. Configurable interval and retention.<br>
-                  <b>Database</b> — Switch between SQLite (default) and PostgreSQL. Changing this requires a restart.
+                  <b>Database</b> — DebridPulse uses an internal SQLite database with WAL mode.
                 </div>
               </details>
 
@@ -847,7 +847,6 @@
           <button class="btn btn-ghost" id="btn-test-alldebrid" data-settings-test-tab="tab-general" onclick="testAD(this)">🔑 Test AllDebrid</button>
           <button class="btn btn-ghost" id="btn-test-aria2" data-settings-test-tab="tab-download" onclick="testAria2(this)" hidden>⬇️ Test Aria2</button>
           <button class="btn btn-ghost" id="btn-test-discord" data-settings-test-tab="tab-notifications" onclick="testDiscord(this)" hidden>🔔 Test Discord</button>
-          <button class="btn btn-ghost" id="btn-test-postgres" data-settings-test-tab="tab-database" onclick="testPostgres(this)" hidden>🗄️ Test DB</button>
         </div>
         <button class="btn btn-primary" id="btn-save-settings" onclick="saveSettings(this)">💾 Save Settings</button>
       </div>

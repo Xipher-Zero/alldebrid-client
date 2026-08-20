@@ -1,7 +1,7 @@
 """
 Database maintenance helpers for explicit database backups and wipe operations.
 
-Backups are exported as JSON snapshots so they work for both SQLite and PostgreSQL.
+Backups are exported as JSON snapshots of the authoritative SQLite database.
 """
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from datetime import date, datetime, time, timezone
 from pathlib import Path
 
 from core.config import get_settings
-from db.database import _is_postgres, get_db
+from db.database import get_db
 
 logger = logging.getLogger("alldebrid.db_maintenance")
 
@@ -57,7 +57,7 @@ async def run_database_backup() -> dict:
 
     payload = {
         "timestamp": ts,
-        "db_type": "postgres" if _is_postgres() else "sqlite",
+        "db_type": "sqlite",
         "tables": {},
     }
     errors: list[str] = []
@@ -124,26 +124,20 @@ def list_database_backups() -> list[dict]:
 
 async def wipe_database() -> dict:
     async with get_db() as db:
-        if getattr(db, "backend", "sqlite") == "postgres":
+        await db.execute("DELETE FROM download_files")
+        await db.execute("DELETE FROM events")
+        await db.execute("DELETE FROM stats_snapshots")
+        await db.execute("DELETE FROM torrents")
+        try:
             await db.execute(
-                "TRUNCATE TABLE download_files, events, stats_snapshots, torrents RESTART IDENTITY CASCADE"
+                "DELETE FROM sqlite_sequence WHERE name IN ('torrents','download_files','events','stats_snapshots')"
             )
-        else:
-            await db.execute("DELETE FROM download_files")
-            await db.execute("DELETE FROM events")
-            await db.execute("DELETE FROM stats_snapshots")
-            await db.execute("DELETE FROM torrents")
-            try:
-                await db.execute(
-                    "DELETE FROM sqlite_sequence WHERE name IN ('torrents','download_files','events','stats_snapshots')"
-                )
-            except Exception as _e:
-                logger.debug("sqlite_sequence reset skipped: %s", _e)
+        except Exception as exc:
+            logger.debug("sqlite_sequence reset skipped: %s", exc)
         await db.commit()
 
     logger.warning("Database wipe completed")
     return {"ok": True, "wiped_tables": TABLES}
-
 
 async def cleanup_old_events(keep_days: int = 30) -> dict:
     """Delete events older than ``keep_days`` days.
@@ -165,16 +159,12 @@ async def cleanup_old_events(keep_days: int = 30) -> dict:
     """
     keep_days = max(1, int(keep_days))
 
-    if _is_postgres():
-        cutoff_expr = f"NOW() - INTERVAL '{keep_days} days'"
-    else:
-        cutoff_expr = f"datetime('now', '-{keep_days} days')"
+    cutoff_expr = f"datetime('now', '-{keep_days} days')"
 
     async with get_db() as db:
         result = await db.execute(
             f"DELETE FROM events WHERE created_at < {cutoff_expr}"
         )
-        # aiosqlite returns a cursor; asyncpg returns the status string
         try:
             deleted = result.rowcount if hasattr(result, "rowcount") else -1
         except Exception:

@@ -38,37 +38,16 @@ class TransferControlCoordinator:
         self._queue_trailing = False
         self._lost_strikes: Dict[int, int] = {}
 
-        self._orig_dispatch = manager._dispatch_pending_aria2_queue
-        self._orig_schedule_ready = manager._schedule_ready_parent_download
-        self._orig_start = manager._start_download
-        self._orig_download = manager._download
-        self._orig_reset = manager._reset_torrent_for_redownload
-        self._orig_parent_progress = manager._update_aria2_parent_progress
-        self._orig_sync_clients = manager.sync_download_clients
+        self._orig_dispatch = manager._engine_dispatch_pending_aria2_queue
+        self._orig_schedule_ready = manager._engine_schedule_ready_parent_download
+        self._orig_start = manager._engine_start_download
+        self._orig_download = manager._engine_download
+        self._orig_reset = manager._engine_reset_torrent_for_redownload
+        self._orig_parent_progress = manager._engine_update_aria2_parent_progress
+        self._orig_sync_clients = manager._engine_sync_download_clients
 
     def install(self) -> None:
-        if getattr(self.manager, "_dp_transfer_control", None) is not None:
-            return
-        self.manager._dp_transfer_control = self
-
-        self.manager.pause_torrent = self.pause_torrent
-        self.manager.resume_torrent = self.resume_torrent
-        self.manager.pause_all_downloads = self.pause_all_downloads
-        self.manager.resume_all_downloads = self.resume_all_downloads
-        self.manager.control_aria2_gid = self.control_aria2_gid
-
-        self.manager._aria2_confirm_gid = self.confirm_gid
-        self.manager._dispatch_pending_aria2_queue = self.dispatch_queue
-        self.manager._advance_aria2_queue_locked = self.advance_queue_locked
-        self.manager._schedule_ready_parent_download = self.schedule_ready_parent
-        self.manager._start_download = self.start_download
-        self.manager._download = self.download
-        self.manager._reset_torrent_for_redownload = self.reset_for_redownload
-        self.manager._update_aria2_parent_progress = self.update_parent_progress
-        self.manager.sync_download_clients = self.sync_clients
-
-        self._install_recovery_guard()
-        logger.info("v1.0.3 transfer-control reliability layer installed")
+        raise RuntimeError("Runtime method patching was removed in DebridPulse v1.0.5")
 
     # ---------- durable intent ----------
 
@@ -366,7 +345,7 @@ class TransferControlCoordinator:
 
         async with self._queue_lock:
             async with self.manager._aria2_dispatch_lock:
-                current = await self.manager._aria2_get_all()
+                current = await self.manager._engine_aria2_get_all()
                 owned = await self._owned(current)
                 by_gid = {str(item.gid): item for item in owned}
                 limit = self.manager._aria2_slot_limit()
@@ -672,7 +651,7 @@ class TransferControlCoordinator:
             snapshot = (
                 list(all_downloads)
                 if all_downloads is not None
-                else await self.manager._aria2_get_all()
+                else await self.manager._engine_aria2_get_all()
             )
             owned = await self._owned(snapshot)
             limit = self.manager._aria2_slot_limit()
@@ -708,7 +687,7 @@ class TransferControlCoordinator:
             return 0
         resumed = 0
         async with self._queue_lock:
-            current = await self.manager._aria2_get_all()
+            current = await self.manager._engine_aria2_get_all()
             owned = await self._owned(current)
             limit = self.manager._aria2_slot_limit()
             live = [d for d in owned if d.status in {"active", "waiting"}]
@@ -1036,72 +1015,5 @@ class TransferControlCoordinator:
     # ---------- recovery-loop hardening ----------
 
     def _install_recovery_guard(self) -> None:
-        from services import recovery as recovery_module
-        coordinator = self
-
-        async def confirmed_orphan_recovery() -> int:
-            try:
-                snapshot = await coordinator.manager._aria2_get_all()
-            except Exception:
-                return 0
-            present = {str(item.gid) for item in snapshot}
-            async with get_db() as db:
-                rows = await db.fetchall(
-                    """SELECT id AS file_id, torrent_id, download_id, source_url
-                         FROM download_files WHERE status='queued'"""
-                )
-
-            recovered = 0
-            for row in rows:
-                gid = str(row.get("download_id") or "").strip()
-                if not gid or gid in present:
-                    continue
-                try:
-                    state = await coordinator.confirm_gid(gid)
-                except (Aria2ConnectionError, Aria2RPCError):
-                    return recovered
-                if state is not None:
-                    continue
-                source = str(row.get("source_url") or "").strip()
-                if not source:
-                    # Main reconciliation owns legacy fallback after its
-                    # two-cycle confirmation. Never clear a legacy GID here.
-                    continue
-                torrent_id = int(row["torrent_id"])
-                paused = (
-                    bool(get_settings().paused)
-                    or torrent_id in coordinator._pause_intents
-                )
-                async with get_db() as db:
-                    await db.execute(
-                        """UPDATE download_files
-                              SET status=?, download_id=NULL, download_url=?,
-                                  updated_at=CURRENT_TIMESTAMP WHERE id=?""",
-                        (
-                            "paused" if paused else "pending",
-                            source,
-                            int(row["file_id"]),
-                        ),
-                    )
-                    await db.commit()
-                recovered += 1
-                if not paused:
-                    coordinator._schedule_queue()
-
-            if recovered:
-                logger.info(
-                    "recovery: safely reset %d confirmed-lost aria2 file(s)",
-                    recovered,
-                )
-            return recovered
-
-        recovery_module._fix_orphaned_queued_files = confirmed_orphan_recovery
-
-
-def install_transfer_control(manager) -> TransferControlCoordinator:
-    existing = getattr(manager, "_dp_transfer_control", None)
-    if existing is not None:
-        return existing
-    coordinator = TransferControlCoordinator(manager)
-    coordinator.install()
-    return coordinator
+        # Recovery is owned by ReconciliationService in v1.0.5.
+        return None

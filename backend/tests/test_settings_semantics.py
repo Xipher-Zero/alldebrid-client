@@ -8,7 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from core.config import AppSettings
 from core.scheduler import _coerce_int_setting, _stats_report_window_hours
-from services import manager_v2
+import services.rate_limit as rate_limit
 
 
 class SchedulerSettingsTests(unittest.TestCase):
@@ -30,18 +30,18 @@ class SchedulerSettingsTests(unittest.TestCase):
 
 class AllDebridRateLimitTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        manager_v2._ad_rate_limiter = manager_v2._TokenBucketRateLimiter(rate=60, window=60.0)
+        rate_limit._alldebrid_rate_limiter = rate_limit.TokenBucketRateLimiter(rate=60, window=60.0)
 
     async def test_rate_limit_zero_means_effectively_unlimited(self):
         cfg = types.SimpleNamespace(alldebrid_rate_limit_per_minute=0)
-        with patch("services.manager_v2.get_settings", return_value=cfg):
-            limiter = await manager_v2._get_ad_rate_limiter()
+        with patch("services.rate_limit.get_settings", return_value=cfg):
+            limiter = await rate_limit.get_alldebrid_rate_limiter()
         self.assertGreaterEqual(limiter._rate, 1_000_000)
 
     async def test_rate_limit_positive_value_is_respected(self):
         cfg = types.SimpleNamespace(alldebrid_rate_limit_per_minute=12)
-        with patch("services.manager_v2.get_settings", return_value=cfg):
-            limiter = await manager_v2._get_ad_rate_limiter()
+        with patch("services.rate_limit.get_settings", return_value=cfg):
+            limiter = await rate_limit.get_alldebrid_rate_limiter()
         self.assertEqual(limiter._rate, 12)
 
 
@@ -67,7 +67,8 @@ class SettingsFrontendContractTests(unittest.TestCase):
 
     def test_database_tab_is_sqlite_only(self):
         js = (Path(__file__).resolve().parents[2] / "frontend" / "static" / "app.js").read_text()
-        self.assertIn("SQLite (internal, WAL)", js)
+        self.assertNotIn("Runtime Database", js)
+        self.assertIn("Database Maintenance", js)
         for stale in ("s-postgres_host", "s-postgres_password", "btn-test-postgres",
                       "PostgreSQL (external)", "docs/postgresql.md"):
             self.assertNotIn(stale, js)

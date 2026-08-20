@@ -2243,17 +2243,6 @@ function renderSettings() {
     </div>
 
     <div class="stab-panel" id="tab-database">
-      <div class="scard">
-      <div class="scard-header">🗄️ Database</div>
-      <div class="scard-body">
-        <div class="form-group">
-          <label class="form-label">Runtime Database</label>
-          <input class="input" value="SQLite (internal, WAL)" disabled/>
-          <span class="form-hint">SQLite is the authoritative and only runtime database in DebridPulse 1.0.5.</span>
-        </div>
-      </div>
-    </div>
-
     <div class="scard">
       <div class="scard-header">🛠️ Database Maintenance</div>
       <div class="scard-body">

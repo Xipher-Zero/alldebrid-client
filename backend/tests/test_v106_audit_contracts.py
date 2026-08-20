@@ -75,3 +75,76 @@ def test_scheduler_has_single_reconciliation_loop():
     assert "reconcile_download_client_cycle" not in source
     assert "async def recovery_loop" not in source
     assert "transfer_service.reconciliation.reconcile()" in source
+
+
+def test_zip_preflight_rejects_file_count_budget(tmp_path, monkeypatch):
+    import zipfile
+    import services.extraction_safety as safety
+    from services.extractor import _extract_zip
+
+    archive = tmp_path / "many.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("one.txt", b"1")
+        zf.writestr("two.txt", b"2")
+    monkeypatch.setattr(
+        safety, "get_settings",
+        lambda: SimpleNamespace(
+            extract_max_files=1,
+            extract_max_expanded_gb=1,
+            extract_max_compression_ratio=1000,
+        ),
+    )
+    dest = tmp_path / "out"
+    dest.mkdir()
+    with pytest.raises(ValueError, match="files"):
+        _extract_zip(archive, dest)
+    assert list(dest.iterdir()) == []
+
+
+def test_external_staging_rejects_symlink_output(tmp_path, monkeypatch):
+    import services.extraction_safety as safety
+
+    archive = tmp_path / "archive.7z"
+    archive.write_bytes(b"archive")
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    monkeypatch.setattr(
+        safety, "get_settings",
+        lambda: SimpleNamespace(
+            extract_max_files=100,
+            extract_max_expanded_gb=1,
+            extract_max_compression_ratio=1000,
+        ),
+    )
+
+    def malicious(stage):
+        (stage / "escape").symlink_to(tmp_path / "outside")
+
+    with pytest.raises(ValueError, match="symlink"):
+        safety.staged_external_extract(archive, dest, malicious)
+    assert list(dest.iterdir()) == []
+
+
+def test_7z_listing_budget_is_validated_before_extraction(tmp_path, monkeypatch):
+    import services.extraction_safety as safety
+
+    archive = tmp_path / "archive.7z"
+    archive.write_bytes(b"x" * 100)
+    monkeypatch.setattr(
+        safety, "get_settings",
+        lambda: SimpleNamespace(
+            extract_max_files=1,
+            extract_max_expanded_gb=1,
+            extract_max_compression_ratio=1000,
+        ),
+    )
+    listing = "Header\n----------\nPath = one\nSize = 1\nAttributes = A\n\nPath = two\nSize = 1\nAttributes = A\n"
+    with pytest.raises(ValueError, match="files"):
+        safety.validate_7z_listing(archive, listing)
+
+
+def test_alldebrid_client_rate_limits_multipart_uploads():
+    source = (Path(__file__).resolve().parents[1] / "services" / "alldebrid.py").read_text()
+    multipart = source.split("async def _multipart", 1)[1].split("# ── User", 1)[0]
+    assert "await acquire_alldebrid_request_slot()" in multipart
+    assert "services.manager_v2" not in source

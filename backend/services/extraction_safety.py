@@ -134,7 +134,7 @@ def copy_limited(source: BinaryIO, output: BinaryIO, *, archive: Path) -> int:
 
 def validate_7z_listing(archive: Path, output: str) -> None:
     """Validate `7z l -slt` member metadata before external extraction."""
-    text = str(output or "")
+    text = str(output or "").replace("\r\n", "\n")
     if "----------" not in text:
         raise ValueError("Archive listing did not contain member metadata")
     records = text.split("----------", 1)[1].strip().split("\n\n")

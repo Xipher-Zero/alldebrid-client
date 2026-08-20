@@ -67,11 +67,11 @@ async def test_scheduler_download_cycle_uses_service_root(monkeypatch):
 
     seen = []
 
-    async def one_cycle(service):
-        seen.append(service)
+    async def one_cycle():
+        seen.append(scheduler.transfer_service)
         raise asyncio.CancelledError
 
-    monkeypatch.setattr(scheduler, "reconcile_download_client_cycle", one_cycle)
+    monkeypatch.setattr(scheduler.transfer_service.reconciliation, "reconcile", one_cycle)
     with pytest.raises(asyncio.CancelledError):
         await scheduler.sync_download_clients_loop()
     assert seen == [scheduler.transfer_service]

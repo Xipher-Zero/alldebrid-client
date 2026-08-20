@@ -29,6 +29,7 @@ from typing import Optional, List, Dict, Any
 
 from core.logging_utils import sanitize_exception
 from core.branding import APP_SHORT_NAME
+from services.rate_limit import acquire_alldebrid_request_slot
 
 logger = logging.getLogger("alldebrid.api")
 
@@ -73,14 +74,7 @@ class AllDebridService:
     async def _post(self, base: str, endpoint: str,
                     data: Optional[Dict] = None,
                     retries: int = 1) -> Dict[str, Any]:
-        # Acquire a token from the rate limiter before every HTTP call.
-        # This is a no-op when the limiter is configured as unlimited (rate=1_000_000).
-        try:
-            from services.manager_v2 import _get_ad_rate_limiter
-            limiter = await _get_ad_rate_limiter()
-            await limiter.acquire()
-        except ImportError:
-            pass  # tests or standalone use — skip rate limiting
+        await acquire_alldebrid_request_slot()
 
         url = f"{base}/{endpoint}"
         last_error: Optional[Exception] = None
@@ -114,6 +108,7 @@ class AllDebridService:
         raise last_error or Exception(f"Unknown AllDebrid error for {endpoint}")
 
     async def _multipart(self, endpoint: str, form: aiohttp.FormData) -> Dict[str, Any]:
+        await acquire_alldebrid_request_slot()
         url = f"{API_V4}/{endpoint}"
         try:
             async with aiohttp.ClientSession(headers=self._headers()) as s:

@@ -27,6 +27,14 @@ import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Iterable, List, Optional, Tuple
 
+from services.extraction_safety import (
+    copy_limited,
+    staged_external_extract,
+    validate_7z_listing,
+    validate_tar_members,
+    validate_zip_members,
+)
+
 logger = logging.getLogger("alldebrid.extractor")
 
 # ---------------------------------------------------------------------------
@@ -148,7 +156,9 @@ def _extract_zip(archive: Path, dest: Path) -> None:
     no_follow = getattr(os, "O_NOFOLLOW", 0)
 
     with zipfile.ZipFile(archive, "r") as zf:
-        for member in zf.infolist():
+        members = zf.infolist()
+        validate_zip_members(archive, members)
+        for member in members:
             # ZIP member names are POSIX paths. Treat backslashes as separators
             # as well so a Windows-style traversal remains unsafe on Linux.
             member_name = member.filename.replace("\\", "/")
@@ -196,7 +206,9 @@ def _extract_zip(archive: Path, dest: Path) -> None:
 
 def _extract_tar(archive: Path, dest: Path) -> None:
     with tarfile.open(archive, "r:*") as tf:
-        tf.extractall(dest, filter="data")
+        members = tf.getmembers()
+        validate_tar_members(archive, members)
+        tf.extractall(dest, members=members, filter="data")
 
 
 def _extract_gz_single(archive: Path, dest: Path) -> None:
@@ -204,24 +216,36 @@ def _extract_gz_single(archive: Path, dest: Path) -> None:
     import gzip
     out_name = archive.stem  # strip .gz
     out_path = dest / out_name
-    with gzip.open(archive, "rb") as gz_in, open(out_path, "wb") as f_out:
-        shutil.copyfileobj(gz_in, f_out)
+    try:
+        with gzip.open(archive, "rb") as gz_in, open(out_path, "wb") as f_out:
+            copy_limited(gz_in, f_out, archive=archive)
+    except Exception:
+        out_path.unlink(missing_ok=True)
+        raise
 
 
 def _extract_bz2_single(archive: Path, dest: Path) -> None:
     import bz2
     out_name = archive.stem
     out_path = dest / out_name
-    with bz2.open(archive, "rb") as bz_in, open(out_path, "wb") as f_out:
-        shutil.copyfileobj(bz_in, f_out)
+    try:
+        with bz2.open(archive, "rb") as bz_in, open(out_path, "wb") as f_out:
+            copy_limited(bz_in, f_out, archive=archive)
+    except Exception:
+        out_path.unlink(missing_ok=True)
+        raise
 
 
 def _extract_xz_single(archive: Path, dest: Path) -> None:
     import lzma
     out_name = archive.stem
     out_path = dest / out_name
-    with lzma.open(archive, "rb") as xz_in, open(out_path, "wb") as f_out:
-        shutil.copyfileobj(xz_in, f_out)
+    try:
+        with lzma.open(archive, "rb") as xz_in, open(out_path, "wb") as f_out:
+            copy_limited(xz_in, f_out, archive=archive)
+    except Exception:
+        out_path.unlink(missing_ok=True)
+        raise
 
 
 def _get_extraction_passwords() -> list[str]:
@@ -234,64 +258,86 @@ def _get_extraction_passwords() -> list[str]:
         return []
 
 
-def _extract_7z(archive: Path, dest: Path) -> None:
-    """Use system `7z` binary (p7zip-full). Tries each configured password in order."""
+def _preflight_7z(archive: Path, binary: str, candidates: list[str]) -> None:
+    last_output = ""
+    for pw in candidates:
+        cmd = [binary, "l", "-slt"]
+        if pw:
+            cmd.append(f"-p{pw}")
+        cmd.append(str(archive))
+        rc, output = _run_tool(cmd, timeout=300)
+        last_output = output
+        if rc == 0:
+            validate_7z_listing(archive, output)
+            return
+    raise RuntimeError(
+        f"{binary} could not safely inspect {archive.name}: {last_output[-160:]}"
+    )
+
+
+def _extract_7z_to(archive: Path, dest: Path) -> None:
+    """Use system 7z inside an already-isolated staging directory."""
     passwords = _get_extraction_passwords()
-    # Always try without password first, then each configured password
     candidates = [""] + passwords if passwords else [""]
     for binary in ("7z", "7za", "7zz"):
         if not _tool_available(binary):
             continue
+        _preflight_7z(archive, binary, candidates)
         for pw in candidates:
             cmd = [binary, "x", "-mmt=1", str(archive), f"-o{dest}", "-y"]
             if pw:
                 cmd.insert(-1, f"-p{pw}")
-            rc, out = _run_tool(cmd)
+            rc, _out = _run_tool(cmd)
             if rc == 0:
                 return
         raise RuntimeError(f"{binary} failed to extract {archive.name}")
     raise RuntimeError("No 7z binary found (install p7zip-full in the container)")
 
 
-def _extract_rar(archive: Path, dest: Path) -> None:
-    """Extract RAR archives using 7z (primary) or unrar-free/unrar (fallback).
+def _extract_7z(archive: Path, dest: Path) -> None:
+    staged_external_extract(
+        archive, dest, lambda stage: _extract_7z_to(archive, stage)
+    )
 
-    7z from p7zip-full handles both RAR3 and RAR5 and is always present in
-    the Docker image.  Tries each configured password in order.
-    """
+
+def _extract_rar_to(archive: Path, dest: Path) -> None:
+    """Extract RAR into an isolated staging directory."""
     passwords = _get_extraction_passwords()
     candidates = [""] + passwords if passwords else [""]
 
-    # Primary: 7z handles RAR3 and RAR5
     for binary in ("7z", "7za", "7zz"):
         if _tool_available(binary):
+            _preflight_7z(archive, binary, candidates)
             for pw in candidates:
                 cmd = [binary, "x", "-mmt=1", str(archive), f"-o{dest}", "-y"]
                 if pw:
                     cmd.insert(-1, f"-p{pw}")
-                rc, out = _run_tool(cmd)
+                rc, _out = _run_tool(cmd)
                 if rc == 0:
                     return
-            # 7z present but all passwords failed — try unrar tools
             break
 
-    # Fallback: unrar (non-free, 'x' subcommand)
     if _tool_available("unrar"):
         for pw in candidates:
             cmd = ["unrar", "x", "-y", str(archive), str(dest) + "/"]
             if pw:
                 cmd.insert(2, f"-p{pw}")
-            rc, out = _run_tool(cmd)
+            rc, _out = _run_tool(cmd)
             if rc == 0:
                 return
 
-    # Last resort: unrar-free (LGPL, uses '-x' flag — different from non-free unrar)
     if _tool_available("unrar-free"):
-        rc, out = _run_tool(["unrar-free", "-x", str(archive), str(dest) + "/"])
+        rc, _out = _run_tool(["unrar-free", "-x", str(archive), str(dest) + "/"])
         if rc == 0:
             return
 
     raise RuntimeError("No RAR extraction tool available (p7zip-full or unrar-free required)")
+
+
+def _extract_rar(archive: Path, dest: Path) -> None:
+    staged_external_extract(
+        archive, dest, lambda stage: _extract_rar_to(archive, stage)
+    )
 
 
 def _extract_sync(archive: Path, dest: Path) -> None:

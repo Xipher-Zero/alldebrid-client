@@ -318,7 +318,7 @@ class NotificationService:
             url=self.webhook_url,
             title="🔄 Upload failed — re-queued automatically",
             description=f"**{name[:100]}** could not be uploaded to AllDebrid and has been re-queued.",
-            color=COLOR_WARN,
+            color=COLOR_WARNING,
             fields=fields or None,
         )
 
@@ -354,6 +354,7 @@ class NotificationService:
         release_notes: str = "",
     ) -> None:
         """Notify that a new DebridPulse version is available."""
+        from core.config import get_settings
         cfg = get_settings()
         if not getattr(cfg, "discord_notify_update", True):
             return

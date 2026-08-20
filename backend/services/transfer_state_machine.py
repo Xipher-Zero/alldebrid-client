@@ -4,7 +4,6 @@ from __future__ import annotations
 import logging
 
 from core.config import get_settings
-from db.database import get_db
 from services.event_bus import publish
 
 logger = logging.getLogger("debridpulse.state_machine")
@@ -26,8 +25,9 @@ def derive_parent_status(*, current_status: str, unfinished_files: int, runnable
 
 
 class TransferStateMachine:
-    def __init__(self, engine):
+    def __init__(self, engine, repository):
         self.engine = engine
+        self.repository = repository
         self.control = None
 
     def bind_control(self, control) -> None:
@@ -41,17 +41,7 @@ class TransferStateMachine:
             all_downloads = await self.engine._aria2_get_all()
         by_gid, _, _ = self.engine._build_aria2_indexes(all_downloads)
         globally_paused = bool(get_settings().paused)
-        async with get_db() as db:
-            rows = await db.fetchall(
-                """SELECT t.id AS torrent_id, t.status AS torrent_status,
-                          t.progress AS torrent_progress, f.id AS file_id,
-                          f.status AS file_status, f.size_bytes, f.download_id
-                     FROM torrents t JOIN download_files f ON f.torrent_id=t.id
-                    WHERE t.download_client='aria2'
-                      AND t.status IN ('queued','downloading','paused')
-                      AND f.download_client='aria2' AND f.blocked=0
-                      AND f.status!='missing' ORDER BY t.id,f.id"""
-            )
+        rows = await self.repository.parent_progress_rows()
         grouped = {}
         for row in rows:
             grouped.setdefault(int(row["torrent_id"]), []).append(row)
@@ -100,14 +90,7 @@ class TransferStateMachine:
             if int(progress) != int(current_progress) or status != current_status:
                 changed.append({"id": transfer_id, "progress": progress, "status": status,
                                 "status_changed": status != current_status})
-        if updates:
-            async with get_db() as db:
-                await db.executemany(
-                    """UPDATE torrents SET progress=?,status=?,updated_at=CURRENT_TIMESTAMP
-                         WHERE id=? AND status IN ('queued','downloading','paused')""",
-                    updates,
-                )
-                await db.commit()
+        await self.repository.persist_parent_progress(updates)
         if changed:
             try:
                 await publish("torrent_updated", {

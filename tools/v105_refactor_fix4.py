@@ -23,6 +23,17 @@ if hashlib.sha256(source).hexdigest() != SOURCE_SHA256:
 
 exec(compile(source, "tools/v105_refactor_fix4.py", "exec"))
 
+# Keep transformed text files compatible with git diff --check: exactly one
+# newline at EOF, not an extra blank line introduced by the one-shot edits.
+for rel in (
+    ".env.example",
+    "backend/services/manager_v2.py",
+    "backend/services/transfer_control.py",
+    "backend/tests/test_config_validator.py",
+):
+    path = ROOT / rel
+    path.write_text(path.read_text(encoding="utf-8").rstrip("\n") + "\n", encoding="utf-8")
+
 # The payload transport is build scaffolding only. Remove it and record those
 # deletions so the validated architecture commit cannot retain the chunks.
 manifest = ROOT / ".v105_changed_paths"

@@ -51,6 +51,6 @@ tests = test_path.read_text()
 append = '''\n\ndef test_materialization_engine_publishes_without_importing_http_layer():\n    source = (Path(__file__).resolve().parents[1] / "services" / "manager_v2.py").read_text()\n    assert "from api.routes" not in source\n    assert "from services.event_bus import publish" in source\n    direct = source.split("async def _broadcast_direct_link_update", 1)[1].split("@staticmethod", 1)[0]\n    assert 'await publish(' in direct\n\n\ndef test_rar_extraction_fails_closed_without_preflight_capable_7z():\n    source = (Path(__file__).resolve().parents[1] / "services" / "extractor.py").read_text()\n    rar = source.split("def _extract_rar_to", 1)[1].split("def _extract_rar(", 1)[0]\n    assert "_preflight_7z" in rar\n    assert '"unrar"' not in rar\n    assert '"unrar-free"' not in rar\n    dockerfile = (Path(__file__).resolve().parents[2] / "Dockerfile").read_text()\n    assert "p7zip-full" in dockerfile\n    assert "unrar-free" not in dockerfile\n'''
 if "test_materialization_engine_publishes_without_importing_http_layer" in tests:
     raise RuntimeError("final audit tests already present")
-test_path.write_text(tests.rstrip() + append + "\n")
+test_path.write_text(tests.rstrip() + append.rstrip() + "\n")
 
 print("final v1.0.6 audit corrections applied")

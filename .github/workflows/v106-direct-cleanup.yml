@@ -1,6 +1,5 @@
 name: Apply v1.0.6 Audit Cleanup
 
-# Second push intentionally triggers this one-shot workflow after it exists on the branch.
 on:
   push:
     branches:
@@ -12,7 +11,6 @@ permissions:
 
 jobs:
   apply-validate-commit:
-    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true

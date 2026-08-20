@@ -59,6 +59,11 @@ replace_once(
     "    assert '/app.js?v=12' in index\n",
 )
 
+# The main helper appends the v1.0.6 regression block after stripping the old
+# EOF. Normalize the generated file back to exactly one terminal newline.
+test_path = ROOT / "backend/tests/test_v106_audit_contracts.py"
+test_path.write_text(test_path.read_text().rstrip() + "\n")
+
 # Guard the ordering contract directly.
 source = (ROOT / "backend/services/reconciliation_service.py").read_text()
 lock_at = source.index("async with self.engine._aria2_state_lock:")

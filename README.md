@@ -52,7 +52,7 @@ DebridPulse can manage its own built-in aria2 instance or safely use a shared ex
 | **Auto-extraction** | Optional post-download extraction of common archive formats |
 | **Notifications** | Optional Discord notifications for download lifecycle events |
 | **Prometheus metrics** | Application and transfer metrics through `/api/metrics` |
-| **SQLite or PostgreSQL** | SQLite by default with optional external PostgreSQL |
+| **SQLite persistence** | SQLite/WAL is the authoritative application datastore |
 | **Access control** | Optional HTTP Basic Authentication |
 
 ---
@@ -208,7 +208,7 @@ Configure optional Discord lifecycle notifications.
 
 ### Database
 
-Use the default SQLite database or configure an external PostgreSQL instance.
+DebridPulse uses a single authoritative SQLite/WAL database. Configure its persistent path through `DB_PATH` or the container data mount.
 
 ### Advanced
 

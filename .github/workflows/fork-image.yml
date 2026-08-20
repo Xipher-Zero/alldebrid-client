@@ -1,8 +1,9 @@
 name: Fork Image
 
 on:
-  pull_request:
-    branches: [main]
+  push:
+    branches:
+      - staging/ui-cleanup-runner
 
 permissions:
   contents: write
@@ -11,10 +12,10 @@ jobs:
   apply-db-ui-cleanup:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout work branch
+      - name: Checkout helper branch
         uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.pull_request.head.ref }}
+          ref: ${{ github.ref_name }}
 
       - name: Remove obsolete runtime database card
         shell: bash
@@ -36,22 +37,26 @@ jobs:
     </div>
 
 '''
-          if old not in text:
-              print('Runtime database card already absent; nothing to do.')
-          else:
+          if old in text:
               path.write_text(text.replace(old, '', 1), encoding='utf-8')
               print('Removed obsolete runtime database card.')
+          else:
+              print('Runtime database card already absent.')
+
+          trigger = Path('.github/ui-cleanup.trigger')
+          if trigger.exists():
+              trigger.unlink()
           PY
 
       - name: Commit cleanup if needed
         shell: bash
         run: |
-          if git diff --quiet -- frontend/static/app.js; then
+          if git diff --quiet; then
             echo "No product change required"
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add frontend/static/app.js
+          git add -- frontend/static/app.js .github/ui-cleanup.trigger
           git commit -m "Remove obsolete runtime database selector"
-          git push origin "HEAD:${{ github.event.pull_request.head.ref }}"
+          git push origin "HEAD:${{ github.ref_name }}"

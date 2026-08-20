@@ -1,1 +1,2 @@
 Temporary trigger for the v1.0.6 PR cleanup gate. Remove after the validated cleanup commit lands.
+Gate retry after workflow simplification.

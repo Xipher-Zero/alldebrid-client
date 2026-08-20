@@ -1,24 +1,25 @@
-name: Tests
+name: Apply v1.0.6 Final Audit Cleanup
 
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  test:
+  apply-and-validate:
     runs-on: ubuntu-latest
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
     steps:
-      - name: Checkout
+      - name: Checkout corrective branch
         uses: actions/checkout@v5
+        with:
+          ref: work/v1.0.6-audit-cleanup
+          fetch-depth: 0
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v6
@@ -29,60 +30,91 @@ jobs:
             backend/requirements.txt
             backend/requirements-dev.txt
 
-      - name: Install dependencies
+      - name: Apply readable asserted cleanup
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The helper's appended regression block was intentionally written
+          # with escaped newlines, but the raw-string prefix would preserve
+          # those escapes literally. Remove only that prefix before execution.
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('tools/v106_direct_cleanup.py')
+          source = path.read_text()
+          needle = "extra = r'''"
+          if source.count(needle) != 1:
+              raise SystemExit(f'expected one raw regression block, found {source.count(needle)}')
+          path.write_text(source.replace(needle, "extra = '''", 1))
+          PY
+          python tools/v106_direct_cleanup.py
+
+      - name: Install validation tools
+        shell: bash
         run: |
           cd backend
           pip install -r requirements-dev.txt
-          pip install ruff
+          pip install ruff pip-audit bandit
 
       - name: Check undefined Python names
         run: |
           cd backend
           ruff check api core db services main.py --select F821,F822,F823
 
-      - name: Run all tests
+      - name: Run full test suite
         run: |
           cd backend
           python -m pytest tests/ -v --tb=short
 
-      - name: Check Python syntax
+      - name: Check Python and frontend syntax
+        shell: bash
         run: |
           cd backend
           python -m compileall -q .
-          echo "All Python modules compile"
+          cd ..
+          node --check frontend/static/app.js
 
-      - name: Check frontend JavaScript syntax
-        run: node --check frontend/static/app.js
-
-  security:
-    runs-on: ubuntu-latest
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-    needs: test
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-          cache: 'pip'
-          cache-dependency-path: backend/requirements.txt
-
-      - name: Install dependencies + audit tools
-        run: |
-          cd backend
-          pip install -r requirements.txt
-          pip install pip-audit bandit
-
-      - name: pip-audit (known CVEs in dependencies)
+      - name: Audit Python dependencies
         run: |
           cd backend
           pip-audit -r requirements.txt --progress-spinner off
 
-      - name: bandit (Python security linting)
+      - name: Run high-confidence security lint
         run: |
           cd backend
           bandit -r . --exclude ./tests --severity-level high --confidence-level high -f txt
+
+      - name: Diff sanity
+        run: |
+          git diff --check
+          git status --short
+
+      - name: Container build and health smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build -t debridpulse:v106-audit-cleanup .
+          docker run -d --rm --name debridpulse-v106-audit-smoke -p 18081:8080 debridpulse:v106-audit-cleanup
+          trap 'docker rm -f debridpulse-v106-audit-smoke >/dev/null 2>&1 || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:18081/api/health >/tmp/debridpulse-health.json; then
+              cat /tmp/debridpulse-health.json
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs debridpulse-v106-audit-smoke
+          exit 1
+
+      - name: Commit validated source and restore permanent CI
+        shell: bash
+        run: |
+          set -euo pipefail
+          git show 605df2802d51c8e2668e0bbaef50d4994de37fff:.github/workflows/tests.yml > .github/workflows/tests.yml
+          git rm -f tools/v106_direct_cleanup.py .github/workflows/v106-direct-cleanup.yml
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "Complete v1.0.6 audit cleanup and unify dashboard input"
+          git push origin HEAD:work/v1.0.6-audit-cleanup

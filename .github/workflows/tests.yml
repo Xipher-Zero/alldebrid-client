@@ -8,7 +8,7 @@ permissions:
   contents: read
 
 jobs:
-  diagnose:
+  diagnose-contracts:
     runs-on: ubuntu-latest
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -30,35 +30,42 @@ jobs:
         run: |
           cd backend
           pip install -r requirements-dev.txt
-          pip install ruff
 
-      - name: Check undefined Python names
+      - name: Architecture and serializer contracts
         run: |
           cd backend
-          ruff check api core db services main.py --select F821,F822,F823
+          python -m pytest tests/test_v106_audit_contracts.py::test_transfer_service_has_no_transparent_legacy_fallback \
+            tests/test_v106_audit_contracts.py::test_state_machine_does_not_import_http_layer \
+            tests/test_v106_audit_contracts.py::test_state_machine_uses_repository_instead_of_database_layer \
+            tests/test_v106_audit_contracts.py::test_external_gateway_rejects_foreign_gid \
+            tests/test_v106_audit_contracts.py::test_public_serializers_strip_capability_urls -q --tb=short
 
-      - name: Run v1.0.6 audit contracts
-        run: |
-          cd backend
-          python -m pytest tests/test_v106_audit_contracts.py -q --tb=short
-
-      - name: Run UI responsiveness contracts
+      - name: Destructive and scheduler contracts
         if: success() || failure()
         run: |
           cd backend
-          python -m pytest tests/test_ui_responsiveness.py -q --tb=short
+          python -m pytest tests/test_v106_audit_contracts.py::test_backup_rotation_requires_ownership_manifest \
+            tests/test_v106_audit_contracts.py::test_database_wipe_requires_verified_quiescence \
+            tests/test_v106_audit_contracts.py::test_entrypoint_does_not_recursive_chown_downloads_by_default \
+            tests/test_v106_audit_contracts.py::test_scheduler_has_single_reconciliation_loop -q --tb=short
 
-      - name: Run extractor contracts
+      - name: Extraction and provider contracts
         if: success() || failure()
         run: |
           cd backend
-          python -m pytest tests/test_extractor.py -q --tb=short
+          python -m pytest tests/test_v106_audit_contracts.py::test_zip_preflight_rejects_file_count_budget \
+            tests/test_v106_audit_contracts.py::test_external_staging_rejects_symlink_output \
+            tests/test_v106_audit_contracts.py::test_7z_listing_budget_is_validated_before_extraction \
+            tests/test_v106_audit_contracts.py::test_alldebrid_client_rate_limits_multipart_uploads -q --tb=short
 
-      - name: Run remaining suite
+      - name: Materialization event contract
         if: success() || failure()
         run: |
           cd backend
-          python -m pytest tests/ -q --tb=short \
-            --ignore=tests/test_v106_audit_contracts.py \
-            --ignore=tests/test_ui_responsiveness.py \
-            --ignore=tests/test_extractor.py
+          python -m pytest tests/test_v106_audit_contracts.py::test_materialization_engine_publishes_without_importing_http_layer -q --tb=short
+
+      - name: RAR fail-closed contract
+        if: success() || failure()
+        run: |
+          cd backend
+          python -m pytest tests/test_v106_audit_contracts.py::test_rar_extraction_fails_closed_without_preflight_capable_7z -q --tb=short

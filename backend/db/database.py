@@ -225,6 +225,21 @@ async def _init_db_sqlite():
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS transfer_pause_intents (
+                torrent_id INTEGER PRIMARY KEY,
+                paused INTEGER NOT NULL DEFAULT 1,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS debridpulse_aria2_owned_gids (
+                gid TEXT PRIMARY KEY,
+                download_file_id INTEGER,
+                torrent_id INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         for col, defn in _SCHEMA_COLUMNS_TORRENTS:
             await _ensure_column(db, "torrents", col, defn)
         for col, defn in _SCHEMA_COLUMNS_FILES:

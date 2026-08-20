@@ -1004,7 +1004,14 @@ async function addDashboardEntries() {
     input.focus();
 
     if (failed.length) {
-      toast(`${handled} handled · ${failed.length} failed`, handled ? 'warn' : 'error');
+      const failureMessages = [...new Set(
+        failed.map(entry => String(entry.error?.message || 'Request failed'))
+      )];
+      if (!handled && failureMessages.length === 1) {
+        toast(sanitizeErrorMsg(failureMessages[0]), 'error');
+      } else {
+        toast(`${handled} handled · ${failed.length} failed`, handled ? 'warn' : 'error');
+      }
     } else {
       toast(`${handled} item${handled === 1 ? '' : 's'} submitted`, 'success');
     }

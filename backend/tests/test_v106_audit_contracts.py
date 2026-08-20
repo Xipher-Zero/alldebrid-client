@@ -221,6 +221,8 @@ def test_dashboard_has_one_mixed_submission_control():
     assert "'/torrents/add-magnet'" in js
     assert "async function quickAdd()" not in js
     assert "async function addDebridLinks()" not in js
+    assert "failureMessages.length === 1" in js
+    assert "sanitizeErrorMsg(failureMessages[0])" in js
 
 
 def test_dashboard_recent_activity_uses_viewport_slack():

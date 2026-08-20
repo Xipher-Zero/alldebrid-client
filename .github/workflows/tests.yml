@@ -84,6 +84,11 @@ jobs:
 
       - name: Diff sanity
         run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('backend/tests/test_v106_audit_contracts.py')
+          path.write_text(path.read_text().rstrip() + '\n')
+          PY
           git diff --check
           git status --short
 

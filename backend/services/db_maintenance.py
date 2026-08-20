@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
 from datetime import date, datetime, time, timezone
 from pathlib import Path
@@ -33,6 +34,13 @@ _TABLE_ORDER = {
     "transfer_pause_intents": "torrent_id",
     "debridpulse_aria2_owned_gids": "gid",
 }
+
+
+def _chmod_private(path: Path, mode: int) -> None:
+    try:
+        os.chmod(path, mode)
+    except OSError:
+        pass
 
 
 def _folder() -> Path:
@@ -62,9 +70,11 @@ async def run_database_backup() -> dict:
 
     backup_folder = _folder()
     backup_folder.mkdir(parents=True, exist_ok=True)
+    _chmod_private(backup_folder, 0o700)
     ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     backup_dir = backup_folder / ts
     backup_dir.mkdir(parents=True, exist_ok=True)
+    _chmod_private(backup_dir, 0o700)
 
     payload = {
         "timestamp": ts,
@@ -85,6 +95,7 @@ async def run_database_backup() -> dict:
     json_path = backup_dir / "database.json"
     if not errors:
         json_path.write_text(json.dumps(payload, indent=2, default=_json_default), encoding="utf-8")
+        _chmod_private(json_path, 0o600)
 
     removed = _rotate_old_backups(backup_folder, _keep_days())
     result = {

@@ -35,14 +35,12 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Preserve the active /recovery/run feature while removing its
-          # transitional wrapper module: route it straight through the
-          # authoritative ReconciliationService boundary first.
           python - <<'PY'
           from pathlib import Path
           path = Path('backend/api/routes.py')
           source = path.read_text()
-          old = '''    from services.recovery import run_recovery_checks\n    result = await run_recovery_checks()'''
+          old = '''    from services.recovery import run_recovery_checks
+    result = await run_recovery_checks()'''
           new = '''    result = await transfer_service.reconciliation.recover()'''
           if source.count(old) != 1:
               raise SystemExit(f'expected one recovery wrapper route, found {source.count(old)}')
@@ -65,8 +63,15 @@ jobs:
               raise SystemExit(f'expected one app.js regex substitution, found {source.count(subn_old)}')
           source = source.replace(subn_old, subn_new, 1)
 
-          scan_old = '''all_python = "\\n".join(\n    p.read_text(errors="ignore")\n    for p in (ROOT / "backend").rglob("*.py")\n)'''
-          scan_new = '''all_python = "\\n".join(\n    p.read_text(errors="ignore")\n    for p in (ROOT / "backend").rglob("*.py")\n    if "tests" not in p.parts\n)'''
+          scan_old = '''all_python = "\\n".join(
+    p.read_text(errors="ignore")
+    for p in (ROOT / "backend").rglob("*.py")
+)'''
+          scan_new = '''all_python = "\\n".join(
+    p.read_text(errors="ignore")
+    for p in (ROOT / "backend").rglob("*.py")
+    if "tests" not in p.parts
+)'''
           if source.count(scan_old) != 1:
               raise SystemExit(f'expected one backend residue scan, found {source.count(scan_old)}')
           source = source.replace(scan_old, scan_new, 1)
@@ -76,32 +81,63 @@ jobs:
 
           python tools/v106_direct_cleanup.py
 
-          # Retire/update stale historical regression contracts whose surfaces
-          # are deliberately removed or unified by this pass.
+          # Update deliberately superseded tests using exact function boundaries,
+          # not regexes whose escaping can vary inside a YAML here-document.
           python - <<'PY'
-          import re
           from pathlib import Path
 
+          def replace_function(path: Path, function_name: str, next_marker: str, replacement: str) -> None:
+              source = path.read_text()
+              start_marker = f'def {function_name}'
+              if source.count(start_marker) != 1:
+                  raise SystemExit(f'{path}: expected one {function_name}, found {source.count(start_marker)}')
+              start = source.index(start_marker)
+              end = source.index(next_marker, start)
+              path.write_text(source[:start] + replacement.rstrip() + '\n\n' + source[end:])
+
           audit = Path('backend/tests/test_v105_audit_regressions.py')
-          source = audit.read_text()
-          pattern = r'\ndef test_mediainfo_service_uses_real_path_ancestry\(.*?(?=\n\n@pytest\.mark\.asyncio\nasync def test_service_permission_error_maps_to_http_403)'
-          source, count = re.subn(pattern, '', source, count=1, flags=re.S)
-          if count != 1:
-              raise SystemExit(f'expected one stale MediaInfo regression, found {count}')
-          audit.write_text(source)
+          replace_function(
+              audit,
+              'test_mediainfo_service_uses_real_path_ancestry',
+              '@pytest.mark.asyncio\nasync def test_service_permission_error_maps_to_http_403',
+              '',
+          )
 
           scope = Path('backend/tests/test_v1_scope.py')
-          source = scope.read_text()
-          pattern = r'def test_direct_link_input_expands_to_five_lines_and_resets_after_submit\(\):.*?(?=\n\ndef test_release_workflow_accepts_public_v1_tags)'
-          replacement = '''def test_unified_submission_input_expands_to_five_lines():\n    frontend = (REPO_ROOT / "frontend/static/index.html").read_text()\n    scripts = (REPO_ROOT / "frontend/static/app.js").read_text()\n    styles = (REPO_ROOT / "frontend/static/style.css").read_text()\n\n    assert 'id="q-transfer-input" rows="2"' in frontend\n    assert 'id="q-debrid-links"' not in frontend\n    assert 'id="q-magnet"' not in frontend\n    assert 'oninput="resizeDebridLinkInput(this)"' in frontend\n    assert "function resizeDebridLinkInput(input)" in scripts\n    assert "const minimum = Math.ceil((lineHeight * 2) + chrome);" in scripts\n    assert "const maximum = Math.ceil((lineHeight * 5) + chrome);" in scripts\n    assert "resizeDebridLinkInput(input);" in scripts\n    assert ".direct-link-input" in styles\n    assert "overflow-y: hidden" in styles\n'''
-          source, count = re.subn(pattern, lambda _match: replacement, source, count=1, flags=re.S)
-          if count != 1:
-              raise SystemExit(f'expected one stale dashboard input regression, found {count}')
-          scope.write_text(source)
+          replacement = '''def test_unified_submission_input_expands_to_five_lines():
+    frontend = (REPO_ROOT / "frontend/static/index.html").read_text()
+    scripts = (REPO_ROOT / "frontend/static/app.js").read_text()
+    styles = (REPO_ROOT / "frontend/static/style.css").read_text()
+
+    assert 'id="q-transfer-input" rows="2"' in frontend
+    assert 'id="q-debrid-links"' not in frontend
+    assert 'id="q-magnet"' not in frontend
+    assert 'oninput="resizeDebridLinkInput(this)"' in frontend
+    assert "function resizeDebridLinkInput(input)" in scripts
+    assert "const minimum = Math.ceil((lineHeight * 2) + chrome);" in scripts
+    assert "const maximum = Math.ceil((lineHeight * 5) + chrome);" in scripts
+    assert "resizeDebridLinkInput(input);" in scripts
+    assert ".direct-link-input" in styles
+    assert "overflow-y: hidden" in styles'''
+          replace_function(
+              scope,
+              'test_direct_link_input_expands_to_five_lines_and_resets_after_submit',
+              'def test_release_workflow_accepts_public_v1_tags',
+              replacement,
+          )
 
           contracts = Path('backend/tests/test_v106_audit_contracts.py')
           source = contracts.read_text()
-          addition = '''\n\ndef test_recovery_route_survives_without_transitional_wrapper():\n    root = Path(__file__).resolve().parents[1]\n    routes = (root / "api" / "routes.py").read_text()\n    block = routes.split('async def run_recovery():', 1)[1].split('# ──', 1)[0]\n    assert 'transfer_service.reconciliation.recover()' in block\n    assert 'services.recovery' not in block\n    assert not (root / "services" / "recovery.py").exists()\n'''
+          addition = '''
+
+def test_recovery_route_survives_without_transitional_wrapper():
+    root = Path(__file__).resolve().parents[1]
+    routes = (root / "api" / "routes.py").read_text()
+    block = routes.split('async def run_recovery():', 1)[1].split('# ──', 1)[0]
+    assert 'transfer_service.reconciliation.recover()' in block
+    assert 'services.recovery' not in block
+    assert not (root / "services" / "recovery.py").exists()
+'''
           if 'test_recovery_route_survives_without_transitional_wrapper' in source:
               raise SystemExit('recovery boundary contract already present unexpectedly')
           contracts.write_text(source.rstrip() + addition + '\n')

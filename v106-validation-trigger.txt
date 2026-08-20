@@ -1,1 +1,0 @@
-Temporary validation trigger for the final paused-intake staging candidate.

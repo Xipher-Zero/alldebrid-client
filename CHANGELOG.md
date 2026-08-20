@@ -15,6 +15,7 @@
 - Moved AllDebrid request rate limiting into the provider networking layer, including multipart uploads.
 - Reduced scheduler authority to one reconciliation loop, made scheduler lifecycle idempotent, and made recursive `/download` ownership repair explicit opt-in instead of startup behavior.
 - Removed the obsolete hidden Runtime Database settings card and synchronized release documentation, compose metadata, API docs paths, and SQLite-only product surfaces.
+- Defined Pause All as an execution gate rather than an intake gate: new direct links, magnets, and `.torrent` files are durably accepted while paused and provider work begins only after resume.
 
 ## [1.0.5] — 2026-08-20
 

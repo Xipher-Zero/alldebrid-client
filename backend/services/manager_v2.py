@@ -40,6 +40,8 @@ ERROR_CODES = set(range(5, 16))
 UPLOAD_FAILED_CODE = 5  # AllDebrid statusCode 5 = "Upload failed"
 EXPIRED_CODE = 3        # AllDebrid statusCode 3 = "Expired — files removed from cache"
 DIRECT_LINK_SOURCE = "direct_link"
+DEFERRED_PROVIDER_STATUS = "deferred"
+DEFERRED_TORRENT_KIND = "torrent_file"
 MAX_DIRECT_LINKS_PER_BATCH = 100
 
 
@@ -306,6 +308,7 @@ class TorrentManager:
         self._aria2: Optional[Aria2Service] = None
         self._sem: Optional[asyncio.Semaphore] = None
         self._upload_sem: asyncio.Semaphore = asyncio.Semaphore(MAX_CONCURRENT_AD_UPLOADS)
+        self._deferred_submission_lock = asyncio.Lock()
         self._active: Set[int] = set()
         self._direct_link_tasks: Set[asyncio.Task] = set()
         self._direct_link_task_ids: Set[int] = set()
@@ -565,8 +568,6 @@ class TorrentManager:
         return "aria2"
 
     async def add_magnet_direct(self, magnet: str, source: str = "manual") -> dict:
-        if self.is_paused():
-            raise Exception("Processing is paused")
         hash_value = extract_hash(magnet)
         if not hash_value:
             raise ValueError("Invalid magnet: no btih hash found")
@@ -594,10 +595,222 @@ class TorrentManager:
             return result
         # ──────────────────────────────────────────────────────────────────
 
-        result = await self._add_magnet(magnet, hash_value, source)
+        result = await self._add_magnet(
+            magnet, hash_value, source, duplicate_check=False
+        )
         if decision.action == "warn":
             result["_duplicate"] = decision.as_dict()
         return result
+
+    async def _persist_deferred_magnet(
+        self, magnet: str, hash_value: str, source: str
+    ) -> dict:
+        """Persist magnet intake without contacting AllDebrid while Pause All is active."""
+        name = hash_value[:16]
+        async with get_db() as db:
+            await db.execute(
+                """INSERT INTO torrents
+                       (hash, magnet, name, status, source, provider_status,
+                        progress, download_client, error_message, alldebrid_id)
+                   VALUES (?, ?, ?, 'paused', ?, ?, 0, 'aria2', NULL, NULL)
+                   ON CONFLICT(hash) DO UPDATE SET
+                       magnet=excluded.magnet,
+                       name=excluded.name,
+                       source=excluded.source,
+                       status='paused',
+                       provider_status=excluded.provider_status,
+                       provider_status_code=NULL,
+                       polling_failures=0,
+                       progress=0,
+                       error_message=NULL,
+                       alldebrid_id=NULL,
+                       completed_at=NULL,
+                       updated_at=CURRENT_TIMESTAMP""",
+                (hash_value, magnet, name, source, DEFERRED_PROVIDER_STATUS),
+            )
+            row = await db.fetchone("SELECT * FROM torrents WHERE hash=?", (hash_value,))
+            if not row:
+                raise RuntimeError("Could not persist deferred magnet submission")
+            torrent_id = int(row["id"])
+            await db.execute("DELETE FROM download_files WHERE torrent_id=?", (torrent_id,))
+            await db.execute(
+                "INSERT INTO events (torrent_id, level, message) VALUES (?, 'info', ?)",
+                (
+                    torrent_id,
+                    "Accepted while Pause All is active; queued for AllDebrid upload on resume",
+                ),
+            )
+            await db.commit()
+        result = dict(row)
+        result["_deferred"] = True
+        return result
+
+    async def _persist_deferred_torrent_file(
+        self,
+        file_bytes: bytes,
+        filename: str,
+        source: str,
+        local_hash: str,
+    ) -> dict:
+        """Persist a .torrent payload so paused intake survives restart."""
+        if not local_hash:
+            raise ValueError(
+                "Could not determine torrent infohash; cannot queue this .torrent while processing is paused"
+            )
+        name = Path(filename or "upload.torrent").stem or local_hash[:16]
+        async with get_db() as db:
+            await db.execute(
+                """INSERT INTO torrents
+                       (hash, name, status, source, provider_status, progress,
+                        download_client, error_message, alldebrid_id)
+                   VALUES (?, ?, 'paused', ?, ?, 0, 'aria2', NULL, NULL)
+                   ON CONFLICT(hash) DO UPDATE SET
+                       name=excluded.name,
+                       source=excluded.source,
+                       status='paused',
+                       provider_status=excluded.provider_status,
+                       provider_status_code=NULL,
+                       polling_failures=0,
+                       progress=0,
+                       error_message=NULL,
+                       alldebrid_id=NULL,
+                       completed_at=NULL,
+                       updated_at=CURRENT_TIMESTAMP""",
+                (local_hash, name, source, DEFERRED_PROVIDER_STATUS),
+            )
+            row = await db.fetchone("SELECT * FROM torrents WHERE hash=?", (local_hash,))
+            if not row:
+                raise RuntimeError("Could not persist deferred torrent-file submission")
+            torrent_id = int(row["id"])
+            await db.execute("DELETE FROM download_files WHERE torrent_id=?", (torrent_id,))
+            await db.execute(
+                """INSERT INTO deferred_provider_submissions
+                       (torrent_id, kind, payload, filename, source, created_at)
+                   VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                   ON CONFLICT(torrent_id) DO UPDATE SET
+                       kind=excluded.kind,
+                       payload=excluded.payload,
+                       filename=excluded.filename,
+                       source=excluded.source,
+                       created_at=CURRENT_TIMESTAMP""",
+                (
+                    torrent_id,
+                    DEFERRED_TORRENT_KIND,
+                    bytes(file_bytes),
+                    filename or "upload.torrent",
+                    source,
+                ),
+            )
+            await db.execute(
+                "INSERT INTO events (torrent_id, level, message) VALUES (?, 'info', ?)",
+                (
+                    torrent_id,
+                    "Accepted .torrent while Pause All is active; queued for AllDebrid upload on resume",
+                ),
+            )
+            await db.commit()
+        result = dict(row)
+        result["_deferred"] = True
+        return result
+
+    async def _upload_torrent_file_provider(
+        self,
+        file_bytes: bytes,
+        filename: str,
+        source: str,
+        local_hash: str,
+        *,
+        deferred_torrent_id: Optional[int] = None,
+    ) -> dict:
+        if self.is_paused():
+            if deferred_torrent_id is not None:
+                async with get_db() as db:
+                    row = await db.fetchone(
+                        "SELECT * FROM torrents WHERE id=?", (int(deferred_torrent_id),)
+                    )
+                result = dict(row or {"id": int(deferred_torrent_id)})
+                result["_deferred"] = True
+                return result
+            return await self._persist_deferred_torrent_file(
+                file_bytes, filename, source, local_hash
+            )
+
+        async with self._upload_sem:
+            if self.is_paused():
+                if deferred_torrent_id is not None:
+                    async with get_db() as db:
+                        row = await db.fetchone(
+                            "SELECT * FROM torrents WHERE id=?", (int(deferred_torrent_id),)
+                        )
+                    result = dict(row or {"id": int(deferred_torrent_id)})
+                    result["_deferred"] = True
+                    return result
+                return await self._persist_deferred_torrent_file(
+                    file_bytes, filename, source, local_hash
+                )
+            result = await self.ad().upload_torrent_file(
+                file_bytes, filename or "upload.torrent"
+            )
+
+        ad_id = str(result.get("id", ""))
+        name = (
+            result.get("name")
+            or result.get("filename")
+            or Path(filename or "upload.torrent").stem
+        )
+        hash_value = str(local_hash or result.get("hash", ad_id) or ad_id).strip().lower()
+        logger.info("Torrent file uploaded %s (ad_id=%s)", name, ad_id)
+
+        if deferred_torrent_id is None:
+            row = await self._upsert(hash_value, None, name, ad_id, source)
+        else:
+            async with get_db() as db:
+                await db.execute(
+                    """UPDATE torrents
+                       SET hash=?, name=?, alldebrid_id=?, status='uploading',
+                           source=?, provider_status='queued', provider_status_code=NULL,
+                           polling_failures=0, progress=0, error_message=NULL,
+                           completed_at=NULL, updated_at=CURRENT_TIMESTAMP
+                       WHERE id=?""",
+                    (
+                        hash_value,
+                        name,
+                        ad_id,
+                        source,
+                        int(deferred_torrent_id),
+                    ),
+                )
+                await db.execute(
+                    "DELETE FROM deferred_provider_submissions WHERE torrent_id=?",
+                    (int(deferred_torrent_id),),
+                )
+                await db.execute(
+                    "INSERT INTO events (torrent_id, level, message) VALUES (?, 'info', ?)",
+                    (
+                        int(deferred_torrent_id),
+                        f"Uploaded deferred .torrent to AllDebrid (id={ad_id})",
+                    ),
+                )
+                await db.commit()
+                row = await db.fetchone(
+                    "SELECT * FROM torrents WHERE id=?", (int(deferred_torrent_id),)
+                )
+            row = dict(row or {})
+
+        if get_settings().discord_notify_added:
+            await self.notify().send_added(name, source=source, alldebrid_id=ad_id)
+
+        status_code = int(result.get("statusCode") or result.get("status_code") or 0)
+        if status_code == READY_CODE:
+            logger.info(
+                "Fast-path: %s already ready on AllDebrid (cached torrent file) — starting immediately",
+                sanitize_log_value(name[:60]),
+            )
+            torrent_id = row.get("id")
+            if torrent_id:
+                self._schedule_ready_parent_download(int(torrent_id), ad_id, name)
+
+        return row
 
     async def add_torrent_file_direct(
         self,
@@ -606,14 +819,11 @@ class TorrentManager:
         source: str = "manual",
         preferred_hash: Optional[str] = None,
     ) -> dict:
-        if self.is_paused():
-            raise Exception("Processing is paused")
         if not get_settings().alldebrid_api_key:
             raise Exception("AllDebrid API key not configured")
         if not file_bytes:
             raise ValueError("Empty torrent file")
 
-        # ── Extract infohash locally before contacting AllDebrid ────────────
         local_hash = preferred_hash or ""
         if not local_hash:
             try:
@@ -622,7 +832,6 @@ class TorrentManager:
             except Exception as exc:
                 logger.debug("Failed to extract hash from torrent file: %s", exc)
 
-        # ── Duplicate gate ──────────────────────────────────────────────────
         from services.duplicates import DuplicateCandidate, check_before_add
         decision = await check_before_add(DuplicateCandidate(
             source=source,
@@ -643,38 +852,16 @@ class TorrentManager:
                     pass
             result["_duplicate"] = decision.as_dict()
             return result
-        # ───────────────────────────────────────────────────────────────────
 
-        async with self._upload_sem:
-            result = await self.ad().upload_torrent_file(file_bytes, filename or "upload.torrent")
-
-        ad_id = str(result.get("id", ""))
-        name = result.get("name") or result.get("filename") or Path(filename or "upload.torrent").stem
-        hash_value = str(local_hash or result.get("hash", ad_id) or ad_id).strip().lower()
-        logger.info("Torrent file uploaded %s (ad_id=%s)", name, ad_id)
-        row = await self._upsert(hash_value, None, name, ad_id, source)
+        result = await self._upload_torrent_file_provider(
+            file_bytes, filename, source, local_hash
+        )
         if decision.action == "warn":
-            row["_duplicate"] = decision.as_dict()
-        if get_settings().discord_notify_added:
-            await self.notify().send_added(name, source=source, alldebrid_id=ad_id)
-
-        # Fast-path: if AllDebrid already reports ready (cached torrent) start immediately.
-        status_code = int(result.get("statusCode") or result.get("status_code") or 0)
-        if status_code == READY_CODE:
-            logger.info(
-                "Fast-path: %s already ready on AllDebrid (cached torrent file) — starting immediately",
-                sanitize_log_value(name[:60]),
-            )
-            torrent_id = row.get("id")
-            if torrent_id:
-                self._schedule_ready_parent_download(int(torrent_id), ad_id, name)
-
-        return row
+            result["_duplicate"] = decision.as_dict()
+        return result
 
     async def add_direct_links(self, links: List[str]) -> dict:
         """Create one tracked transfer collection from ordinary hoster URLs."""
-        if self.is_paused():
-            raise Exception("Processing is paused")
         if not get_settings().alldebrid_api_key:
             raise Exception("AllDebrid API key not configured")
 
@@ -709,11 +896,37 @@ class TorrentManager:
                 "INSERT INTO events (torrent_id, level, message) VALUES (?, 'info', ?)",
                 (
                     torrent_id,
-                    f"Submitted {len(normalized)} direct link(s) for AllDebrid generation",
+                    f"Accepted {len(normalized)} direct link(s)",
                 ),
             )
             await db.commit()
             row = await db.fetchone("SELECT * FROM torrents WHERE id=?", (torrent_id,))
+
+        if self.is_paused():
+            async with get_db() as db:
+                await db.execute(
+                    """UPDATE torrents
+                       SET status='paused', provider_status=?, updated_at=CURRENT_TIMESTAMP
+                       WHERE id=?""",
+                    (DEFERRED_PROVIDER_STATUS, int(torrent_id)),
+                )
+                await db.execute(
+                    "INSERT INTO events (torrent_id, level, message) VALUES (?, 'info', ?)",
+                    (
+                        int(torrent_id),
+                        "Pause All is active; direct-link generation is queued for resume",
+                    ),
+                )
+                await db.commit()
+                row = await db.fetchone("SELECT * FROM torrents WHERE id=?", (torrent_id,))
+            await self._broadcast_direct_link_update(
+                int(torrent_id), "paused", initial_name, 0.0
+            )
+            return {
+                **dict(row or {}),
+                "accepted_links": len(normalized),
+                "_deferred": True,
+            }
 
         await self._broadcast_direct_link_update(
             int(torrent_id), "processing", initial_name, 0.0
@@ -800,6 +1013,33 @@ class TorrentManager:
         self, torrent_id: int, links: List[str]
     ) -> None:
         """Generate AllDebrid URLs and stage their files for the aria2 dispatcher."""
+        if self.is_paused():
+            async with get_db() as db:
+                current = await db.fetchone(
+                    "SELECT status, provider_status, name FROM torrents WHERE id=?",
+                    (torrent_id,),
+                )
+                if current and current["status"] not in {"completed", "deleted", "error"}:
+                    was_deferred = str(current.get("provider_status") or "") == DEFERRED_PROVIDER_STATUS
+                    await db.execute(
+                        """UPDATE torrents
+                           SET status='paused', provider_status=?, updated_at=CURRENT_TIMESTAMP
+                           WHERE id=?""",
+                        (DEFERRED_PROVIDER_STATUS, torrent_id),
+                    )
+                    if not was_deferred:
+                        await db.execute(
+                            "INSERT INTO events (torrent_id, level, message) VALUES (?, 'info', ?)",
+                            (torrent_id, "Pause All deferred direct-link generation until resume"),
+                        )
+                    await db.commit()
+                    await self._broadcast_direct_link_update(
+                        torrent_id,
+                        "paused",
+                        str(current.get("name") or "Debrid links"),
+                        0.0,
+                    )
+            return
         if torrent_id in self._active:
             return
         self._active.add(torrent_id)
@@ -1184,36 +1424,181 @@ class TorrentManager:
             recovered += 1
         return recovered
 
-    async def _add_magnet(self, magnet: str, hash_value: str, source: str) -> dict:
-        from services.duplicates import DuplicateCandidate, check_before_add
+    async def resume_deferred_provider_submissions(self) -> dict:
+        """Start provider work that was durably accepted while Pause All was active."""
+        if self.is_paused():
+            return {"started": 0, "failed": 0}
 
-        decision = await check_before_add(DuplicateCandidate(
-            source=source,
-            magnet=magnet,
-            infohash=hash_value,
-        ))
-        if decision.action == "skip":
-            existing = decision.matches[0] if decision.matches else None
-            result: dict = {}
-            if existing:
+        async with self._deferred_submission_lock:
+            if self.is_paused():
+                return {"started": 0, "failed": 0}
+            async with get_db() as db:
+                rows = await db.fetchall(
+                    """SELECT t.*,
+                              d.kind AS deferred_kind,
+                              d.payload AS deferred_payload,
+                              d.filename AS deferred_filename,
+                              d.source AS deferred_source
+                         FROM torrents t
+                         LEFT JOIN deferred_provider_submissions d
+                           ON d.torrent_id=t.id
+                        WHERE t.provider_status=?
+                          AND t.status NOT IN ('paused','completed','deleted','error')
+                        ORDER BY t.priority DESC, t.id ASC""",
+                    (DEFERRED_PROVIDER_STATUS,),
+                )
+
+            started = failed = 0
+            for row in rows:
+                if self.is_paused():
+                    break
+                torrent_id = int(row["id"])
                 try:
                     async with get_db() as db:
-                        row = await db.fetchone(
-                            "SELECT * FROM torrents WHERE id=?", (existing.torrent_id,)
+                        current = await db.fetchone(
+                            "SELECT status, provider_status FROM torrents WHERE id=?",
+                            (torrent_id,),
                         )
-                    result = dict(row) if row else {}
-                except Exception:
-                    pass
-            result["_duplicate"] = decision.as_dict()
-            return result
+                    if (
+                        not current
+                        or current["status"] == "paused"
+                        or str(current.get("provider_status") or "") != DEFERRED_PROVIDER_STATUS
+                    ):
+                        continue
+
+                    if str(row.get("source") or "") == DIRECT_LINK_SOURCE:
+                        links = normalize_direct_links(
+                            json.loads(row.get("magnet") or "[]")
+                        )
+                        async with get_db() as db:
+                            await db.execute(
+                                """UPDATE torrents
+                                   SET status='processing', provider_status='submitted',
+                                       error_message=NULL, updated_at=CURRENT_TIMESTAMP
+                                   WHERE id=? AND provider_status=? AND status!='paused'""",
+                                (torrent_id, DEFERRED_PROVIDER_STATUS),
+                            )
+                            await db.execute(
+                                "INSERT INTO events (torrent_id, level, message) VALUES (?, 'info', ?)",
+                                (torrent_id, "Pause All released; starting deferred direct-link generation"),
+                            )
+                            await db.commit()
+                        self._schedule_direct_link_collection(torrent_id, links)
+                        started += 1
+                        continue
+
+                    if str(row.get("deferred_kind") or "") == DEFERRED_TORRENT_KIND:
+                        payload = row.get("deferred_payload")
+                        if isinstance(payload, memoryview):
+                            payload = payload.tobytes()
+                        if not isinstance(payload, (bytes, bytearray)) or not payload:
+                            raise ValueError("Deferred .torrent payload is missing")
+                        result = await self._upload_torrent_file_provider(
+                            bytes(payload),
+                            str(row.get("deferred_filename") or "upload.torrent"),
+                            str(row.get("deferred_source") or row.get("source") or "manual"),
+                            str(row.get("hash") or ""),
+                            deferred_torrent_id=torrent_id,
+                        )
+                        if not result.get("_deferred"):
+                            started += 1
+                        continue
+
+                    magnet = str(row.get("magnet") or "").strip()
+                    if not magnet:
+                        raise ValueError("Deferred magnet payload is missing")
+                    result = await self._add_magnet(
+                        magnet,
+                        str(row.get("hash") or ""),
+                        str(row.get("source") or "manual"),
+                        duplicate_check=False,
+                        resume_deferred=True,
+                    )
+                    if not result.get("_deferred"):
+                        started += 1
+                except Exception as exc:
+                    failed += 1
+                    message = sanitize_exception(exc, max_length=300)
+                    logger.warning(
+                        "Deferred provider submission %s could not start: %s",
+                        torrent_id,
+                        message,
+                    )
+                    async with get_db() as db:
+                        await db.execute(
+                            """UPDATE torrents
+                               SET error_message=?, updated_at=CURRENT_TIMESTAMP
+                               WHERE id=? AND provider_status=?""",
+                            (message, torrent_id, DEFERRED_PROVIDER_STATUS),
+                        )
+                        await db.execute(
+                            "INSERT INTO events (torrent_id, level, message) VALUES (?, 'warn', ?)",
+                            (torrent_id, f"Deferred provider submission retry failed: {message}"),
+                        )
+                        await db.commit()
+            return {"started": started, "failed": failed}
+
+    async def _add_magnet(
+        self,
+        magnet: str,
+        hash_value: str,
+        source: str,
+        *,
+        duplicate_check: bool = True,
+        resume_deferred: bool = False,
+    ) -> dict:
+        decision = None
+        if duplicate_check:
+            from services.duplicates import DuplicateCandidate, check_before_add
+
+            decision = await check_before_add(DuplicateCandidate(
+                source=source,
+                magnet=magnet,
+                infohash=hash_value,
+            ))
+            if decision.action == "skip":
+                existing = decision.matches[0] if decision.matches else None
+                result: dict = {}
+                if existing:
+                    try:
+                        async with get_db() as db:
+                            row = await db.fetchone(
+                                "SELECT * FROM torrents WHERE id=?", (existing.torrent_id,)
+                            )
+                        result = dict(row) if row else {}
+                    except Exception:
+                        pass
+                result["_duplicate"] = decision.as_dict()
+                return result
 
         async with get_db() as db:
-            cur = await db.execute("SELECT * FROM torrents WHERE hash=?", (hash_value,))
-            existing = await cur.fetchone()
-            if existing and existing["status"] in ("uploading", "processing", "queued", "downloading", "ready", "completed"):
-                return dict(existing)
+            existing = await db.fetchone("SELECT * FROM torrents WHERE hash=?", (hash_value,))
+        deferred_existing = bool(
+            existing
+            and str(existing.get("provider_status") or "") == DEFERRED_PROVIDER_STATUS
+            and not str(existing.get("alldebrid_id") or "").strip()
+        )
+        if (
+            existing
+            and existing["status"] in (
+                "uploading", "processing", "queued", "downloading", "ready", "completed"
+            )
+            and not (resume_deferred and deferred_existing)
+        ):
+            return dict(existing)
+
+        if self.is_paused():
+            result = await self._persist_deferred_magnet(magnet, hash_value, source)
+            if decision is not None and decision.action == "warn":
+                result["_duplicate"] = decision.as_dict()
+            return result
 
         async with self._upload_sem:
+            if self.is_paused():
+                result = await self._persist_deferred_magnet(magnet, hash_value, source)
+                if decision is not None and decision.action == "warn":
+                    result["_duplicate"] = decision.as_dict()
+                return result
             result = await self.ad().upload_magnet(magnet)
         ad_id = str(result.get("id", ""))
         name = result.get("name") or result.get("filename") or hash_value[:16]
@@ -1221,13 +1606,11 @@ class TorrentManager:
         logger.info("Magnet uploaded %s (ad_id=%s)", sanitize_log_value(name[:80]), ad_id)
 
         row = await self._upsert(normalized_hash, magnet, name, ad_id, source)
-        if decision.action == "warn":
+        if decision is not None and decision.action == "warn":
             row["_duplicate"] = decision.as_dict()
         if get_settings().discord_notify_added:
             await self.notify().send_added(name, source=source, alldebrid_id=ad_id)
 
-        # ── Fast-path: if AllDebrid already reports ready (cached torrent),
-        # fire _start_download immediately instead of waiting for the next poll.
         status_code = int(result.get("statusCode") or result.get("status_code") or 0)
         if status_code == READY_CODE:
             logger.info(

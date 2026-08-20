@@ -7,6 +7,7 @@ ownership manifest so a shared backup root cannot delete unrelated data.
 """
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import os
@@ -26,6 +27,7 @@ TABLES = [
     "events",
     "stats_snapshots",
     "transfer_pause_intents",
+    "deferred_provider_submissions",
     "debridpulse_aria2_owned_gids",
 ]
 
@@ -35,6 +37,7 @@ _TABLE_ORDER = {
     "events": "id",
     "stats_snapshots": "id",
     "transfer_pause_intents": "torrent_id",
+    "deferred_provider_submissions": "torrent_id",
     "debridpulse_aria2_owned_gids": "gid",
 }
 
@@ -66,7 +69,7 @@ def _json_default(value):
     if isinstance(value, Path):
         return str(value)
     if isinstance(value, bytes):
-        return value.decode("utf-8", errors="replace")
+        return {"__base64__": base64.b64encode(value).decode("ascii")}
     raise TypeError(f"Object of type {value.__class__.__name__} is not JSON serializable")
 
 
@@ -197,6 +200,7 @@ async def wipe_database(*, verified_quiesced: bool = False) -> dict:
     async with get_db() as db:
         await db.execute("DELETE FROM debridpulse_aria2_owned_gids")
         await db.execute("DELETE FROM transfer_pause_intents")
+        await db.execute("DELETE FROM deferred_provider_submissions")
         await db.execute("DELETE FROM download_files")
         await db.execute("DELETE FROM events")
         await db.execute("DELETE FROM stats_snapshots")

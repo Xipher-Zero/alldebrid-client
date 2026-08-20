@@ -38,6 +38,7 @@ DebridPulse can manage its own built-in aria2 instance or safely use a shared ex
 | **Batch link submission** | Submit up to 100 unique direct links in one tracked transaction |
 | **Magnet links** | Submit one or more magnets through AllDebrid |
 | **Torrent files** | Upload `.torrent` files directly to AllDebrid |
+| **Pause-safe intake** | Pause All stops processing, not intake: new links, magnets, and `.torrent` files are recorded locally and begin provider work after Resume All |
 | **Delayed link generation** | Automatically handles AllDebrid links that require asynchronous generation |
 | **Built-in aria2** | Run DebridPulse with its bundled aria2 instance for a self-contained deployment |
 | **External aria2** | Connect to an existing aria2 JSON-RPC daemon |
@@ -230,6 +231,8 @@ It provides:
 - recent download activity.
 
 The Dashboard intentionally shows only a small Recent Activity window. Use **Downloads** for full transfer history and management.
+
+**Pause All stops processing, not intake.** Submissions made while globally paused are durably recorded with a paused state; no new AllDebrid or aria2 work is started until Resume All (or an explicit per-transfer resume) releases them.
 
 ---
 

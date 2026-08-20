@@ -1,7 +1,8 @@
 import asyncio
+from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -272,3 +273,85 @@ def test_recovery_route_survives_without_transitional_wrapper():
     assert 'transfer_service.reconciliation.recover()' in block
     assert 'services.recovery' not in block
     assert not (root / "services" / "recovery.py").exists()
+
+@pytest.mark.asyncio
+async def test_direct_link_intake_is_durable_while_pause_all_is_active(monkeypatch):
+    import services.manager_v2 as manager_module
+
+    class FakeDb:
+        def __init__(self):
+            self.statements = []
+
+        async def execute_returning_id(self, sql, params=()):
+            self.statements.append((sql, params))
+            return 77
+
+        async def execute(self, sql, params=()):
+            self.statements.append((sql, params))
+
+        async def fetchone(self, sql, params=()):
+            return {
+                "id": 77,
+                "name": "sample.zip",
+                "status": "paused",
+                "source": "direct_link",
+                "provider_status": "deferred",
+            }
+
+        async def commit(self):
+            return None
+
+    fake_db = FakeDb()
+
+    @asynccontextmanager
+    async def fake_get_db():
+        yield fake_db
+
+    settings = SimpleNamespace(paused=True, alldebrid_api_key="configured")
+    manager = manager_module.TorrentManager()
+    schedule = MagicMock()
+    monkeypatch.setattr(manager_module, "get_settings", lambda: settings)
+    monkeypatch.setattr(manager_module, "get_db", fake_get_db)
+    monkeypatch.setattr(manager, "_schedule_direct_link_collection", schedule)
+    monkeypatch.setattr(manager, "_broadcast_direct_link_update", AsyncMock())
+
+    result = await manager.add_direct_links(["https://host.invalid/sample.zip"])
+
+    assert result["accepted_links"] == 1
+    assert result["_deferred"] is True
+    assert result["status"] == "paused"
+    schedule.assert_not_called()
+    assert any("provider_status=?" in sql for sql, _ in fake_db.statements)
+
+
+def test_pause_all_defers_provider_intake_instead_of_rejecting_it():
+    root = Path(__file__).resolve().parents[2]
+    manager = (root / "backend/services/manager_v2.py").read_text()
+    database = (root / "backend/db/database.py").read_text()
+    maintenance = (root / "backend/services/db_maintenance.py").read_text()
+    control = (root / "backend/services/transfer_control_service.py").read_text()
+    reconciliation = (root / "backend/services/reconciliation_service.py").read_text()
+    app = (root / "frontend/static/app.js").read_text()
+
+    assert "DEFERRED_PROVIDER_STATUS = \"deferred\"" in manager
+    assert "resume_deferred_provider_submissions" in manager
+    assert "deferred_provider_submissions" in database
+    assert '"deferred_provider_submissions"' in maintenance
+    assert "DELETE FROM deferred_provider_submissions" in maintenance
+    assert "await self.engine.resume_deferred_provider_submissions()" in control
+    assert 'async_timer("reconcile.deferred_provider")' in reconciliation
+    assert "processing is paused" in app
+    assert "waiting for Resume All" in app
+
+    magnet_start = manager.index("async def add_magnet_direct")
+    magnet_end = manager.index("async def add_torrent_file_direct", magnet_start)
+    file_start = magnet_end
+    file_end = manager.index("async def add_direct_links", file_start)
+    link_start = file_end
+    link_end = manager.index("def _schedule_direct_link_collection", link_start)
+    for segment in (
+        manager[magnet_start:magnet_end],
+        manager[file_start:file_end],
+        manager[link_start:link_end],
+    ):
+        assert 'raise Exception("Processing is paused")' not in segment

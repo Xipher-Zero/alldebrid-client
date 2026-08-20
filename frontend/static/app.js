@@ -882,6 +882,8 @@ async function uploadTorrentFile(input) {
       toast('Already in queue: ' + (res.name || res._duplicate.reason), 'warn');
     } else if (res && res._duplicate && res._duplicate.action === 'warn') {
       toast('Torrent file added (possible duplicate)', 'warn');
+    } else if (res && res._deferred) {
+      toast('Torrent file added · processing is paused', 'success');
     } else {
       toast('Torrent file added!', 'success');
     }
@@ -976,11 +978,13 @@ async function addDashboardEntries() {
   setButtonPending(button, true, 'Adding…');
   const failed = [];
   let handled = 0;
+  let deferred = 0;
   try {
     if (direct.length) {
       try {
-        await api('POST', '/links/add', {links: direct.map(entry => entry.value)}, 30000);
+        const result = await api('POST', '/links/add', {links: direct.map(entry => entry.value)}, 30000);
         handled += direct.length;
+        if (result && result._deferred) deferred += direct.length;
       } catch (error) {
         direct.forEach(entry => failed.push({...entry, error}));
       }
@@ -993,8 +997,10 @@ async function addDashboardEntries() {
         entry => api('POST', '/torrents/add-magnet', {magnet: entry.value}, 30000)
       );
       results.forEach((result, index) => {
-        if (result.ok) handled += 1;
-        else failed.push({...magnets[index], error: result.error});
+        if (result.ok) {
+          handled += 1;
+          if (result.value && result.value._deferred) deferred += 1;
+        } else failed.push({...magnets[index], error: result.error});
       });
     }
 
@@ -1012,6 +1018,10 @@ async function addDashboardEntries() {
       } else {
         toast(`${handled} handled · ${failed.length} failed`, handled ? 'warn' : 'error');
       }
+    } else if (handled && deferred === handled) {
+      toast(`${handled} added · processing is paused`, 'success');
+    } else if (deferred) {
+      toast(`${handled} handled · ${deferred} waiting for Resume All`, 'success');
     } else {
       toast(`${handled} item${handled === 1 ? '' : 's'} submitted`, 'success');
     }

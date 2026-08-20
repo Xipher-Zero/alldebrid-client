@@ -233,6 +233,17 @@ async def _init_db_sqlite():
             )
         """)
         await db.execute("""
+            CREATE TABLE IF NOT EXISTS deferred_provider_submissions (
+                torrent_id INTEGER PRIMARY KEY,
+                kind TEXT NOT NULL,
+                payload BLOB NOT NULL,
+                filename TEXT,
+                source TEXT DEFAULT 'manual',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (torrent_id) REFERENCES torrents(id)
+            )
+        """)
+        await db.execute("""
             CREATE TABLE IF NOT EXISTS debridpulse_aria2_owned_gids (
                 gid TEXT PRIMARY KEY,
                 download_file_id INTEGER,

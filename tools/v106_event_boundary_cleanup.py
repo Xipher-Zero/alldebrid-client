@@ -1,14 +1,15 @@
+import re
 from pathlib import Path
 
 manager_path = Path("backend/services/manager_v2.py")
 manager = manager_path.read_text()
-import_token = "                from api.routes import _sse_broadcast\n"
+import_pattern = r"(?m)^[ \t]*from api\.routes import _sse_broadcast\n"
 call_token = "_sse_broadcast("
-if manager.count(import_token) != 6:
-    raise RuntimeError(f"expected 6 remaining route imports, found {manager.count(import_token)}")
+manager, import_count = re.subn(import_pattern, "", manager)
+if import_count != 6:
+    raise RuntimeError(f"expected 6 remaining route imports, found {import_count}")
 if manager.count(call_token) != 6:
     raise RuntimeError(f"expected 6 remaining SSE calls, found {manager.count(call_token)}")
-manager = manager.replace(import_token, "")
 manager = manager.replace(call_token, "publish(")
 manager_path.write_text(manager)
 

@@ -156,7 +156,7 @@ async def request_id_middleware(request: Request, call_next):
 
 # ── Optional HTTP Basic Auth ───────────────────────────────────────────────────
 # Enabled when auth_username AND auth_password are both set in config.
-# The /api/stats endpoint is exempt so health-checkers don't need credentials.
+# Health/version/avatar remain public for health checks and UI metadata.
 _AUTH_EXEMPT = {"/api/health", "/api/version", "/api/avatar"}
 
 @app.middleware("http")
@@ -184,6 +184,19 @@ async def basic_auth_middleware(request: Request, call_next):
             user_ok = secrets.compare_digest(provided_user.encode(), username.encode())
             pass_ok = secrets.compare_digest(provided_pass.encode(), password.encode())
             if user_ok and pass_ok:
+                if request.method.upper() in {"POST", "PUT", "PATCH", "DELETE"}:
+                    origin = str(request.headers.get("Origin", "") or "").strip()
+                    if origin:
+                        from urllib.parse import urlparse
+                        origin_host = (urlparse(origin).netloc or "").casefold()
+                        request_host = str(request.headers.get("Host", "") or "").casefold()
+                        configured = {
+                            urlparse(item).netloc.casefold()
+                            for item in _cors_origins
+                            if urlparse(item).netloc
+                        }
+                        if origin_host != request_host and origin_host not in configured:
+                            return Response(content="Forbidden origin", status_code=403)
                 return await call_next(request)
         except Exception:  # noqa: BLE001 — malformed auth header; fall through to 401
             pass

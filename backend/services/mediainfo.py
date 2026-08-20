@@ -15,6 +15,8 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from core.config import get_settings
+
 logger = logging.getLogger("alldebrid.mediainfo")
 
 # Simple in-process LRU-style cache: path → info dict
@@ -30,6 +32,17 @@ def _cache_set(path: str, info: dict) -> None:
         except StopIteration:
             pass
     _cache[path] = info
+
+
+def resolve_media_path(file_path: str) -> Path:
+    """Resolve a media path and require real directory ancestry under downloads."""
+    root = Path(getattr(get_settings(), "download_folder", "/download")).resolve()
+    candidate = Path(file_path).resolve()
+    if not candidate.is_relative_to(root):
+        raise PermissionError("Path outside download folder")
+    if not candidate.is_file():
+        raise FileNotFoundError("File not found")
+    return candidate
 
 
 async def get_mediainfo(file_path: str) -> dict:
@@ -55,7 +68,7 @@ async def get_mediainfo(file_path: str) -> dict:
 
     Result is cached in-process (up to 500 entries).
     """
-    norm = str(Path(file_path).resolve())
+    norm = str(resolve_media_path(file_path))
     if norm in _cache:
         return _cache[norm]
 

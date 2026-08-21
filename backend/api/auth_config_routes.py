@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from urllib.parse import parse_qs, urlsplit
 
@@ -10,19 +11,33 @@ from pydantic import BaseModel, Field
 from api import auth_routes as interactive_routes
 from auth.api_tokens import api_token_store
 from auth.csrf import clear_login_csrf_cookie
+from auth.models import AuthMechanism, Principal
 from auth.oidc import (
     OIDC_CORRELATION_COOKIE,
     OIDC_TRANSACTION_TTL_SECONDS,
+    OidcConfigurationError,
     OidcError,
     begin_oidc_login,
     complete_oidc_login,
+    discover_oidc,
+    oidc_auth_ready,
     oidc_callback_url,
+    oidc_configuration,
 )
 from auth.oidc_version import oidc_configuration_version
+from auth.passwords import basic_verification_cache
 from auth.pending_oidc import commit_verified_pending_oidc, pending_oidc_store
-from auth.policy import safe_return_path
+from auth.policy import (
+    interactive_auth_enabled,
+    oidc_auth_enabled,
+    password_auth_enabled,
+    password_auth_ready,
+    safe_return_path,
+)
 from auth.sessions import session_cookie_token, session_store, set_session_cookie
-from core.config import get_settings
+from auth.transitions import oidc_critical_change
+from core.config import apply_settings, get_settings, save_settings
+from core.config_validator import validate_and_sanitise
 
 
 router = APIRouter()
@@ -48,8 +63,99 @@ class OidcVerificationRequest(BaseModel):
     return_to: str = "/settings"
 
 
+class AuthenticationConfigUpdate(BaseModel):
+    auth_password_enabled: bool | None = None
+    auth_username: str | None = Field(default=None, max_length=256)
+    auth_password: str | None = Field(default=None, max_length=4096)
+    clear_password: bool = False
+    auth_session_lifetime_hours: int | None = Field(default=None, ge=1, le=168)
+
+    auth_oidc_enabled: bool | None = None
+    oidc_provider_name: str | None = Field(default=None, max_length=256)
+    oidc_issuer_url: str | None = Field(default=None, max_length=2048)
+    oidc_client_id: str | None = Field(default=None, max_length=2048)
+    oidc_client_secret: str | None = Field(default=None, max_length=8192)
+    clear_oidc_client_secret: bool = False
+    oidc_scopes: list[str] | None = None
+    oidc_allow_all: bool | None = None
+    oidc_allowed_subjects: list[str] | None = None
+    oidc_allowed_emails: list[str] | None = None
+    oidc_allowed_groups: list[str] | None = None
+    oidc_group_claim: str | None = Field(default=None, max_length=256)
+    public_base_url: str | None = Field(default=None, max_length=2048)
+    confirm_open_mode: bool = False
+
+
 class ApiTokenEnableRequest(BaseModel):
     enabled: bool
+
+
+def _authentication_mode(cfg) -> str:
+    password = password_auth_enabled(cfg)
+    oidc = oidc_auth_enabled(cfg)
+    if password and oidc:
+        return "Username & Password + OIDC"
+    if password:
+        return "Username & Password"
+    if oidc:
+        return "OIDC"
+    return "No authentication"
+
+
+def _local_oidc_state(cfg) -> tuple[bool, str]:
+    """Return locally configured state and derived callback without exposing secrets."""
+    candidate = cfg.model_copy(update={"auth_oidc_enabled": True}, deep=True)
+    try:
+        oidc_configuration(candidate)
+        return True, oidc_callback_url(candidate)
+    except OidcError:
+        return False, ""
+
+
+async def _oidc_runtime_available(cfg, configured: bool) -> bool | None:
+    if not oidc_auth_enabled(cfg) or not configured:
+        return None
+    try:
+        config = oidc_configuration(cfg)
+        await asyncio.wait_for(discover_oidc(config), timeout=3.0)
+        return True
+    except (OidcError, TimeoutError):
+        return False
+
+
+async def _authentication_payload(request: Request) -> dict:
+    cfg = get_settings()
+    oidc_configured, callback_url = _local_oidc_state(cfg)
+    principal = getattr(request.state, "principal", Principal.anonymous())
+    return {
+        "mode": _authentication_mode(cfg),
+        "authentication_required": interactive_auth_enabled(cfg),
+        "password_enabled": password_auth_enabled(cfg),
+        "password_ready": password_auth_ready(cfg),
+        "password_configured": bool(str(getattr(cfg, "auth_password_hash", "") or "").strip()),
+        "username": str(getattr(cfg, "auth_username", "") or ""),
+        "session_lifetime_hours": int(getattr(cfg, "auth_session_lifetime_hours", 12) or 12),
+        "oidc_enabled": oidc_auth_enabled(cfg),
+        "oidc_configured": oidc_configured,
+        "oidc_ready": oidc_auth_ready(cfg) if oidc_auth_enabled(cfg) else False,
+        "oidc_available": await _oidc_runtime_available(cfg, oidc_configured),
+        "oidc_provider_name": str(getattr(cfg, "oidc_provider_name", "") or "OpenID Connect"),
+        "oidc_issuer_url": str(getattr(cfg, "oidc_issuer_url", "") or ""),
+        "oidc_client_id": str(getattr(cfg, "oidc_client_id", "") or ""),
+        "oidc_client_secret_configured": bool(str(getattr(cfg, "oidc_client_secret", "") or "")),
+        "oidc_scopes": list(getattr(cfg, "oidc_scopes", []) or []),
+        "oidc_allow_all": bool(getattr(cfg, "oidc_allow_all", False)),
+        "oidc_allowed_subjects": list(getattr(cfg, "oidc_allowed_subjects", []) or []),
+        "oidc_allowed_emails": list(getattr(cfg, "oidc_allowed_emails", []) or []),
+        "oidc_allowed_groups": list(getattr(cfg, "oidc_allowed_groups", []) or []),
+        "oidc_group_claim": str(getattr(cfg, "oidc_group_claim", "groups") or "groups"),
+        "public_base_url": str(getattr(cfg, "public_base_url", "") or ""),
+        "oidc_callback_url": callback_url,
+        "api_token_enabled": api_token_store.enabled,
+        "api_token_configured": api_token_store.configured,
+        "current_session_mechanism": principal.mechanism.value if principal.mechanism else None,
+        "session_count": session_store.size,
+    }
 
 
 def _build_proposed_settings(request: OidcVerificationRequest):
@@ -88,6 +194,63 @@ def _build_proposed_settings(request: OidcVerificationRequest):
     return current.model_copy(update=updates, deep=True)
 
 
+def _build_authentication_update(update: AuthenticationConfigUpdate):
+    current = get_settings()
+    changes: dict[str, object] = {}
+    ordinary_fields = (
+        "auth_password_enabled",
+        "auth_username",
+        "auth_session_lifetime_hours",
+        "auth_oidc_enabled",
+        "oidc_provider_name",
+        "oidc_issuer_url",
+        "oidc_client_id",
+        "oidc_scopes",
+        "oidc_allow_all",
+        "oidc_allowed_subjects",
+        "oidc_allowed_emails",
+        "oidc_allowed_groups",
+        "oidc_group_claim",
+        "public_base_url",
+    )
+    for field in ordinary_fields:
+        value = getattr(update, field)
+        if value is not None:
+            changes[field] = value
+
+    password = str(update.auth_password or "")
+    if update.clear_password:
+        changes["auth_password"] = ""
+        changes["auth_password_hash_clear"] = True
+    elif password:
+        changes["auth_password"] = password
+        changes["auth_password_hash_clear"] = False
+
+    secret = str(update.oidc_client_secret or "")
+    if update.clear_oidc_client_secret:
+        changes["oidc_client_secret"] = ""
+        changes["oidc_client_secret_clear"] = True
+    elif secret:
+        changes["oidc_client_secret"] = secret
+        changes["oidc_client_secret_clear"] = False
+
+    return current.model_copy(update=changes, deep=True)
+
+
+def _prospective_password_ready(candidate, update: AuthenticationConfigUpdate) -> bool:
+    if not bool(getattr(candidate, "auth_password_enabled", False)):
+        return False
+    username = str(getattr(candidate, "auth_username", "") or "").strip()
+    if not username:
+        return False
+    if update.clear_password:
+        return bool(str(update.auth_password or ""))
+    return bool(
+        str(update.auth_password or "")
+        or str(getattr(candidate, "auth_password_hash", "") or "").strip()
+    )
+
+
 def _set_pending_correlation_cookie(response: JSONResponse, correlation: str) -> None:
     response.set_cookie(
         key=OIDC_CORRELATION_COOKIE,
@@ -108,6 +271,68 @@ def _clear_pending_correlation_cookie(response) -> None:
         httponly=True,
         samesite="lax",
     )
+
+
+@router.get("/api/auth/config")
+async def get_authentication_config(request: Request):
+    response = JSONResponse(await _authentication_payload(request))
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@router.put("/api/auth/config")
+async def update_authentication_config(request: Request, update: AuthenticationConfigUpdate):
+    current = get_settings()
+    candidate = _build_authentication_update(update)
+
+    if bool(getattr(candidate, "auth_password_enabled", False)) and not _prospective_password_ready(candidate, update):
+        return JSONResponse(
+            {"detail": "Username & Password cannot be enabled until a username and stored or new password are configured"},
+            status_code=400,
+        )
+
+    if bool(getattr(candidate, "auth_oidc_enabled", False)):
+        try:
+            oidc_configuration(candidate)
+        except OidcConfigurationError:
+            return JSONResponse(
+                {"detail": "OpenID Connect cannot be enabled until its local configuration is complete"},
+                status_code=400,
+            )
+
+    clean = validate_and_sanitise(candidate)
+    password_changed = bool(
+        update.clear_password
+        or str(update.auth_password or "")
+        or (update.auth_username is not None and str(update.auth_username) != str(getattr(current, "auth_username", "")))
+        or (
+            update.auth_password_enabled is not None
+            and bool(update.auth_password_enabled) != password_auth_enabled(current)
+        )
+    )
+    payload = update.model_dump(exclude_none=True)
+    critical_oidc_changed = oidc_critical_change(payload, current)
+    oidc_disabled = bool(
+        update.auth_oidc_enabled is False and oidc_auth_enabled(current)
+    )
+
+    save_settings(clean)
+    apply_settings(clean)
+
+    if password_changed:
+        basic_verification_cache.clear()
+        session_store.revoke_mechanism(AuthMechanism.PASSWORD_SESSION)
+    if critical_oidc_changed or oidc_disabled:
+        session_store.revoke_mechanism(AuthMechanism.OIDC_SESSION)
+
+    logger.info(
+        "Authentication configuration updated: password=%s oidc=%s",
+        "enabled" if password_auth_enabled(clean) else "disabled",
+        "enabled" if oidc_auth_enabled(clean) else "disabled",
+    )
+    response = JSONResponse({"ok": True, **(await _authentication_payload(request))})
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @router.get("/api/auth/api-token")

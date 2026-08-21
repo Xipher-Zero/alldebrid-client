@@ -70,10 +70,13 @@ def _build_proposed_settings(request: OidcVerificationRequest):
 
     if request.clear_oidc_client_secret:
         updates["oidc_client_secret"] = ""
+        updates["oidc_client_secret_clear"] = True
     elif request.oidc_client_secret is not None and request.oidc_client_secret.strip():
         updates["oidc_client_secret"] = request.oidc_client_secret
+        updates["oidc_client_secret_clear"] = False
     else:
         updates["oidc_client_secret"] = str(getattr(current, "oidc_client_secret", "") or "")
+        updates["oidc_client_secret_clear"] = False
 
     return current.model_copy(update=updates, deep=True)
 

@@ -356,7 +356,7 @@ class DashboardContractTests(unittest.TestCase):
         self.assertIn('src="./docs/logo.svg"', landing_html)
 
         for glyph in ("&#x25EB;&#xFE0E;", "&#x25BD;&#xFE0E;", "&#x2263;&#xFE0E;",
-                      "&#x2206;&#xFE0E;", "&#x223F;&#xFE0E;", "&#x2699;&#xFE0E;"):
+                      "&#x2206;&#xFE0E;", "&#x2699;&#xFE0E;", "&#x003F;&#xFE0E;"):
             self.assertIn(glyph, html)
 
         for semantic_token in (

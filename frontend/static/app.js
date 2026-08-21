@@ -56,15 +56,6 @@ function renderTopbarActions() {
 }
 
 // ── Nav ────────────────────────────────────────────────────────────────────
-var _analyticsWindow = 24;
-
-function setAnalyticsWindow(el, hours) {
-  document.querySelectorAll('#view-analytics .ftab').forEach(t => t.classList.remove('active'));
-  el.classList.add('active');
-  _analyticsWindow = hours;
-  loadAnalytics(hours);
-}
-
 function nav(el) {
   if (!el) return;
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
@@ -86,7 +77,6 @@ function nav(el) {
     torrents:'Downloads',
     events:'Event Log',
     stats:'Statistics',
-    analytics:'Analytics',
     settings:'Settings',
     help:'Help & License',
   };
@@ -95,7 +85,6 @@ function nav(el) {
   if (v === 'torrents')  loadTorrents();
   if (v === 'events')    loadEvents();
   if (v === 'stats')     loadDetailedStats();
-  if (v === 'analytics') loadAnalytics(_analyticsWindow || 24);
   if (v === 'settings')  loadSettings();
   if (v === 'aria2queue') loadAria2QueueView();
   closeSidebar();
@@ -4009,77 +3998,6 @@ async function setTorrentPriority(torrentId, priority) {
     loadTorrents();
   } catch(e) { toast(e.message, 'error'); }
 }
-
-// ── Queue Analytics ────────────────────────────────────────────────────────
-
-async function loadAnalytics(windowHours) {
-  const h = windowHours || 24;
-  const el = document.getElementById('analytics-body');
-  if (!el) return;
-  el.innerHTML = '<div style="color:var(--text3);padding:20px">Loading analytics…</div>';
-  try {
-    const a = await api('GET', `/analytics?window_hours=${h}`);
-    if (a.error) { el.innerHTML = `<div style="color:var(--red)">${esc(a.error)}</div>`; return; }
-    const dur = a.avg_duration_seconds > 3600
-      ? (a.avg_duration_seconds/3600).toFixed(1)+'h'
-      : a.avg_duration_seconds > 60
-      ? Math.round(a.avg_duration_seconds/60)+'m'
-      : Math.round(a.avg_duration_seconds)+'s';
-    el.innerHTML = `
-      <div class="dash-kpi-strip" style="margin-bottom:16px">
-        <div class="dash-kpi"><div class="dash-kpi-val" style="color:var(--green)">${a.completed_count}</div><div class="dash-kpi-lbl">Completed</div><div class="dash-kpi-sub">in ${h}h</div></div>
-        <div class="dash-kpi-sep"></div>
-        <div class="dash-kpi"><div class="dash-kpi-val" style="color:var(--red)">${a.error_count}</div><div class="dash-kpi-lbl">Errors</div><div class="dash-kpi-sub">in ${h}h</div></div>
-        <div class="dash-kpi-sep"></div>
-        <div class="dash-kpi"><div class="dash-kpi-val" style="color:var(--yellow)">${a.no_peer_count}</div><div class="dash-kpi-lbl">No Peer</div><div class="dash-kpi-sub">in ${h}h</div></div>
-        <div class="dash-kpi-sep"></div>
-        <div class="dash-kpi"><div class="dash-kpi-val" style="color:${a.success_rate>0.9?'var(--green)':a.success_rate>0.7?'var(--yellow)':'var(--red)'}">${Math.round(a.success_rate*100)}%</div><div class="dash-kpi-lbl">Success Rate</div><div class="dash-kpi-sub">of finished</div></div>
-        <div class="dash-kpi-sep"></div>
-        <div class="dash-kpi"><div class="dash-kpi-val">${dur||'—'}</div><div class="dash-kpi-lbl">Avg Duration</div><div class="dash-kpi-sub">per download</div></div>
-        <div class="dash-kpi-sep"></div>
-        <div class="dash-kpi"><div class="dash-kpi-val">${a.throughput_gb.toFixed(1)} GB</div><div class="dash-kpi-lbl">Downloaded</div><div class="dash-kpi-sub">in ${h}h</div></div>
-      </div>
-      ${a.top_error_reasons.length ? `
-        <div class="card" style="padding:14px">
-          <div style="font-weight:700;font-size:12px;margin-bottom:8px;color:var(--text2)">TOP ERROR REASONS</div>
-          ${a.top_error_reasons.map(r => `
-            <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border);font-size:12px">
-              <span style="color:var(--text2)">${esc(r.reason.substring(0,80))}</span>
-              <span style="color:var(--red);font-weight:600">${r.count}</span>
-            </div>`).join('')}
-        </div>` : ''}
-      ${a.hourly_completed && a.hourly_completed.length ? renderHourlyChart(a.hourly_completed) : ''}
-    `;
-  } catch(e) {
-    el.innerHTML = `<div style="color:var(--red)">Analytics error: ${esc(e.message)}</div>`;
-  }
-}
-
-function renderHourlyChart(hourlyData) {
-  if (!hourlyData || !hourlyData.length) return '';
-  var maxCount = Math.max(...hourlyData.map(function(h) { return h.count; }), 1);
-  var w = 600; var h = 120; var pad = 30; var barW = Math.max(2, Math.floor((w - pad * 2) / hourlyData.length) - 1);
-  var bars = hourlyData.map(function(item, i) {
-    var barH = Math.max(2, Math.round((item.count / maxCount) * (h - pad)));
-    var x = pad + i * Math.floor((w - pad * 2) / hourlyData.length);
-    var y = h - pad - barH;
-    var hour = esc(item.hour ? item.hour.substring(11, 16) : '');
-    return '<rect x="' + x + '" y="' + y + '" width="' + barW + '" height="' + barH +
-           '" fill="var(--accent)" rx="2" opacity="0.85">' +
-           '<title>' + hour + ': ' + item.count + ' completed</title></rect>' +
-           (i % Math.max(1, Math.floor(hourlyData.length / 8)) === 0 ?
-             '<text x="' + (x + barW/2) + '" y="' + (h - pad + 12) + '" text-anchor="middle" font-size="9" fill="var(--text3)">' + hour + '</text>' : '');
-  }).join('');
-  return '<div class="card" style="padding:14px;margin-top:12px">' +
-    '<div style="font-weight:700;font-size:12px;margin-bottom:8px;color:var(--text2)">COMPLETIONS PER HOUR</div>' +
-    '<svg viewBox="0 0 ' + w + ' ' + h + '" style="width:100%;height:120px">' +
-      '<line x1="' + pad + '" y1="' + (h-pad) + '" x2="' + (w-pad) + '" y2="' + (h-pad) + '" stroke="var(--border)" stroke-width="1"/>' +
-      bars +
-      '<text x="' + (pad-4) + '" y="' + (h-pad) + '" text-anchor="end" font-size="9" fill="var(--text3)">0</text>' +
-      '<text x="' + (pad-4) + '" y="' + pad + '" text-anchor="end" font-size="9" fill="var(--text3)">' + maxCount + '</text>' +
-    '</svg></div>';
-}
-
 
 // ── AllDebrid Orphan Cleanup ───────────────────────────────────────────────────
 

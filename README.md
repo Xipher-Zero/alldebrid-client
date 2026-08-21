@@ -49,7 +49,7 @@ DebridPulse can manage its own built-in aria2 instance or safely use a shared ex
 | **Import existing magnets** | Import AllDebrid magnets not yet represented in the local database |
 | **Live status updates** | Server-Sent Events carry the application's pulse without requiring full-page polling |
 | **Event log** | Searchable transfer and application event history |
-| **Statistics and analytics** | Built-in operational and download statistics |
+| **Statistics** | Built-in operational and download statistics |
 | **Auto-extraction** | Optional post-download extraction of common archive formats |
 | **Notifications** | Optional Discord notifications for download lifecycle events |
 | **Prometheus metrics** | Application and transfer metrics through `/api/metrics` |

@@ -296,7 +296,7 @@ def test_stats_operator_actions_acknowledge_before_network_completion():
     snapshot = js.split(
         "async function triggerStatsSnapshot(button)", 1
     )[1].split(
-        "async function loadAnalytics", 1
+        "// ── Init ─", 1
     )[0]
 
     assert send.index(

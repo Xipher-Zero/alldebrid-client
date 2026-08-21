@@ -1826,18 +1826,6 @@ async def set_torrent_priority(torrent_id: int, body: dict):
     return {"ok": True, "torrent_id": torrent_id, "priority": priority}
 
 
-# ── Queue Analytics ───────────────────────────────────────────────────────────
-
-@router.get("/analytics")
-async def get_analytics(window_hours: int = Query(24, ge=1, le=720)):
-    """Return queue performance metrics for the last *window_hours* hours."""
-    from services.analytics import get_queue_analytics
-    try:
-        return await get_queue_analytics(window_hours)
-    except Exception as exc:
-        logger.debug("get_analytics error: %s", exc)
-        raise HTTPException(500, "Analytics unavailable")
-
 # ── Recovery ──────────────────────────────────────────────────────────────────
 
 @router.post("/recovery/run")

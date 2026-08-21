@@ -13,6 +13,8 @@ PUBLIC_PATHS = frozenset(
         "/api/avatar",
         "/api/auth/status",
         "/login",
+        "/auth/oidc/start",
+        "/auth/oidc/callback",
     }
 )
 
@@ -38,6 +40,14 @@ def password_auth_configured(settings) -> bool:
     return password_auth_ready(settings)
 
 
+def oidc_auth_enabled(settings) -> bool:
+    return bool(getattr(settings, "auth_oidc_enabled", False))
+
+
+def interactive_auth_enabled(settings) -> bool:
+    return password_auth_enabled(settings) or oidc_auth_enabled(settings)
+
+
 def safe_return_path(value: str, *, default: str = "/") -> str:
     """Accept only local relative return destinations; never create an open redirect."""
     candidate = str(value or "").strip()
@@ -53,7 +63,7 @@ def safe_return_path(value: str, *, default: str = "/") -> str:
         return default
     if not parsed.path.startswith("/") or parsed.path.startswith("//"):
         return default
-    if parsed.path == "/login":
+    if parsed.path in {"/login", "/auth/oidc/start", "/auth/oidc/callback"}:
         return default
     return candidate
 

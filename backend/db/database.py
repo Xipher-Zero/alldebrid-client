@@ -6,6 +6,7 @@ removed in v1.0.5 because they added failure states without product benefit.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import time
@@ -31,6 +32,75 @@ def _default_sqlite_path() -> Path:
 
 
 DB_PATH = _default_sqlite_path()
+
+
+class DatabaseMaintenanceActive(RuntimeError):
+    """Raised when a non-maintenance task attempts DB access during maintenance."""
+
+
+class DatabaseMaintenanceGate:
+    """Exclusive destructive-maintenance gate for SQLite sessions.
+
+    Maintenance flips admission closed before waiting for existing get_db()
+    sessions to drain. New sessions from other tasks fail immediately instead
+    of waiting and later replaying stale pre-wipe work after the database has
+    been cleared. The maintenance owner itself may open DB sessions for the
+    verified backup and wipe transaction.
+    """
+
+    def __init__(self) -> None:
+        self._condition = asyncio.Condition()
+        self._active_sessions = 0
+        self._maintenance_active = False
+        self._owner: asyncio.Task | None = None
+
+    @property
+    def active(self) -> bool:
+        return self._maintenance_active
+
+    @asynccontextmanager
+    async def session(self):
+        current = asyncio.current_task()
+        counted = False
+        async with self._condition:
+            if self._maintenance_active and current is not self._owner:
+                raise DatabaseMaintenanceActive("Database maintenance is in progress")
+            if current is not self._owner:
+                self._active_sessions += 1
+                counted = True
+        try:
+            yield
+        finally:
+            if counted:
+                async with self._condition:
+                    self._active_sessions = max(0, self._active_sessions - 1)
+                    if self._active_sessions == 0:
+                        self._condition.notify_all()
+
+    @asynccontextmanager
+    async def maintenance(self):
+        current = asyncio.current_task()
+        async with self._condition:
+            if self._maintenance_active:
+                raise DatabaseMaintenanceActive("Database maintenance is already in progress")
+            self._maintenance_active = True
+            self._owner = current
+            while self._active_sessions:
+                await self._condition.wait()
+        try:
+            yield
+        finally:
+            async with self._condition:
+                self._owner = None
+                self._maintenance_active = False
+                self._condition.notify_all()
+
+
+database_maintenance_gate = DatabaseMaintenanceGate()
+
+
+def database_maintenance():
+    return database_maintenance_gate.maintenance()
 
 
 class _CursorWrapper:
@@ -111,12 +181,13 @@ def db_runtime_metrics() -> Dict[str, Any]:
 
 @asynccontextmanager
 async def get_db() -> AsyncIterator[_DbConnection]:
-    started = time.monotonic()
-    async with aiosqlite.connect(DB_PATH, timeout=30) as conn:
-        await _configure_sqlite_connection(conn)
-        _db_metrics["sqlite_acquires"] += 1
-        _db_metrics["wait_seconds"] += max(0.0, time.monotonic() - started)
-        yield _DbConnection(conn)
+    async with database_maintenance_gate.session():
+        started = time.monotonic()
+        async with aiosqlite.connect(DB_PATH, timeout=30) as conn:
+            await _configure_sqlite_connection(conn)
+            _db_metrics["sqlite_acquires"] += 1
+            _db_metrics["wait_seconds"] += max(0.0, time.monotonic() - started)
+            yield _DbConnection(conn)
 
 
 async def close_db_runtime() -> None:
@@ -176,7 +247,7 @@ async def _init_db_sqlite():
                 progress REAL DEFAULT 0,
                 download_url TEXT,
                 local_path TEXT,
-                source TEXT DEFAULT 'watch',
+                source TEXT DEFAULT '',
                 provider_status TEXT,
                 provider_status_code INTEGER,
                 polling_failures INTEGER DEFAULT 0,

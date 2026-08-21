@@ -143,6 +143,19 @@ function esc(s) {
     .replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
+function escapeHtmlStrings(value) {
+  // Settings and other API payloads are plain data. Escape string leaves
+  // before interpolating those payloads into HTML templates; numbers and
+  // booleans retain their native types for control-flow and form logic.
+  if (Array.isArray(value)) return value.map(escapeHtmlStrings);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, escapeHtmlStrings(item)])
+    );
+  }
+  return typeof value === 'string' ? esc(value) : value;
+}
+
 function sourceLabel(source) {
   const labels = {
     direct_link: 'Direct link',
@@ -153,7 +166,7 @@ function sourceLabel(source) {
     api: 'API'
   };
   const key = String(source || '').trim();
-  return labels[key] || key || '—';
+  return labels[key] || esc(key) || '—';
 }
 
 function sanitizeErrorMsg(message) {
@@ -294,12 +307,16 @@ function renderKvMap(arr, formatter) {
         return [key, item];
       })
     : Object.entries(arr);
-  return `<div class="kv-list">${entries.map(([key, value]) => `
+  return `<div class="kv-list">${entries.map(([key, value]) => {
+    const rendered = formatter
+      ? formatter(value, key)
+      : (value && typeof value === 'object' ? value.count ?? '—' : value);
+    return `
     <div class="kv-row">
-      <span>${key}</span>
-      <strong>${formatter ? formatter(value, key) : (value && typeof value === 'object' ? value.count ?? '—' : value)}</strong>
-    </div>
-  `).join('')}</div>`;
+      <span>${esc(key)}</span>
+      <strong>${esc(rendered)}</strong>
+    </div>`;
+  }).join('')}</div>`;
 }
 function badge(s) {
   const m = {pending:'⏳ Pending',uploading:'⬆ Uploading',processing:'⚙ Processing',
@@ -309,12 +326,14 @@ function badge(s) {
     error:'❌ Error',missing:'❌ Missing file',provider_failed:'❌ Provider download failed',
     provider_missing:'❌ Removed from provider',failed:'❌ Provider download failed',
     deleted:'🗑 Deleted',imported:'📋 Imported',partial:'⚠ Partial'};
-  const cls = s === 'missing' || s === 'provider_failed' || s === 'provider_missing' || s === 'failed'
+  const key = String(s || '');
+  const requestedCls = key === 'missing' || key === 'provider_failed' || key === 'provider_missing' || key === 'failed'
     ? 'error'
-    : s === 'completed_with_errors' || s === 'downloading_with_errors'
+    : key === 'completed_with_errors' || key === 'downloading_with_errors'
       ? 'partial'
-      : s;
-  return `<span class="badge badge-${cls}">${m[s]||s}</span>`;
+      : key;
+  const cls = /^[a-z0-9_-]+$/i.test(requestedCls) ? requestedCls : 'unknown';
+  return `<span class="badge badge-${cls}">${esc(m[key] || key || 'Unknown')}</span>`;
 }
 function transferDisplayStatus(t) {
   if (
@@ -1327,12 +1346,12 @@ async function showDetail(id) {
         <div><div class="dk">Progress</div><div class="dv">${(t.progress||0).toFixed(1)}%</div></div>
         <div><div class="dk">Size</div><div class="dv">${fmtSize(t.size_bytes)}</div></div>
         <div><div class="dk">Source</div><div class="dv">${sourceLabel(t.source)}</div></div>
-        <div><div class="dk">Downloader</div><div class="dv">${t.download_client||'aria2'}</div></div>
+        <div><div class="dk">Downloader</div><div class="dv">${esc(t.download_client||'aria2')}</div></div>
         <div><div class="dk">Added</div><div class="dv">${fmtDate(t.created_at)}</div></div>
         <div><div class="dk">Completed</div><div class="dv">${fmtDate(t.completed_at)}</div></div>
-        <div style="grid-column:1/-1"><div class="dk">AllDebrid ID</div><div class="dv">${t.alldebrid_id||'—'}</div></div>
-        <div style="grid-column:1/-1"><div class="dk">Hash</div><div class="dv" style="font-size:11px">${t.hash||'—'}</div></div>
-        ${t.local_path?`<div style="grid-column:1/-1"><div class="dk">Local Path</div><div class="dv" style="font-size:11px">${t.local_path}</div></div>`:''}
+        <div style="grid-column:1/-1"><div class="dk">AllDebrid ID</div><div class="dv">${esc(t.alldebrid_id||'—')}</div></div>
+        <div style="grid-column:1/-1"><div class="dk">Hash</div><div class="dv" style="font-size:11px">${esc(t.hash||'—')}</div></div>
+        ${t.local_path?`<div style="grid-column:1/-1"><div class="dk">Local Path</div><div class="dv" style="font-size:11px">${esc(t.local_path)}</div></div>`:''}
         ${t.error_message?`<div style="grid-column:1/-1"><div class="dk">Error</div><div class="dv" style="color:var(--red)">${esc(t.error_message)}</div></div>`:''}
       </div>
       ${t.files&&t.files.length?`
@@ -1356,7 +1375,7 @@ async function showDetail(id) {
         <div class="sec-label">Events</div>
         ${t.events.map(ev=>`
           <div class="event-item">
-            <div class="elevel ${ev.level}"></div>
+            <div class="elevel ${esc(ev.level)}"></div>
             <div class="emsg">${esc(ev.message)}</div>
             <div class="etime">${fmtDate(ev.created_at)}</div>
           </div>`).join('')}
@@ -1365,7 +1384,7 @@ async function showDetail(id) {
   } catch(e) {
     if (modalBody) {
       modalBody.innerHTML =
-        `<div class="empty" style="padding:24px">Failed to load details: ${sanitizeErrorMsg(e.message)}</div>`;
+        `<div class="empty" style="padding:24px">Failed to load details: ${esc(sanitizeErrorMsg(e.message))}</div>`;
     }
 
     toast(sanitizeErrorMsg(e.message),'error');
@@ -1548,7 +1567,7 @@ function filterEvents() {
   if (!evs.length) { el.innerHTML='<div class="empty">No events match the filter.</div>'; return; }
   el.innerHTML = evs.map(ev=>`
     <div class="event-item">
-      <div class="elevel ${ev.level}"></div>
+      <div class="elevel ${esc(ev.level)}"></div>
       <div><div class="emsg">${esc(ev.message)}</div>${ev.torrent_name?`<div class="ename">${esc(ev.torrent_name)}</div>`:''}</div>
       <div class="etime">${fmtDate(ev.created_at)}</div>
     </div>`).join('');
@@ -1632,7 +1651,7 @@ async function loadSettings() {
 
 function renderSettings() {
   const _settingsScrollTop = document.getElementById('settings-form')?.scrollTop || 0;
-  const s = settingsData;
+  const s = escapeHtmlStrings(settingsData || {});
   const aria2BuiltIn = (s.aria2_mode || 'builtin') === 'builtin';
 
   // Define tabs
@@ -2790,7 +2809,7 @@ function renderAria2Diagnostics(diag) {
   el.innerHTML =
     `<b>aria2 memory diagnostics</b><br>` +
     `Active: ${diag.active_count ?? 0} · Waiting: ${diag.waiting_count ?? 0} · Stopped: ${diag.stopped_count ?? 0}<br>` +
-    `max-download-result: ${opts['max-download-result'] || 'n/a'} · keep-unfinished-download-result: ${opts['keep-unfinished-download-result'] || 'n/a'}<br>` +
+    `max-download-result: ${esc(opts['max-download-result'] || 'n/a')} · keep-unfinished-download-result: ${esc(opts['keep-unfinished-download-result'] || 'n/a')}<br>` +
     `query window — waiting: ${limits.waiting ?? 'n/a'} · stopped: ${limits.stopped ?? 'n/a'}`;
 }
 
@@ -2822,7 +2841,7 @@ function renderAria2Runtime(data) {
 function aria2StatusLabel(status) {
   const map = {active:'Downloading', waiting:'Waiting', paused:'Paused', complete:'Complete', error:'Error', removed:'Removed'};
   const cls = status === 'active' ? 'downloading' : status === 'complete' ? 'completed' : status === 'error' ? 'error' : status === 'paused' ? 'paused' : 'queued';
-  return `<span class="badge badge-${cls}">${map[status] || status || 'Unknown'}</span>`;
+  return `<span class="badge badge-${cls}">${esc(map[status] || status || 'Unknown')}</span>`;
 }
 
 function renderAria2Downloads(data) {
@@ -3165,8 +3184,8 @@ async function loadBackupList() {
     if (!r.backups.length) { el.textContent = 'No backups found.'; return; }
     el.innerHTML = r.backups.map(b =>
       `<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border)">
-        <span>${b.name}</span>
-        <span style="color:var(--text3)">${b.files.join(', ')} — ${Math.round(b.size_bytes/1024)} KB</span>
+        <span>${esc(b.name)}</span>
+        <span style="color:var(--text3)">${esc((b.files||[]).join(', '))} — ${Math.round(Number(b.size_bytes||0)/1024)} KB</span>
       </div>`
     ).join('');
   } catch(e) { toast(e.message, 'error'); }
@@ -3190,8 +3209,8 @@ async function loadDatabaseBackupList() {
     if (!r.backups.length) { el.textContent = 'No database backups found.'; return; }
     el.innerHTML = r.backups.map(b =>
       `<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border)">
-        <span>${b.name}</span>
-        <span style="color:var(--text3)">${b.files.join(', ')} — ${Math.round(b.size_bytes/1024)} KB</span>
+        <span>${esc(b.name)}</span>
+        <span style="color:var(--text3)">${esc((b.files||[]).join(', '))} — ${Math.round(Number(b.size_bytes||0)/1024)} KB</span>
       </div>`
     ).join('');
   } catch(e) { toast(e.message, 'error'); }
@@ -3340,11 +3359,11 @@ async function loadComprehensiveStats() {
           <div style="font-size:20px;font-weight:800;color:${c||'var(--text)'}">${v}</div>
         </div>`).join('')}
       </div>
-      ${r.daily_trend?.length ? `<div style="font-size:11px;color:var(--text2);margin-top:8px"><b>Daily completions (last ${Math.min(14, hours/24|0)} days):</b><br>${r.daily_trend.map(d=>`${d.date}: ${d.cnt}`).join(' · ')}</div>` : ''}
-      ${Object.keys(t.sources||{}).length ? `<div style="font-size:11px;color:var(--text2);margin-top:6px"><b>Sources:</b> ${Object.entries(t.sources).map(([k,v])=>`${k}: ${v}`).join(', ')}</div>` : ''}
+      ${r.daily_trend?.length ? `<div style="font-size:11px;color:var(--text2);margin-top:8px"><b>Daily completions (last ${Math.min(14, hours/24|0)} days):</b><br>${r.daily_trend.map(d=>`${esc(d.date)}: ${Number(d.cnt)||0}`).join(' · ')}</div>` : ''}
+      ${Object.keys(t.sources||{}).length ? `<div style="font-size:11px;color:var(--text2);margin-top:6px"><b>Sources:</b> ${Object.entries(t.sources||{}).map(([k,v])=>`${esc(k)}: ${Number(v)||0}`).join(', ')}</div>` : ''}
     `;
   } catch(e) {
-    el.innerHTML = `<span style="color:var(--red)">✗ ${e.message}</span>`;
+    el.innerHTML = `<span style="color:var(--red)">✗ ${esc(e.message)}</span>`;
   }
 }
 
@@ -3386,7 +3405,9 @@ async function triggerStatsSnapshot(button) {
     const el = document.getElementById('debug-status');
     if (!el) return;
     el.style.display = 'block';
-    el.innerHTML += '<div>' + new Date().toLocaleTimeString() + ' — ' + msg + '</div>';
+    const row = document.createElement('div');
+    row.textContent = new Date().toLocaleTimeString() + ' — ' + String(msg ?? '');
+    el.appendChild(row);
   }
 
   dbg('Script gestartet');
@@ -3974,7 +3995,7 @@ function renderHourlyChart(hourlyData) {
     var barH = Math.max(2, Math.round((item.count / maxCount) * (h - pad)));
     var x = pad + i * Math.floor((w - pad * 2) / hourlyData.length);
     var y = h - pad - barH;
-    var hour = item.hour ? item.hour.substring(11, 16) : '';
+    var hour = esc(item.hour ? item.hour.substring(11, 16) : '');
     return '<rect x="' + x + '" y="' + y + '" width="' + barW + '" height="' + barH +
            '" fill="var(--accent)" rx="2" opacity="0.85">' +
            '<title>' + hour + ': ' + item.count + ' completed</title></rect>' +
@@ -4446,7 +4467,7 @@ async function dropPageCache() {
     var d = await api('POST', '/admin/drop-page-cache');
     toast('Page cache released for ' + d.cache_released + '/' + d.files_processed + ' files', 'success');
     if (el) el.innerHTML =
-      '<b style="color:var(--green)">&#10003; ' + d.message + '</b><br>' +
+      '<b style="color:var(--green)">&#10003; ' + esc(d.message) + '</b><br>' +
       '<span style="font-size:11px;color:var(--text2)">Run Memory Info again to see updated RAM usage.</span>';
     // refresh memory info after 1s
     setTimeout(showMemoryInfo, 1200);

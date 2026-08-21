@@ -40,6 +40,7 @@ ERROR_CODES = set(range(5, 16))
 UPLOAD_FAILED_CODE = 5  # AllDebrid statusCode 5 = "Upload failed"
 EXPIRED_CODE = 3        # AllDebrid statusCode 3 = "Expired — files removed from cache"
 DIRECT_LINK_SOURCE = "direct_link"
+_PROVIDER_DELETE_OWNED_SOURCES = frozenset({"manual", "manual_file", "api"})
 DEFERRED_PROVIDER_STATUS = "deferred"
 DEFERRED_TORRENT_KIND = "torrent_file"
 MAX_DIRECT_LINKS_PER_BATCH = 100
@@ -322,7 +323,7 @@ class TorrentManager:
         self._aria2_ownership_ready = False
         self._aria2_owned_gid_cache: Set[str] = set()
         # Disk-space guard state
-        self._disk_guard_active: bool = False          # True = guard triggered, downloads paused
+        self._disk_guard_active: bool = False          # True = guard triggered, new dispatches deferred
         self._disk_guard_paused: set[str] = set()     # aria2 GIDs paused by the guard
 
     def is_paused(self) -> bool:
@@ -330,9 +331,9 @@ class TorrentManager:
 
     @staticmethod
     def _provider_delete_authorized(source: object) -> bool:
-        """Automatic provider deletion requires positive local ownership evidence."""
+        """Automatic provider deletion requires explicit local-creation provenance."""
         normalized = str(source or "").strip()
-        return bool(normalized) and normalized not in {"alldebrid_existing", "import_existing"}
+        return normalized in _PROVIDER_DELETE_OWNED_SOURCES
 
     def set_materialization_quiescing(self, value: bool) -> None:
         self._materialization_quiescing = bool(value)
@@ -4829,12 +4830,12 @@ class TorrentManager:
         Called by disk_guard_loop every disk_guard_interval_seconds (default 60 s).
 
         When free space < min_free_disk_gb:
-          - Pauses all active aria2 downloads (stores GIDs in _disk_guard_paused)
+          - Allows active aria2 downloads to finish normally
           - Blocks new downloads until space recovers
           - Logs a WARNING once per guard activation
 
         When free space >= min_free_disk_gb + hysteresis:
-          - Resumes all previously paused GIDs
+          - Allows deferred dispatch to resume
           - Clears the guard state
 
         Returns a dict with current guard state for the /api/disk-guard endpoint.

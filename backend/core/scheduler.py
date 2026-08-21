@@ -345,8 +345,12 @@ async def disk_guard_loop():
         await asyncio.sleep(interval)
 
 
+def scheduler_running() -> bool:
+    return any(not task.done() for task in _tasks)
+
+
 async def start_scheduler():
-    if any(not task.done() for task in _tasks):
+    if scheduler_running():
         logger.debug("Scheduler already running")
         return
     _tasks.clear()

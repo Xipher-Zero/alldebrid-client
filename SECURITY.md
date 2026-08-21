@@ -49,7 +49,7 @@ Archive extraction enforces member-path/type checks plus file-count, expanded-si
 
 ### Backups and database maintenance
 
-Database wipe requires verified transfer quiescence and fails closed if a required pre-wipe backup fails. Backup rotation only recursively removes DebridPulse-owned directories carrying the expected ownership manifest.
+Database wipe drains provider/materialization work, suspends scheduler writers, then holds an exclusive database-maintenance gate that rejects concurrent non-owner DB sessions; it also fails closed if a required pre-wipe backup fails. Backup rotation only recursively removes DebridPulse-owned directories carrying the expected ownership manifest.
 
 ### Discord webhook URL
 

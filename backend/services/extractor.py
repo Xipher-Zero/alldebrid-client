@@ -8,7 +8,7 @@ Supports: .zip, .tar, .tar.gz, .tgz, .tar.bz2, .tar.xz, .gz,
 Strategy:
   1. Python-native for zip / tar / gz / bz2 / xz (zero extra deps)
   2. System binary `7z` (from p7zip-full) for .7z, .tar.zst, .tar.lzma, and RAR
-  3. System binary `unrar-free` as last-resort RAR fallback
+  3. RAR extraction fails closed unless a 7z-compatible binary is available
 
 After successful extraction the source archive is deleted.
 """

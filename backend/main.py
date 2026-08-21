@@ -16,7 +16,7 @@ from core.config import get_settings as _get_log_settings
 from core.logging_utils import configure_logging, log_startup_banner, sanitize_exception, sanitize_log_value
 from core.scheduler import start_scheduler, stop_scheduler
 from core.version import read_version
-from db.database import init_db, DB_PATH
+from db.database import DatabaseMaintenanceActive, init_db, DB_PATH
 from services.aria2_runtime import runtime as aria2_runtime
 from services.transfer_service import transfer_service
 
@@ -186,6 +186,16 @@ app = FastAPI(
 async def permission_error_handler(_request: Request, _exc: PermissionError):
     """Do not turn service-layer authorization failures into HTTP 500 responses."""
     return Response(content="Forbidden", status_code=403)
+
+
+@app.exception_handler(DatabaseMaintenanceActive)
+async def database_maintenance_handler(_request: Request, _exc: DatabaseMaintenanceActive):
+    """Fail closed rather than queue stale request work behind a destructive wipe."""
+    return Response(
+        content="Database maintenance in progress",
+        status_code=503,
+        headers={"Retry-After": "2"},
+    )
 
 
 app.add_middleware(RequestBodyLimitMiddleware, max_bytes=_MAX_REQUEST_BODY_BYTES)

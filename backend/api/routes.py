@@ -31,7 +31,8 @@ from core.config import (
 from core.config_validator import validate_and_sanitise
 from core.logging_utils import sanitize_exception, sanitize_log_value
 from core.version import normalize_version_tag, read_version
-from db.database import DB_PATH, get_db
+from core import scheduler as scheduler_runtime
+from db.database import DB_PATH, database_maintenance, get_db
 
 
 def _sanitize_error(exc: Exception) -> str:
@@ -1391,6 +1392,9 @@ async def memory_info_ep():
 
 
 
+_database_wipe_lock = asyncio.Lock()
+
+
 @router.post("/admin/database/wipe")
 async def wipe_database_admin(body: dict | None = None):
     cfg = get_settings()
@@ -1401,29 +1405,45 @@ async def wipe_database_admin(body: dict | None = None):
     if not (body or {}).get("confirm"):
         raise HTTPException(400, "Wipe confirmation required")
 
-    quiesced = False
-    try:
+    if _database_wipe_lock.locked():
+        raise HTTPException(409, "Database wipe is already in progress")
+
+    async with _database_wipe_lock:
+        scheduler_was_running = scheduler_runtime.scheduler_running()
+        quiesced = False
         try:
-            quiesce_result = await transfer_service.quiesce_for_database_wipe()
-            quiesced = True
-        except Exception as exc:
-            raise HTTPException(409, _sanitize_error(exc))
+            if scheduler_was_running:
+                await scheduler_runtime.stop_scheduler()
 
-        backup_result = None
-        if getattr(cfg, "db_backup_before_wipe", True):
-            from services.db_maintenance import run_database_backup
-            backup_result = await run_database_backup()
-            if backup_result.get("skipped"):
-                raise HTTPException(409, "Pre-wipe database backup is required but disabled")
-            if backup_result.get("errors"):
-                raise HTTPException(500, "Pre-wipe database backup failed; wipe aborted")
+            try:
+                quiesce_result = await transfer_service.quiesce_for_database_wipe()
+                quiesced = True
+            except Exception as exc:
+                raise HTTPException(409, _sanitize_error(exc))
 
-        from services.db_maintenance import wipe_database
-        result = await wipe_database(verified_quiesced=True)
-        return {**result, "backup": backup_result, "quiesced": quiesce_result}
-    finally:
-        if quiesced:
-            await transfer_service.release_database_wipe_quiescence()
+            # Provider/materialization work is drained and scheduler admission is
+            # stopped before this point. The DB gate now drains request-side
+            # sessions already open and rejects new non-owner sessions. Stale
+            # work therefore cannot wait through the wipe and repopulate it.
+            async with database_maintenance():
+                backup_result = None
+                if getattr(cfg, "db_backup_before_wipe", True):
+                    from services.db_maintenance import run_database_backup
+                    backup_result = await run_database_backup()
+                    if backup_result.get("skipped"):
+                        raise HTTPException(409, "Pre-wipe database backup is required but disabled")
+                    if backup_result.get("errors"):
+                        raise HTTPException(500, "Pre-wipe database backup failed; wipe aborted")
+
+                from services.db_maintenance import wipe_database
+                result = await wipe_database(verified_quiesced=True)
+
+            return {**result, "backup": backup_result, "quiesced": quiesce_result}
+        finally:
+            if quiesced:
+                await transfer_service.release_database_wipe_quiescence()
+            if scheduler_was_running:
+                await scheduler_runtime.start_scheduler()
 
 
 

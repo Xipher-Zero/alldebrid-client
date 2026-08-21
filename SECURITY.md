@@ -33,6 +33,8 @@ Do not publish the config volume or commit it to version control. API responses 
 
 DebridPulse authentication is configured under **Settings → Authentication**. Intentional no-auth operation remains supported for trusted standalone/LAN deployments; if both interactive mechanisms are deliberately disabled, the REST API is open as well.
 
+DebridPulse supports optional HTTP Basic Authentication for REST clients whenever Username & Password authentication is enabled. HTTP Basic uses the same username and Argon2id password verifier as the browser login; it remains a first-class machine-access path rather than the browser authentication UX.
+
 When authentication is enabled, DebridPulse supports:
 
 - **Username & Password** browser sign-in using a server-side application session. The local password is stored only as an Argon2id verifier.

@@ -1,0 +1,97 @@
+name: Auth Work Validation
+
+on:
+  push:
+    branches:
+      - work/v1.0.6-auth-overhaul
+
+permissions:
+  contents: write
+
+jobs:
+  validate-and-wire:
+    if: ${{ !contains(github.event.head_commit.message, '[auth-frontend]') }}
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+    steps:
+      - name: Checkout auth work branch
+        uses: actions/checkout@v5
+        with:
+          ref: work/v1.0.6-auth-overhaul
+          fetch-depth: 0
+
+      - name: Wire browser auth bootstrap
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('frontend/static/index.html')
+          text = path.read_text()
+          old = '<script src="/app.js?v=12" defer></script>'
+          auth = '<script src="/auth.js?v=1" defer></script>'
+          if auth not in text:
+              if old not in text:
+                  raise SystemExit('app.js script tag not found')
+              text = text.replace(old, auth + '\n' + old, 1)
+              path.write_text(text)
+          if text.index(auth) > text.index(old):
+              raise SystemExit('auth.js must load before app.js')
+          PY
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+
+      - name: Install validation dependencies
+        run: |
+          cd backend
+          pip install -r requirements-dev.txt
+          pip install ruff pip-audit bandit
+
+      - name: Ruff undefined-name audit
+        run: |
+          cd backend
+          ruff check api auth core db services main.py --select F821,F822,F823
+
+      - name: Run full Python regression suite
+        run: |
+          cd backend
+          python -m pytest tests/ -v --tb=short
+
+      - name: Compile Python source
+        run: |
+          cd backend
+          python -m compileall -q .
+
+      - name: Check frontend JavaScript syntax
+        run: |
+          node --check frontend/static/auth.js
+          node --check frontend/static/app.js
+
+      - name: Audit Python dependencies
+        run: |
+          cd backend
+          pip-audit -r requirements.txt --progress-spinner off
+
+      - name: Bandit high-confidence high-severity audit
+        run: |
+          cd backend
+          bandit -r . --exclude ./tests --severity-level high --confidence-level high -f txt
+
+      - name: Commit validated frontend wiring
+        run: |
+          if git diff --quiet -- frontend/static/index.html; then
+            echo 'Frontend auth bootstrap already wired.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add frontend/static/index.html
+          git commit -m '[auth-frontend] Load application session bootstrap'
+          git push origin HEAD:work/v1.0.6-auth-overhaul

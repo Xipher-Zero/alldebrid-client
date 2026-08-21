@@ -11,7 +11,7 @@ from typing import Callable
 
 from fastapi import Request, Response
 
-from auth.models import Principal
+from auth.models import AuthMechanism, Principal
 
 
 HTTP_SESSION_COOKIE = "debridpulse-session"
@@ -69,6 +69,18 @@ class SessionStore:
         now = self._clock()
         self.cleanup(force=True)
         lifetime = max(60.0, float(lifetime_seconds))
+        resolved_version = str(credential_version or "")
+        if not resolved_version and principal.mechanism is AuthMechanism.OIDC_SESSION:
+            # OIDC sessions are bound to the effective security-critical OIDC
+            # configuration. A committed issuer/client/policy/callback change
+            # therefore invalidates old sessions immediately at admission.
+            try:
+                from auth.oidc_version import oidc_configuration_version
+                from core.config import get_settings
+
+                resolved_version = oidc_configuration_version(get_settings())
+            except Exception:  # noqa: BLE001 - invalid config must not break session-store mechanics
+                resolved_version = ""
         while True:
             token = secrets.token_urlsafe(32)
             fingerprint = self._fingerprint(token)
@@ -78,7 +90,7 @@ class SessionStore:
             principal=principal,
             created_at=now,
             expires_at=now + lifetime,
-            credential_version=str(credential_version or ""),
+            credential_version=resolved_version,
         )
         self._entries[fingerprint] = record
         self._entries.move_to_end(fingerprint)
@@ -119,6 +131,16 @@ class SessionStore:
         if not token:
             return False
         return self._entries.pop(self._fingerprint(token), None) is not None
+
+    def revoke_mechanism(self, mechanism: AuthMechanism) -> int:
+        targets = [
+            key
+            for key, record in self._entries.items()
+            if record.principal.mechanism is mechanism
+        ]
+        for key in targets:
+            self._entries.pop(key, None)
+        return len(targets)
 
     def clear(self) -> None:
         self._entries.clear()

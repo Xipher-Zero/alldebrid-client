@@ -23,19 +23,24 @@ class Principal:
     subject: str = ""
     display_name: str = ""
     claims: Mapping[str, Any] = field(default_factory=dict)
+    # Non-secret fingerprint of the credential/configuration that actually
+    # authenticated this principal. Session creation may bind to it so a proof
+    # made under stale policy cannot be relabeled as current policy.
+    credential_version: str = ""
 
     @classmethod
     def anonymous(cls) -> "Principal":
         return cls()
 
     @classmethod
-    def password_session(cls, username: str) -> "Principal":
+    def password_session(cls, username: str, *, credential_version: str = "") -> "Principal":
         username = str(username or "")
         return cls(
             authenticated=True,
             mechanism=AuthMechanism.PASSWORD_SESSION,
             subject=username,
             display_name=username,
+            credential_version=str(credential_version or ""),
         )
 
     @classmethod
@@ -45,6 +50,7 @@ class Principal:
         *,
         display_name: str = "",
         claims: Mapping[str, Any] | None = None,
+        credential_version: str = "",
     ) -> "Principal":
         return cls(
             authenticated=True,
@@ -52,6 +58,7 @@ class Principal:
             subject=str(subject or ""),
             display_name=str(display_name or subject or ""),
             claims=dict(claims or {}),
+            credential_version=str(credential_version or ""),
         )
 
     @classmethod

@@ -18,7 +18,6 @@ logger = logging.getLogger("alldebrid.config")
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
-
 def _is_valid_url(v: str, require_https: bool = False) -> bool:
     if not v:
         return True  # empty = not configured, not invalid
@@ -27,7 +26,6 @@ def _is_valid_url(v: str, require_https: bool = False) -> bool:
 
 
 # ── Validation rules ──────────────────────────────────────────────────────────
-
 def _validate(cfg) -> List[Tuple[str, str, Any, Any]]:
     """
     Returns a list of (field, issue, bad_value, fixed_value) tuples.
@@ -159,7 +157,6 @@ def _validate(cfg) -> List[Tuple[str, str, Any, Any]]:
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
-
 def validate_and_sanitise(cfg) -> Any:
     """Validate settings without ever echoing configured secrets to logs."""
     from core.config import AppSettings
@@ -189,5 +186,20 @@ def validate_and_sanitise(cfg) -> Any:
     data = cfg.model_dump()
     data.update(fixes)
     sanitised = AppSettings(**{k: v for k, v in data.items() if k in AppSettings.model_fields})
+
+    # These fields are intentionally excluded from model_dump() so ordinary
+    # settings serialization cannot expose them. A sanitization rebuild must
+    # nevertheless carry the private credential state and one-shot clear intent
+    # forward; otherwise correcting an unrelated setting could silently convert
+    # an authentication secret replacement/clear into "preserve existing".
+    for field in (
+        "auth_password_hash",
+        "auth_password_hash_clear",
+        "oidc_client_secret",
+        "oidc_client_secret_clear",
+    ):
+        if hasattr(cfg, field):
+            setattr(sanitised, field, getattr(cfg, field))
+
     logger.info("Config validation: %d issue(s) found, %d field(s) corrected", len(issues), len(fixes))
     return sanitised

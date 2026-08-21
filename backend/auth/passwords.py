@@ -7,11 +7,15 @@ import time
 from collections import OrderedDict
 from dataclasses import dataclass
 
-from argon2 import PasswordHasher
+from argon2 import PasswordHasher, extract_parameters
 from argon2.exceptions import InvalidHashError, VerificationError
+from argon2.low_level import Type
 
 
 _PASSWORD_HASHER = PasswordHasher()
+# A process-local, valid Argon2id verifier used only to equalize work when the
+# supplied username is wrong. The source value is random and never persisted.
+_DUMMY_PASSWORD_HASH = _PASSWORD_HASHER.hash(os.urandom(32).hex())
 
 
 def hash_password(password: str) -> str:
@@ -28,6 +32,29 @@ def verify_password(password_hash: str, password: str) -> bool:
     try:
         return bool(_PASSWORD_HASHER.verify(encoded, str(password or "")))
     except (InvalidHashError, VerificationError):
+        return False
+
+
+def verify_password_candidate(
+    password_hash: str,
+    password: str,
+    *,
+    use_configured_hash: bool,
+) -> bool:
+    """Verify a password while doing Argon2 work even for a wrong username."""
+    target = str(password_hash or "").strip() if use_configured_hash else _DUMMY_PASSWORD_HASH
+    verified = verify_password(target, password)
+    return bool(use_configured_hash and verified)
+
+
+def is_usable_password_hash(password_hash: str) -> bool:
+    """True only for a parseable Argon2id verifier."""
+    encoded = str(password_hash or "").strip()
+    if not encoded:
+        return False
+    try:
+        return extract_parameters(encoded).type is Type.ID
+    except InvalidHashError:
         return False
 
 

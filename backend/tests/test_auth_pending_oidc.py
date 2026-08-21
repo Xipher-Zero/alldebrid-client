@@ -7,7 +7,11 @@ from api import auth_config_routes
 from auth.models import Principal
 from auth.oidc import OIDC_CORRELATION_COOKIE, OidcProtocolError
 from auth.oidc_version import oidc_configuration_version
-from auth.pending_oidc import pending_oidc_store
+from auth.pending_oidc import (
+    PendingOidcConfiguration,
+    _merge_verified_oidc_settings,
+    pending_oidc_store,
+)
 from core.config import AppSettings
 
 
@@ -87,6 +91,55 @@ def test_pending_builder_preserves_replace_and_explicit_clear_secret_intent(monk
     )
     assert cleared.oidc_client_secret == ""
     assert cleared.oidc_client_secret_clear is True
+
+
+def test_verified_pending_oidc_merge_preserves_newer_live_non_oidc_and_password_state():
+    candidate = _settings(
+        oidc_client_id="replacement-client",
+        paused=False,
+        auth_password_enabled=True,
+        auth_username="old-operator",
+        auth_password_hash="old-hash",
+    )
+    live = _settings(
+        paused=True,
+        auth_password_enabled=False,
+        auth_username="new-operator",
+        auth_password_hash="new-hash",
+    )
+    item = PendingOidcConfiguration(
+        settings=candidate,
+        configuration_version=oidc_configuration_version(candidate),
+        created_at=1.0,
+        expires_at=2.0,
+        apply_password_enabled=False,
+    )
+
+    merged = _merge_verified_oidc_settings(live, item)
+
+    assert merged.oidc_client_id == "replacement-client"
+    assert merged.paused is True
+    assert merged.auth_password_enabled is False
+    assert merged.auth_username == "new-operator"
+    assert merged.auth_password_hash == "new-hash"
+
+
+def test_verified_pending_oidc_merge_applies_password_enable_only_when_explicitly_requested():
+    candidate = _settings(auth_password_enabled=False, oidc_client_id="replacement-client")
+    live = _settings(auth_password_enabled=True, auth_password_hash="live-hash")
+    item = PendingOidcConfiguration(
+        settings=candidate,
+        configuration_version=oidc_configuration_version(candidate),
+        created_at=1.0,
+        expires_at=2.0,
+        apply_password_enabled=True,
+    )
+
+    merged = _merge_verified_oidc_settings(live, item)
+
+    assert merged.auth_password_enabled is False
+    assert merged.auth_password_hash == "live-hash"
+    assert merged.oidc_client_id == "replacement-client"
 
 
 @pytest.mark.asyncio

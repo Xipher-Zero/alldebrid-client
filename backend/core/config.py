@@ -1,12 +1,15 @@
 import json
+import logging
 import os
 from pathlib import Path
 from typing import List, Optional
 from pydantic import BaseModel
 
+from auth.passwords import hash_password
 from core.branding import APP_SHORT_NAME
 
 CONFIG_PATH = Path(os.getenv("CONFIG_PATH", "/app/config/config.json"))
+logger = logging.getLogger("alldebrid.config")
 
 
 class AppSettings(BaseModel):
@@ -170,9 +173,12 @@ class AppSettings(BaseModel):
     events_keep_days: int = 30
 
     # ── Authentication ────────────────────────────────────────────────────────
-    # HTTP Basic Auth for the web UI and API (empty = disabled / open access).
-    # Set both fields to enable password protection.
+    # Username & Password is an explicit mechanism. auth_password is retained
+    # only as transient legacy/settings input and is never persisted after
+    # migration; auth_password_hash is the authoritative stored verifier.
+    auth_password_enabled: bool = False
     auth_username: str = ""
+    auth_password_hash: str = ""
     auth_password: str = ""
 
     # ── Disk space guard ─────────────────────────────────────────────────────
@@ -208,6 +214,28 @@ def _build_effective_settings(loaded: dict) -> AppSettings:
     return AppSettings(**{k: v for k, v in loaded.items() if k in AppSettings.model_fields})
 
 
+def _migrate_password_settings(loaded: dict) -> bool:
+    """Migrate legacy plaintext Basic credentials to the owned password model."""
+    changed = False
+    legacy_enable_semantics = "auth_password_enabled" not in loaded
+    username = str(loaded.get("auth_username") or "").strip()
+    plaintext = str(loaded.get("auth_password") or "")
+    password_hash = str(loaded.get("auth_password_hash") or "").strip()
+
+    if plaintext:
+        if username and not password_hash:
+            loaded["auth_password_hash"] = hash_password(plaintext)
+            password_hash = loaded["auth_password_hash"]
+        loaded["auth_password"] = ""
+        changed = True
+
+    if legacy_enable_semantics:
+        loaded["auth_password_enabled"] = bool(username and (password_hash or plaintext))
+        changed = True
+
+    return changed
+
+
 def get_settings() -> AppSettings:
     return _settings
 
@@ -220,10 +248,7 @@ def load_settings() -> AppSettings:
                 data = json.load(f)
             loaded = {k: v for k, v in data.items() if k in AppSettings.model_fields}
         except Exception as exc:
-            import logging
-            logging.getLogger("alldebrid.config").warning(
-                "Config file could not be read (%s) — using defaults", exc
-            )
+            logger.warning("Config file could not be read (%s) — using defaults", exc)
 
     # ── Performance migration: built-in aria2 only ──────────────────────────
     # External mode targets a shared daemon. Its explicitly stored transfer
@@ -237,8 +262,7 @@ def load_settings() -> AppSettings:
         for field, (old_low, old_mid, new_val) in _PERF_UPGRADES.items():
             stored = loaded.get(field)
             if stored in (old_low, old_mid):
-                import logging
-                logging.getLogger("alldebrid.config").info(
+                logger.info(
                     "Config migration: %s %s → %s (performance upgrade)",
                     field,
                     stored,
@@ -246,7 +270,15 @@ def load_settings() -> AppSettings:
                 )
                 loaded[field] = new_val
 
-    return _build_effective_settings(loaded)
+    password_migrated = _migrate_password_settings(loaded)
+    settings = _build_effective_settings(loaded)
+    if password_migrated:
+        try:
+            save_settings(settings)
+            logger.info("Config migration: local authentication password stored as Argon2id hash")
+        except Exception as exc:
+            logger.warning("Password migration could not be persisted: %s", exc)
+    return settings
 
 
 def save_settings(s: AppSettings):
@@ -257,6 +289,7 @@ def save_settings(s: AppSettings):
     except OSError:
         pass
     data = s.model_dump()
+    data.pop("auth_password", None)
     tmp = CONFIG_PATH.with_name(CONFIG_PATH.name + ".tmp")
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)

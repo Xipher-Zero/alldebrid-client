@@ -57,6 +57,7 @@ jobs:
           node --check frontend/static/app.js
           node --check frontend/static/auth.js
           node --check frontend/static/auth-settings.js
+          node --check frontend/static/auth-help.js
 
   security:
     runs-on: ubuntu-latest

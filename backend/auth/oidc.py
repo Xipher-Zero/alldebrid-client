@@ -473,31 +473,30 @@ def authorize_oidc_claims(
     if not subject or issuer != config.issuer:
         raise OidcAuthorizationError("OIDC identity is not authorized")
 
-    if not config.allow_all and not (
-        config.allowed_subjects or config.allowed_emails or config.allowed_groups
-    ):
-        raise OidcAuthorizationError("OIDC identity is not authorized")
-
-    if config.allowed_subjects:
-        composite = f"{issuer}|{subject}"
-        if subject not in config.allowed_subjects and composite not in config.allowed_subjects:
+    if not config.allow_all:
+        if not (config.allowed_subjects or config.allowed_emails or config.allowed_groups):
             raise OidcAuthorizationError("OIDC identity is not authorized")
 
-    if config.allowed_emails:
-        email = str(claims.get("email") or "").strip().casefold()
-        if claims.get("email_verified") is False or email not in config.allowed_emails:
-            raise OidcAuthorizationError("OIDC identity is not authorized")
+        if config.allowed_subjects:
+            composite = f"{issuer}|{subject}"
+            if composite not in config.allowed_subjects:
+                raise OidcAuthorizationError("OIDC identity is not authorized")
 
-    if config.allowed_groups:
-        raw_groups = claims.get(config.group_claim)
-        if isinstance(raw_groups, str):
-            groups = {raw_groups}
-        elif isinstance(raw_groups, (list, tuple, set)):
-            groups = {str(item) for item in raw_groups}
-        else:
-            raise OidcAuthorizationError("OIDC identity is not authorized")
-        if not groups.intersection(config.allowed_groups):
-            raise OidcAuthorizationError("OIDC identity is not authorized")
+        if config.allowed_emails:
+            email = str(claims.get("email") or "").strip().casefold()
+            if claims.get("email_verified") is False or email not in config.allowed_emails:
+                raise OidcAuthorizationError("OIDC identity is not authorized")
+
+        if config.allowed_groups:
+            raw_groups = claims.get(config.group_claim)
+            if isinstance(raw_groups, str):
+                groups = {raw_groups}
+            elif isinstance(raw_groups, (list, tuple, set)):
+                groups = {str(item) for item in raw_groups}
+            else:
+                raise OidcAuthorizationError("OIDC identity is not authorized")
+            if not groups.intersection(config.allowed_groups):
+                raise OidcAuthorizationError("OIDC identity is not authorized")
 
     display_name = str(
         claims.get("name")

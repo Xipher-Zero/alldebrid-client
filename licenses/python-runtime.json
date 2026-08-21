@@ -53,9 +53,19 @@
       "license": "MIT"
     },
     {
+      "name": "authlib",
+      "version": "1.7.2",
+      "license": "BSD-3-Clause"
+    },
+    {
       "name": "bencode2",
       "version": "0.3.33",
       "license": "MIT"
+    },
+    {
+      "name": "certifi",
+      "version": "2026.7.22",
+      "license": "MPL-2.0"
     },
     {
       "name": "cffi",
@@ -66,6 +76,11 @@
       "name": "click",
       "version": "8.3.3",
       "license": "BSD-3-Clause"
+    },
+    {
+      "name": "cryptography",
+      "version": "50.0.0",
+      "license": "Apache-2.0 OR BSD-3-Clause"
     },
     {
       "name": "fastapi",
@@ -83,13 +98,28 @@
       "license": "MIT"
     },
     {
+      "name": "httpcore",
+      "version": "1.0.9",
+      "license": "BSD-3-Clause"
+    },
+    {
       "name": "httptools",
       "version": "0.8.0",
       "license": "MIT"
     },
     {
+      "name": "httpx",
+      "version": "0.28.1",
+      "license": "BSD-3-Clause"
+    },
+    {
       "name": "idna",
       "version": "3.15",
+      "license": "BSD-3-Clause"
+    },
+    {
+      "name": "joserfc",
+      "version": "1.7.4",
       "license": "BSD-3-Clause"
     },
     {

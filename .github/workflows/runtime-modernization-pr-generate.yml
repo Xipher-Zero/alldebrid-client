@@ -52,7 +52,7 @@ jobs:
           fi
 
       - name: Apply runtime source and dependency inputs
-        run: python tools/runtime_modernization_generate.py apply
+        run: python tools/runtime_modernization_generate_v2.py apply
 
       - name: Regenerate Python lockfiles with pip-tools
         shell: bash
@@ -75,7 +75,7 @@ jobs:
           popd >/dev/null
 
       - name: Reconcile dependency license inventory
-        run: python tools/runtime_modernization_generate.py licenses
+        run: python tools/runtime_modernization_generate_v2.py licenses
 
       - name: Validate generated dependency state
         shell: bash

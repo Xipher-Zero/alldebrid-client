@@ -179,33 +179,25 @@ async def password_login(request: Request):
 
     browser_nonce = str(request.cookies.get(login_csrf_cookie_name(request), "") or "")
     if not login_csrf_store.consume(browser_nonce, csrf_token):
-        response = _issue_login_page(
+        return _issue_login_page(
             request,
             return_to=return_to,
             error="The sign-in form expired. Try again.",
             status_code=403,
         )
-        clear_login_csrf_cookie(response, request)
-        # Re-issue after clearing so the replacement challenge remains present.
-        new_nonce, new_token = login_csrf_store.issue()
-        response = _login_page(
-            request,
-            csrf_token=new_token,
-            return_to=return_to,
-            error="The sign-in form expired. Try again.",
-            status_code=403,
-        )
-        set_login_csrf_cookie(response, request, new_nonce)
-        return response
 
-    if not await verify_local_credentials(request, username, password):
-        response = _issue_login_page(
+    if not await verify_local_credentials(
+        request,
+        username,
+        password,
+        settings=cfg,
+    ):
+        return _issue_login_page(
             request,
             return_to=return_to,
             error="Invalid username or password.",
             status_code=401,
         )
-        return response
 
     old_token = session_cookie_token(request)
     if old_token:

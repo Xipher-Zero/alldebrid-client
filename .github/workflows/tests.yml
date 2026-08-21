@@ -113,7 +113,7 @@ jobs:
             backend/requirements-dev.txt
 
       - name: Apply corrective patch
-        run: python tools/v106_final_maintenance_patch.py
+        run: python tools/v106_final_maintenance_patch_fix.py
 
       - name: Install validation dependencies
         run: |

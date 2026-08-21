@@ -206,6 +206,24 @@ class AppSettings(BaseModel):
     # callback construction. PUBLIC_BASE_URL, when set, overrides this value.
     public_base_url: str = ""
 
+    def model_dump(self, *args, **kwargs):
+        """Carry explicit legacy clear intent across the broad settings merge.
+
+        Private auth fields remain excluded from ordinary serialization. The
+        inherited SettingsUpdate subclass adds `clear_secrets`; only when that
+        request explicitly names the local password do we inject the one-shot
+        internal clear flag consumed by save_settings().
+        """
+        data = super().model_dump(*args, **kwargs)
+        requested_clears = {
+            str(field)
+            for field in (getattr(self, "clear_secrets", []) or [])
+            if str(field)
+        }
+        if "auth_password" in requested_clears:
+            data["auth_password_hash_clear"] = True
+        return data
+
     # ── Disk space guard ─────────────────────────────────────────────────────
     # Minimum free disk space required (GB) on the download folder's filesystem.
     # 0 = disabled.

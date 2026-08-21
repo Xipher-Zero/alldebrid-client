@@ -1,0 +1,64 @@
+name: Phase 8 changelog edit
+
+on:
+  push:
+    branches:
+      - work/v1.0.6-auth-overhaul
+
+permissions:
+  contents: write
+
+jobs:
+  update-changelog:
+    if: ${{ !contains(github.event.head_commit.message, '[phase8-changelog]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout work branch
+        uses: actions/checkout@v5
+        with:
+          ref: work/v1.0.6-auth-overhaul
+          fetch-depth: 0
+
+      - name: Prepend v1.0.6 authentication notes in place
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('CHANGELOG.md')
+          text = path.read_text(encoding='utf-8')
+          marker = '### Native authentication overhaul'
+          if marker in text:
+              raise SystemExit(0)
+
+          heading = '## [1.0.6] — 2026-08-20\n\n'
+          if heading not in text:
+              raise SystemExit('1.0.6 changelog heading not found')
+
+          section = '''### Native authentication overhaul
+
+- Replaced inherited browser-native Basic authentication with a unified DebridPulse application-session boundary while retaining HTTP Basic as a first-class REST/API mechanism using the same local credentials.
+- Migrated local password persistence to Argon2id one-way hashes, including legacy plaintext migration, bounded authentication throttling/cache behavior, explicit destructive password clearing, and session/cache invalidation on credential changes.
+- Added provider-neutral OpenID Connect Authorization Code authentication with PKCE, state, nonce, issuer/audience/signature validation, optional UserInfo claim completion, explicit authorization allow policy, and canonical HTTPS callback construction.
+- Added lockout prevention: enabling OIDC does not disable Password, Password cannot be disabled in favor of OIDC until a real OIDC login succeeds, and critical OIDC changes in OIDC-only mode remain pending until the proposed configuration completes a successful sign-in.
+- Added an independent `dp_...` API bearer credential for automation and monitoring. Only a SHA-256 verifier is persisted; generation/rotation shows the raw token once, rotation invalidates the previous token immediately, and clear removes the verifier.
+- Defined protected-request precedence as application session → Bearer token → HTTP Basic, while preserving deliberate open/no-auth mode for trusted standalone/LAN deployments and ensuring configured authentication failures never fail open.
+- Added server-side browser sessions, absolute expiry, session rotation/revocation, login and session CSRF protection, safe local post-login returns, and OIDC/password session-version invalidation rules.
+- Added a dedicated **Settings → Authentication** surface with Authentication Status, Username & Password, OpenID Connect, API Access, and Sessions & Security cards; removed authentication configuration from General and updated in-application help/recovery guidance.
+- Updated README/SECURITY/authentication documentation and completed the runtime dependency/license inventory for Argon2, Authlib, HTTPX, JOSE, and cryptography dependencies; published images continue to carry BuildKit provenance and SBOM attestations.
+
+'''
+          path.write_text(text.replace(heading, heading + section, 1), encoding='utf-8')
+          PY
+
+      - name: Commit changelog only
+        shell: bash
+        run: |
+          if git diff --quiet -- CHANGELOG.md; then
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- CHANGELOG.md
+          git commit -m '[phase8-changelog] Document v1.0.6 authentication overhaul'
+          git push origin HEAD:work/v1.0.6-auth-overhaul

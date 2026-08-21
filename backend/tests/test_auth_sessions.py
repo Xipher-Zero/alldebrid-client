@@ -249,6 +249,26 @@ async def test_session_mutation_requires_csrf_and_correct_token_passes(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_auth_session_status_returns_csrf_only_for_server_session():
+    session_store.clear()
+    token, _ = session_store.create(Principal.password_session("operator"), lifetime_seconds=3600)
+    request = _request("GET", path="/api/auth/session", headers={"Host": "debridpulse.local"})
+    request.state.principal = Principal.password_session("operator")
+    request.state.auth_session_token = token
+    data = await auth_routes.auth_session_status(request)
+    assert data["authenticated"] is True
+    assert data["mechanism"] == "password_session"
+    assert data["csrf_token"] == session_store.csrf_token(token)
+    assert data["session_expires_in_seconds"] > 0
+
+    basic = _request("GET", path="/api/auth/session", headers={"Host": "debridpulse.local"})
+    basic.state.principal = Principal.http_basic("operator")
+    basic_data = await auth_routes.auth_session_status(basic)
+    assert basic_data["csrf_token"] == ""
+    assert basic_data["session_expires_in_seconds"] is None
+
+
+@pytest.mark.asyncio
 async def test_password_change_invalidates_existing_browser_session(monkeypatch):
     import auth.middleware as middleware
 

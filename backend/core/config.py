@@ -181,6 +181,8 @@ class AppSettings(BaseModel):
     auth_username: str = ""
     auth_password_hash: str = Field(default="", exclude=True)
     auth_password: str = ""
+    # Browser application sessions use absolute expiration, not sliding expiry.
+    auth_session_lifetime_hours: int = 12
 
     # ── Disk space guard ─────────────────────────────────────────────────────
     # Minimum free disk space required (GB) on the download folder's filesystem.

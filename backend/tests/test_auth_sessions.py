@@ -110,6 +110,17 @@ def test_auth_bootstrap_loads_before_application_javascript():
     assert "X-CSRF-Token" in auth_js
 
 
+def test_process_restart_invalidates_browser_session_by_design():
+    before_restart = SessionStore()
+    token, _ = before_restart.create(
+        Principal.password_session("operator"),
+        lifetime_seconds=3600,
+    )
+    assert before_restart.resolve(token) is not None
+    after_restart = SessionStore()
+    assert after_restart.resolve(token) is None
+
+
 def test_session_store_is_bounded_absolute_and_opaque():
     now = [100.0]
     store = SessionStore(max_entries=2, clock=lambda: now[0])

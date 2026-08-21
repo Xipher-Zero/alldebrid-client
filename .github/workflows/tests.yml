@@ -93,8 +93,7 @@ jobs:
             backend/tests/test_license_policy.py \
             backend/tests/test_v1_scope.py \
             frontend/static/app.js \
-            NOTICE \
-            .github/workflows/fork-image.yml
+            NOTICE
           git diff --cached --check
           if ! git diff --cached --quiet; then
             git commit -m "Fix final v1.0.6 audit findings"

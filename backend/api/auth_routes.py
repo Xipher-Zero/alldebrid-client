@@ -438,16 +438,20 @@ async def auth_session_status(request: Request):
     principal = getattr(request.state, "principal", Principal.anonymous())
     session_token = str(getattr(request.state, "auth_session_token", "") or "")
     record = session_store.resolve(session_token) if session_token else None
-    return {
-        "authenticated": bool(principal.authenticated),
-        "mechanism": principal.mechanism.value if principal.mechanism else None,
-        "subject": principal.subject,
-        "display_name": principal.display_name,
-        "csrf_token": session_store.csrf_token(session_token) if record is not None else "",
-        "session_expires_in_seconds": (
-            max(0, int(record.expires_at - time.monotonic())) if record is not None else None
-        ),
-    }
+    response = JSONResponse(
+        {
+            "authenticated": bool(principal.authenticated),
+            "mechanism": principal.mechanism.value if principal.mechanism else None,
+            "subject": principal.subject,
+            "display_name": principal.display_name,
+            "csrf_token": session_store.csrf_token(session_token) if record is not None else "",
+            "session_expires_in_seconds": (
+                max(0, int(record.expires_at - time.monotonic())) if record is not None else None
+            ),
+        }
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @router.post("/api/auth/logout")

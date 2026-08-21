@@ -26,6 +26,7 @@ from auth.oidc import (
     oidc_auth_ready,
     oidc_transaction_store,
 )
+from auth.oidc_version import oidc_configuration_version
 from auth.passwords import password_credential_version
 from auth.policy import (
     interactive_auth_enabled,
@@ -54,12 +55,18 @@ def _session_lifetime_seconds(cfg) -> int:
 def _session_record_current(record, cfg) -> bool:
     if record is None:
         return False
-    if record.principal.mechanism is not AuthMechanism.PASSWORD_SESSION:
-        return True
-    if not password_auth_ready(cfg):
-        return False
-    current_version = password_credential_version(getattr(cfg, "auth_password_hash", ""))
-    return bool(current_version and record.credential_version == current_version)
+    mechanism = record.principal.mechanism
+    if mechanism is AuthMechanism.PASSWORD_SESSION:
+        if not password_auth_ready(cfg):
+            return False
+        current_version = password_credential_version(getattr(cfg, "auth_password_hash", ""))
+        return bool(current_version and record.credential_version == current_version)
+    if mechanism is AuthMechanism.OIDC_SESSION:
+        if not oidc_auth_ready(cfg):
+            return False
+        current_version = oidc_configuration_version(cfg)
+        return bool(current_version and record.credential_version == current_version)
+    return False
 
 
 def _static_asset(name: str) -> Path:
@@ -100,42 +107,46 @@ def _login_page(
     error_html = (
         f'<div class="error" role="alert">{html.escape(error)}</div>' if error else ""
     )
-    if password_enabled and password_ready:
-        password_controls = f"""
-        <form method="post" action="/login" autocomplete="on">
-          <input type="hidden" name="csrf_token" value="{html.escape(csrf_token, quote=True)}">
-          <input type="hidden" name="next" value="{html.escape(return_to, quote=True)}">
-          <label for="username">Username</label>
-          <input id="username" name="username" type="text" maxlength="256" autocomplete="username" required autofocus>
-          <label for="password">Password</label>
-          <input id="password" name="password" type="password" maxlength="4096" autocomplete="current-password" required>
-          <button type="submit">Sign In</button>
-        </form>
-        """
-    elif password_enabled:
-        password_controls = (
-            '<div class="error" role="alert">Username &amp; Password authentication is enabled '
-            "but is not fully configured. That mechanism is unavailable.</div>"
-        )
-    else:
-        password_controls = ""
 
+    controls: list[str] = []
     if oidc_enabled and oidc_ready:
-        oidc_controls = f"""
-        <div class="divider"><span>or continue with</span></div>
-        <a class="oidc" href="/auth/oidc/start?next={quote(return_to, safe='')}">Continue with {provider_name}</a>
-        """
+        controls.append(
+            f'<a class="auth-action primary oidc" href="/auth/oidc/start?next={quote(return_to, safe="")}">'
+            f"Continue with {provider_name}</a>"
+        )
     elif oidc_enabled:
-        oidc_controls = (
+        controls.append(
             '<div class="error" role="alert">OpenID Connect is enabled but its local '
             "configuration is incomplete or invalid.</div>"
         )
-    else:
-        oidc_controls = ""
+
+    if password_enabled and password_ready:
+        if oidc_ready:
+            controls.append('<div class="divider"><span>or use local password</span></div>')
+        password_button_class = "secondary" if oidc_ready else "primary"
+        controls.append(
+            f"""
+            <form method="post" action="/login" autocomplete="on">
+              <input type="hidden" name="csrf_token" value="{html.escape(csrf_token, quote=True)}">
+              <input type="hidden" name="next" value="{html.escape(return_to, quote=True)}">
+              <label for="username">Username</label>
+              <input id="username" name="username" type="text" maxlength="256" autocomplete="username" required>
+              <label for="password">Password</label>
+              <input id="password" name="password" type="password" maxlength="4096" autocomplete="current-password" required>
+              <button class="auth-action {password_button_class}" type="submit">Sign In</button>
+            </form>
+            """
+        )
+    elif password_enabled:
+        controls.append(
+            '<div class="error" role="alert">Username &amp; Password authentication is enabled '
+            "but is not fully configured. That mechanism is unavailable.</div>"
+        )
 
     if not password_enabled and not oidc_enabled:
-        password_controls = '<p class="muted">Authentication is not currently required.</p>'
+        controls.append('<p class="muted">Authentication is not currently required.</p>')
 
+    interactive_controls = "\n".join(controls)
     body = f"""<!doctype html>
 <html lang="en">
 <head>
@@ -148,7 +159,7 @@ def _login_page(
 .card{{width:min(420px,100%);background:rgba(20,22,27,.96);border:1px solid var(--border);border-radius:18px;padding:30px;box-shadow:0 24px 70px rgba(0,0,0,.38)}}
 .brand{{font-size:28px;font-weight:800;letter-spacing:-.7px;margin-bottom:6px}}.brand span{{color:var(--accent)}}h1{{font-size:17px;margin:0 0 24px;color:#c8cbd2;font-weight:500}}
 label{{display:block;font-size:12px;font-weight:700;color:#c4c7cf;margin:14px 0 7px}}input{{width:100%;border:1px solid var(--border);background:var(--surface2);color:var(--text);border-radius:9px;padding:11px 12px;font:inherit;outline:none}}input:focus{{border-color:var(--accent);box-shadow:0 0 0 3px rgba(240,138,36,.12)}}
-button,.oidc{{width:100%;margin-top:20px;border:0;border-radius:9px;padding:11px 14px;font-weight:800;font-size:14px;cursor:pointer;text-align:center;text-decoration:none;display:block}}button{{background:var(--accent);color:#17110a}}button:hover,.oidc:hover{{filter:brightness(1.06)}}.oidc{{background:var(--surface2);color:var(--text);border:1px solid var(--border)}}
+.auth-action{{width:100%;margin-top:20px;border-radius:9px;padding:11px 14px;font-weight:800;font-size:14px;cursor:pointer;text-align:center;text-decoration:none;display:block}}button.auth-action{{font-family:inherit}}.auth-action:hover{{filter:brightness(1.06)}}.primary{{border:0;background:var(--accent);color:#17110a}}.secondary{{background:var(--surface2);color:var(--text);border:1px solid var(--border)}}
 .divider{{display:flex;align-items:center;gap:12px;color:var(--muted);font-size:11px;margin:22px 0 0}}.divider:before,.divider:after{{content:"";height:1px;background:var(--border);flex:1}}
 .error{{border:1px solid rgba(255,107,107,.4);background:rgba(255,107,107,.08);color:#ffc0c0;padding:10px 12px;border-radius:9px;font-size:12px;line-height:1.45;margin:0 0 15px}}.muted{{color:var(--muted);font-size:13px;line-height:1.55}}
 .foot{{margin-top:22px;padding-top:16px;border-top:1px solid var(--border);color:#747986;font-size:11px;line-height:1.5}}
@@ -159,8 +170,7 @@ button,.oidc{{width:100%;margin-top:20px;border:0;border-radius:9px;padding:11px
   <div class="brand">Debrid<span>Pulse</span></div>
   <h1>Sign in to continue</h1>
   {error_html}
-  {password_controls}
-  {oidc_controls}
+  {interactive_controls}
   <div class="foot">Password-only LAN deployments may operate over HTTP. OpenID Connect requires a canonical HTTPS external URL.</div>
 </main>
 </body>

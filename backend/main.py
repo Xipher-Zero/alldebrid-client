@@ -42,7 +42,7 @@ logger = logging.getLogger("alldebrid.main")
 async def _reset_stuck_downloads_sqlite():
     """Resets torrents that were stuck in 'downloading' state when the app last stopped."""
     import aiosqlite as _aiosqlite
-    async with aiosqlite.connect(DB_PATH, timeout=30) as _db:
+    async with _aiosqlite.connect(DB_PATH, timeout=30) as _db:
         _db.row_factory = _aiosqlite.Row
         stuck = await (await _db.execute(
             """SELECT id, alldebrid_id, name FROM torrents

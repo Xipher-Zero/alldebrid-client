@@ -11,7 +11,7 @@ from joserfc.jwk import RSAKey
 
 from auth import oidc
 from auth.middleware import enforce_authentication
-from auth.models import AuthMechanism, Principal
+from auth.models import AuthMechanism
 
 
 def _settings(**updates):
@@ -214,17 +214,46 @@ async def test_oidc_start_uses_state_nonce_and_pkce_s256(monkeypatch):
     assert params["code_challenge"] == [expected]
 
 
+def test_oidc_allow_all_bypasses_configured_identity_lists():
+    cfg = _config(
+        oidc_allow_all=True,
+        oidc_allowed_subjects=["https://wrong.example|other"],
+        oidc_allowed_emails=["other@example.com"],
+        oidc_allowed_groups=["other-group"],
+    )
+    principal = oidc.authorize_oidc_claims(
+        cfg,
+        {"iss": cfg.issuer, "sub": "user-1", "name": "Operator"},
+    )
+    assert principal.mechanism is AuthMechanism.OIDC_SESSION
+
+
+def test_oidc_subject_authorization_is_issuer_qualified():
+    cfg = _config(oidc_allowed_groups=[])
+    composite = f"{cfg.issuer}|user-1"
+    allowed = _config(oidc_allowed_subjects=[composite], oidc_allowed_groups=[])
+    principal = oidc.authorize_oidc_claims(
+        allowed,
+        {"iss": allowed.issuer, "sub": "user-1"},
+    )
+    assert principal.subject == composite
+
+    bare = _config(oidc_allowed_subjects=["user-1"], oidc_allowed_groups=[])
+    with pytest.raises(oidc.OidcAuthorizationError):
+        oidc.authorize_oidc_claims(bare, {"iss": bare.issuer, "sub": "user-1"})
+
+
 @pytest.mark.parametrize(
     ("config_updates", "claims_updates", "allowed"),
     [
         ({"oidc_allow_all": True, "oidc_allowed_groups": []}, {}, True),
-        ({"oidc_allowed_subjects": ["user-1"], "oidc_allowed_groups": []}, {}, True),
-        ({"oidc_allowed_subjects": ["other"], "oidc_allowed_groups": []}, {}, False),
+        ({"oidc_allowed_subjects": ["https://id.example/application/o/debridpulse|user-1"], "oidc_allowed_groups": []}, {}, True),
+        ({"oidc_allowed_subjects": ["https://id.example/application/o/debridpulse|other"], "oidc_allowed_groups": []}, {}, False),
         ({"oidc_allowed_emails": ["User@Example.COM"], "oidc_allowed_groups": []}, {"email": "user@example.com", "email_verified": True}, True),
         ({"oidc_allowed_emails": ["user@example.com"], "oidc_allowed_groups": []}, {"email": "user@example.com", "email_verified": False}, False),
         ({"oidc_allowed_groups": ["debridpulse-operators"]}, {"groups": ["other", "debridpulse-operators"]}, True),
         ({"oidc_allowed_groups": ["debridpulse-operators"]}, {"groups": None}, False),
-        ({"oidc_allowed_subjects": ["user-1"], "oidc_allowed_groups": ["debridpulse-operators"]}, {"groups": ["other"]}, False),
+        ({"oidc_allowed_subjects": ["https://id.example/application/o/debridpulse|user-1"], "oidc_allowed_groups": ["debridpulse-operators"]}, {"groups": ["other"]}, False),
         ({"oidc_allowed_subjects": [], "oidc_allowed_emails": [], "oidc_allowed_groups": [], "oidc_allow_all": False}, {}, False),
     ],
 )
@@ -279,11 +308,11 @@ async def test_valid_id_token_is_signature_issuer_audience_nonce_and_expiry_chec
     valid = await oidc.validate_id_token({"id_token": encoded()}, transaction)
     assert valid["sub"] == "user-1"
 
-    for label, token in (
-        ("issuer", encoded(iss="https://wrong.example")),
-        ("audience", encoded(aud="wrong-client")),
-        ("nonce", encoded(nonce="wrong-nonce")),
-        ("expired", encoded(exp=now - 120)),
+    for token in (
+        encoded(iss="https://wrong.example"),
+        encoded(aud="wrong-client"),
+        encoded(nonce="wrong-nonce"),
+        encoded(exp=now - 120),
     ):
         with pytest.raises(oidc.OidcProtocolError):
             await oidc.validate_id_token({"id_token": token}, transaction)

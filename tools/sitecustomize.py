@@ -56,11 +56,26 @@ new_import = '''# Existing rows retain their original source provenance. New pro
 # revoke ownership from objects this instance actually created.
 '''
 
+old_codeql = '''# Permanent JS CodeQL coverage.
+replace_once(
+    ".github/workflows/codeql.yml",
+    "# Scans Python backend and GitHub Actions workflow files.\\n",
+    "# Scans Python backend, browser JavaScript, and GitHub Actions workflow files.\\n",
+)
+replace_once(
+    ".github/workflows/codeql.yml",
+    """          - language: python\\n            build-mode: none\\n          - language: actions\\n""",
+    """          - language: python\\n            build-mode: none\\n          - language: javascript-typescript\\n            build-mode: none\\n          - language: actions\\n""",
+)
+'''
+new_codeql = '''# Permanent JS CodeQL coverage is already present on the branch.\n'''
+
 changed = False
 for old, new, label in (
     (old_ready, new_ready, "ready-parent"),
     (old_direct, new_direct, "direct-link"),
     (old_import, new_import, "import ownership provenance"),
+    (old_codeql, new_codeql, "CodeQL already-applied coverage"),
 ):
     if old in text:
         text = text.replace(old, new, 1)

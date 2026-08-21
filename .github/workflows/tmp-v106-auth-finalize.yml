@@ -1,0 +1,117 @@
+name: Temporary v1.0.6 auth finalizer
+
+on:
+  push:
+    branches: [work/v1.0.6-auth-overhaul]
+    paths: [.github/workflows/tmp-v106-auth-finalize.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v5
+        with:
+          ref: work/v1.0.6-auth-overhaul
+          fetch-depth: 0
+
+      - name: Apply surgical finalization edits
+        shell: python
+        run: |
+          from pathlib import Path
+
+          auth_path = Path('backend/api/auth_routes.py')
+          auth = auth_path.read_text(encoding='utf-8')
+          old = '''@router.get("/api/auth/session")
+          async def auth_session_status(request: Request):
+              principal = getattr(request.state, "principal", Principal.anonymous())
+              session_token = str(getattr(request.state, "auth_session_token", "") or "")
+              record = session_store.resolve(session_token) if session_token else None
+              response = JSONResponse(
+                  {
+                      "authenticated": bool(principal.authenticated),
+                      "mechanism": principal.mechanism.value if principal.mechanism else None,
+                      "subject": principal.subject,
+                      "display_name": principal.display_name,
+                      "csrf_token": session_store.csrf_token(session_token) if record is not None else "",
+                      "session_expires_in_seconds": (
+                          max(0, int(record.expires_at - time.monotonic())) if record is not None else None
+                      ),
+                  }
+              )
+              response.headers["Cache-Control"] = "no-store"
+              return response
+          '''
+          new = '''@router.get("/api/auth/session")
+          async def auth_session_status(request: Request, response: Response = None):
+              principal = getattr(request.state, "principal", Principal.anonymous())
+              session_token = str(getattr(request.state, "auth_session_token", "") or "")
+              record = session_store.resolve(session_token) if session_token else None
+              if response is not None:
+                  response.headers["Cache-Control"] = "no-store"
+              return {
+                  "authenticated": bool(principal.authenticated),
+                  "mechanism": principal.mechanism.value if principal.mechanism else None,
+                  "subject": principal.subject,
+                  "display_name": principal.display_name,
+                  "csrf_token": session_store.csrf_token(session_token) if record is not None else "",
+                  "session_expires_in_seconds": (
+                      max(0, int(record.expires_at - time.monotonic())) if record is not None else None
+                  ),
+              }
+          '''
+          if old not in auth:
+              raise SystemExit('auth session block did not match expected source')
+          auth_path.write_text(auth.replace(old, new, 1), encoding='utf-8')
+
+          test_path = Path('backend/tests/test_auth_session_cache_policy.py')
+          test = test_path.read_text(encoding='utf-8')
+          test = test.replace('from fastapi import Request\n', 'from fastapi import Request, Response\n', 1)
+          old_test = '''@pytest.mark.asyncio
+          async def test_session_status_response_is_never_cacheable():
+              response = await auth_routes.auth_session_status(_request())
+              assert response.headers["Cache-Control"] == "no-store"
+          '''
+          new_test = '''@pytest.mark.asyncio
+          async def test_session_status_response_is_never_cacheable():
+              response = Response()
+              data = await auth_routes.auth_session_status(_request(), response)
+              assert data["authenticated"] is True
+              assert response.headers["Cache-Control"] == "no-store"
+          '''
+          if old_test not in test:
+              raise SystemExit('session cache test block did not match expected source')
+          test_path.write_text(test.replace(old_test, new_test, 1), encoding='utf-8')
+
+          changelog_path = Path('CHANGELOG.md')
+          changelog = changelog_path.read_text(encoding='utf-8')
+          marker = '## [1.0.6] — 2026-08-20\n\n'
+          auth_section = '''### Native authentication overhaul
+
+          - Replaced the inherited browser Basic-auth experience with native Username & Password application sessions backed by Argon2id while retaining HTTP Basic for REST clients using the same credentials.
+          - Added provider-neutral OpenID Connect Authorization Code + PKCE with HTTPS issuer/callback enforcement, state/nonce/browser correlation, issuer-bound discovery and JWKS validation, UserInfo support, and explicit subject/email/group authorization policy.
+          - Added verified pending OIDC configuration changes and shared transition guards so an incomplete or unverified sole authentication mechanism cannot become authoritative; deliberate open/no-auth mode remains supported behind explicit confirmation.
+          - Added bounded in-memory application sessions with absolute expiry, explicit logout, login/application CSRF protection, credential/configuration-version invalidation, and fail-closed behavior for configured-but-unusable authentication.
+          - Added supplemental bearer API tokens with one-time raw-token display, persisted one-way verifiers, rotation/clear controls, and open-mode semantics that do not silently turn an intentionally open deployment into token-only mode.
+          - Added a dedicated Authentication settings surface, authentication/help documentation, secret-preserving update semantics, and runtime dependency/license inventory enforcement for the new authentication stack.
+          - Hardened authentication responses with request correlation, baseline browser security headers, and no-store handling for session/CSRF state.
+
+          '''
+          if auth_section not in changelog:
+              if marker not in changelog:
+                  raise SystemExit('1.0.6 changelog marker not found')
+              changelog = changelog.replace(marker, marker + auth_section, 1)
+              changelog_path.write_text(changelog, encoding='utf-8')
+
+          Path('.github/workflows/tmp-v106-auth-finalize.yml').unlink()
+
+      - name: Commit finalization
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "Finalize v1.0.6 authentication audit artifacts"
+          git push origin HEAD:work/v1.0.6-auth-overhaul

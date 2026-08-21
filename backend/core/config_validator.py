@@ -160,7 +160,7 @@ def validate_and_sanitise(cfg) -> Any:
     sensitive = {
         "alldebrid_api_key", "aria2_secret", "discord_webhook_url",
         "discord_webhook_added", "stats_report_webhook_url",
-        "auth_password", "extraction_password",
+        "auth_password", "auth_password_hash", "extraction_password",
     }
     fixes: Dict[str, Any] = {}
     for field, msg, bad, fixed in issues:

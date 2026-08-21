@@ -49,9 +49,13 @@ def interactive_auth_enabled(settings) -> bool:
 
 
 def safe_return_path(value: str, *, default: str = "/") -> str:
-    """Accept only local relative return destinations; never create an open redirect."""
+    """Accept only a local absolute-path reference; never create an open redirect."""
     candidate = str(value or "").strip()
     if not candidate or len(candidate) > 2048:
+        return default
+    # Reject every network-path reference before URL parsing. Python's urlsplit
+    # normalizes some 3+ slash inputs in ways browsers subsequently reinterpret.
+    if not candidate.startswith("/") or candidate.startswith("//"):
         return default
     if any(ch in candidate for ch in ("\\", "\r", "\n", "\x00")):
         return default

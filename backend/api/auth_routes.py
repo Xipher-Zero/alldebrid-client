@@ -4,6 +4,7 @@ import html
 import os
 import time
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -16,8 +17,23 @@ from auth.csrf import (
 )
 from auth.manager import verify_local_credentials
 from auth.models import AuthMechanism, Principal
+from auth.oidc import (
+    OIDC_CORRELATION_COOKIE,
+    OIDC_TRANSACTION_TTL_SECONDS,
+    OidcError,
+    begin_oidc_login,
+    complete_oidc_login,
+    oidc_auth_ready,
+    oidc_transaction_store,
+)
 from auth.passwords import password_credential_version
-from auth.policy import password_auth_enabled, password_auth_ready, safe_return_path
+from auth.policy import (
+    interactive_auth_enabled,
+    oidc_auth_enabled,
+    password_auth_enabled,
+    password_auth_ready,
+    safe_return_path,
+)
 from auth.sessions import (
     clear_session_cookie,
     session_cookie_token,
@@ -75,6 +91,12 @@ def _login_page(
     cfg = get_settings()
     password_enabled = password_auth_enabled(cfg)
     password_ready = password_auth_ready(cfg)
+    oidc_enabled = oidc_auth_enabled(cfg)
+    oidc_ready = oidc_auth_ready(cfg) if oidc_enabled else False
+    provider_name = html.escape(
+        str(getattr(cfg, "oidc_provider_name", "") or "OpenID Connect").strip()
+        or "OpenID Connect"
+    )
     error_html = (
         f'<div class="error" role="alert">{html.escape(error)}</div>' if error else ""
     )
@@ -93,9 +115,25 @@ def _login_page(
     elif password_enabled:
         password_controls = (
             '<div class="error" role="alert">Username &amp; Password authentication is enabled '
-            "but is not fully configured. Protected access is fail-closed.</div>"
+            "but is not fully configured. That mechanism is unavailable.</div>"
         )
     else:
+        password_controls = ""
+
+    if oidc_enabled and oidc_ready:
+        oidc_controls = f"""
+        <div class="divider"><span>or continue with</span></div>
+        <a class="oidc" href="/auth/oidc/start?next={quote(return_to, safe='')}">Continue with {provider_name}</a>
+        """
+    elif oidc_enabled:
+        oidc_controls = (
+            '<div class="error" role="alert">OpenID Connect is enabled but its local '
+            "configuration is incomplete or invalid.</div>"
+        )
+    else:
+        oidc_controls = ""
+
+    if not password_enabled and not oidc_enabled:
         password_controls = '<p class="muted">Authentication is not currently required.</p>'
 
     body = f"""<!doctype html>
@@ -110,7 +148,8 @@ def _login_page(
 .card{{width:min(420px,100%);background:rgba(20,22,27,.96);border:1px solid var(--border);border-radius:18px;padding:30px;box-shadow:0 24px 70px rgba(0,0,0,.38)}}
 .brand{{font-size:28px;font-weight:800;letter-spacing:-.7px;margin-bottom:6px}}.brand span{{color:var(--accent)}}h1{{font-size:17px;margin:0 0 24px;color:#c8cbd2;font-weight:500}}
 label{{display:block;font-size:12px;font-weight:700;color:#c4c7cf;margin:14px 0 7px}}input{{width:100%;border:1px solid var(--border);background:var(--surface2);color:var(--text);border-radius:9px;padding:11px 12px;font:inherit;outline:none}}input:focus{{border-color:var(--accent);box-shadow:0 0 0 3px rgba(240,138,36,.12)}}
-button{{width:100%;margin-top:20px;border:0;border-radius:9px;padding:11px 14px;background:var(--accent);color:#17110a;font-weight:800;font-size:14px;cursor:pointer}}button:hover{{filter:brightness(1.06)}}
+button,.oidc{{width:100%;margin-top:20px;border:0;border-radius:9px;padding:11px 14px;font-weight:800;font-size:14px;cursor:pointer;text-align:center;text-decoration:none;display:block}}button{{background:var(--accent);color:#17110a}}button:hover,.oidc:hover{{filter:brightness(1.06)}}.oidc{{background:var(--surface2);color:var(--text);border:1px solid var(--border)}}
+.divider{{display:flex;align-items:center;gap:12px;color:var(--muted);font-size:11px;margin:22px 0 0}}.divider:before,.divider:after{{content:"";height:1px;background:var(--border);flex:1}}
 .error{{border:1px solid rgba(255,107,107,.4);background:rgba(255,107,107,.08);color:#ffc0c0;padding:10px 12px;border-radius:9px;font-size:12px;line-height:1.45;margin:0 0 15px}}.muted{{color:var(--muted);font-size:13px;line-height:1.55}}
 .foot{{margin-top:22px;padding-top:16px;border-top:1px solid var(--border);color:#747986;font-size:11px;line-height:1.5}}
 </style>
@@ -121,7 +160,8 @@ button{{width:100%;margin-top:20px;border:0;border-radius:9px;padding:11px 14px;
   <h1>Sign in to continue</h1>
   {error_html}
   {password_controls}
-  <div class="foot">Password-only LAN deployments may operate over HTTP, but HTTP does not protect credentials or session traffic from network observers.</div>
+  {oidc_controls}
+  <div class="foot">Password-only LAN deployments may operate over HTTP. OpenID Connect requires a canonical HTTPS external URL.</div>
 </main>
 </body>
 </html>"""
@@ -153,16 +193,44 @@ def _issue_login_page(
     return response
 
 
+def _set_oidc_correlation_cookie(response: Response, value: str) -> None:
+    response.set_cookie(
+        key=OIDC_CORRELATION_COOKIE,
+        value=str(value),
+        max_age=OIDC_TRANSACTION_TTL_SECONDS,
+        path="/",
+        secure=True,
+        httponly=True,
+        samesite="lax",
+    )
+
+
+def _clear_oidc_correlation_cookie(response: Response) -> None:
+    response.delete_cookie(
+        key=OIDC_CORRELATION_COOKIE,
+        path="/",
+        secure=True,
+        httponly=True,
+        samesite="lax",
+    )
+
+
 @router.get("/api/auth/status")
 async def public_auth_status():
     """Minimal public bootstrap state needed to render the login experience."""
     cfg = get_settings()
-    enabled = password_auth_enabled(cfg)
+    password_enabled = password_auth_enabled(cfg)
+    oidc_enabled = oidc_auth_enabled(cfg)
     return {
-        "authentication_required": enabled,
-        "password_enabled": enabled,
-        "password_ready": password_auth_ready(cfg) if enabled else False,
-        "oidc_enabled": False,
+        "authentication_required": interactive_auth_enabled(cfg),
+        "password_enabled": password_enabled,
+        "password_ready": password_auth_ready(cfg) if password_enabled else False,
+        "oidc_enabled": oidc_enabled,
+        "oidc_ready": oidc_auth_ready(cfg) if oidc_enabled else False,
+        "oidc_provider_name": (
+            str(getattr(cfg, "oidc_provider_name", "") or "OpenID Connect").strip()
+            or "OpenID Connect"
+        ),
     }
 
 
@@ -183,7 +251,7 @@ async def application_javascript_bundle():
 async def login_page(request: Request, next: str = "/"):
     cfg = get_settings()
     return_to = safe_return_path(next)
-    if not password_auth_enabled(cfg):
+    if not interactive_auth_enabled(cfg):
         return RedirectResponse(url=return_to, status_code=303)
 
     existing_token = session_cookie_token(request)
@@ -203,7 +271,12 @@ async def login_page(request: Request, next: str = "/"):
 async def password_login(request: Request):
     cfg = get_settings()
     if not password_auth_enabled(cfg):
-        return RedirectResponse(url="/", status_code=303)
+        return _issue_login_page(
+            request,
+            return_to="/",
+            error="Username & Password authentication is disabled.",
+            status_code=403,
+        )
     if not password_auth_ready(cfg):
         return _issue_login_page(
             request,
@@ -262,6 +335,90 @@ async def password_login(request: Request):
     response = RedirectResponse(url=return_to, status_code=303)
     set_session_cookie(response, request, token, max_age=lifetime)
     clear_login_csrf_cookie(response, request)
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@router.get("/auth/oidc/start")
+async def oidc_start(request: Request, next: str = "/"):
+    cfg = get_settings()
+    return_to = safe_return_path(next)
+    if not oidc_auth_enabled(cfg):
+        return _issue_login_page(
+            request,
+            return_to=return_to,
+            error="OpenID Connect authentication is disabled.",
+            status_code=404,
+        )
+    try:
+        authorization_url, correlation = await begin_oidc_login(cfg, return_to=return_to)
+    except OidcError:
+        return _issue_login_page(
+            request,
+            return_to=return_to,
+            error="OpenID Connect is currently unavailable or misconfigured.",
+            status_code=503,
+        )
+    response = RedirectResponse(url=authorization_url, status_code=303)
+    _set_oidc_correlation_cookie(response, correlation)
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@router.get("/auth/oidc/callback")
+async def oidc_callback(
+    request: Request,
+    state: str = "",
+    code: str = "",
+    error: str = "",
+):
+    correlation = str(request.cookies.get(OIDC_CORRELATION_COOKIE, "") or "")
+    if error:
+        oidc_transaction_store.consume(state, correlation)
+        response = _issue_login_page(
+            request,
+            return_to="/",
+            error="OpenID Connect sign-in was not completed.",
+            status_code=401,
+        )
+        _clear_oidc_correlation_cookie(response)
+        return response
+
+    try:
+        principal, return_to = await complete_oidc_login(
+            state=state,
+            code=code,
+            correlation=correlation,
+        )
+    except OidcError:
+        response = _issue_login_page(
+            request,
+            return_to="/",
+            error="OpenID Connect sign-in could not be validated or authorized.",
+            status_code=401,
+        )
+        _clear_oidc_correlation_cookie(response)
+        return response
+
+    old_token = session_cookie_token(request)
+    if old_token:
+        session_store.revoke(old_token)
+    cfg = get_settings()
+    lifetime = _session_lifetime_seconds(cfg)
+    token, _record = session_store.create(
+        principal,
+        lifetime_seconds=lifetime,
+    )
+    response = RedirectResponse(url=safe_return_path(return_to), status_code=303)
+    set_session_cookie(
+        response,
+        request,
+        token,
+        max_age=lifetime,
+        force_secure=True,
+    )
+    clear_login_csrf_cookie(response, request)
+    _clear_oidc_correlation_cookie(response)
     response.headers["Cache-Control"] = "no-store"
     return response
 

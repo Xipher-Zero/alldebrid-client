@@ -285,22 +285,6 @@ if _cors_origins:
         allow_headers=["Authorization", "Content-Type", "X-Request-ID", CSRF_HEADER],
     )
 
-# ── Request-ID Middleware ──────────────────────────────────────────────────────
-# Adds X-Request-ID to every response for log correlation.
-# Reuses the client-provided ID if present, otherwise generates a new UUID4.
-
-@app.middleware("http")
-async def request_id_middleware(request: Request, call_next):
-    req_id = str(request.headers.get("X-Request-ID") or "").strip()
-    if not req_id or len(req_id) > 128:
-        req_id = str(uuid.uuid4())
-    response = await call_next(request)
-    response.headers["X-Request-ID"] = req_id
-    response.headers.setdefault("X-Content-Type-Options", "nosniff")
-    response.headers.setdefault("Referrer-Policy", "no-referrer")
-    response.headers.setdefault("X-Frame-Options", "DENY")
-    return response
-
 # ── Authentication / Browser Security ─────────────────────────────────────────
 # Authentication is an outer request boundary. Browser cross-site mutation
 # protection is general security and remains active even when authentication is
@@ -318,6 +302,26 @@ async def general_web_security_middleware(request: Request, call_next):
         call_next,
         allowed_origins=_cors_origins,
     )
+
+
+# ── Request-ID / Baseline Response Security Middleware ────────────────────────
+# Registered last so it is the outermost HTTP middleware. This guarantees that
+# responses produced directly by the browser-security or authentication
+# boundaries receive the same correlation and baseline security headers as
+# normal application responses.
+
+@app.middleware("http")
+async def request_id_middleware(request: Request, call_next):
+    req_id = str(request.headers.get("X-Request-ID") or "").strip()
+    if not req_id or len(req_id) > 128:
+        req_id = str(uuid.uuid4())
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = req_id
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    return response
+
 
 # Pending OIDC callback is registered first so verified proposed configuration
 # can become authoritative before the replacement application session is issued.

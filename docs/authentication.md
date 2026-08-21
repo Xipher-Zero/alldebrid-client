@@ -122,6 +122,12 @@ For OIDC deployments, terminate HTTPS at the public ingress and set **Public Bas
 
 DebridPulse does not require an external authentication proxy when its native Password/OIDC mechanisms are enabled. An external proxy may still be used as an additional perimeter control, but it should not be relied on to repair an intentionally misconfigured native authentication state.
 
+## Release validation boundary
+
+The automated test suite exercises OIDC protocol validation, state/nonce/PKCE handling, authorization policy, pending-configuration lockout protection, session behavior, HTTP Basic coexistence, bearer-token behavior, and browser security boundaries with controlled test providers and responses.
+
+Those tests do not prove a particular external identity-provider, public DNS, TLS termination, or reverse-proxy deployment. Before relying on OIDC as the sole interactive mechanism in production, complete **Verify Sign-In** through the actual externally reachable HTTPS URL and configured identity provider while the known-working Password fallback is still available.
+
 ## Configuration-file examples
 
 The web UI is the supported configuration surface. The following JSON fragments document the persistent representation for recovery and automation; they are not a substitute for the lockout protections in the Authentication UI/API.

@@ -74,7 +74,7 @@ if POSTPATCH.exists():
     post = POSTPATCH.read_text(encoding="utf-8")
     marker = "# ownership-fixture-finalization-fixes"
     if marker not in post:
-        post += r'''
+        post += r"""
 
 # ownership-fixture-finalization-fixes
 manager_tests_text = read(manager_tests)
@@ -110,7 +110,7 @@ for test_name, torrent_id, ad_id in (
     manager_tests_text = manager_tests_text[:start] + block + manager_tests_text[end:]
 
 write(manager_tests, manager_tests_text)
-'''
+"""
         POSTPATCH.write_text(post, encoding="utf-8")
 
 if changed:

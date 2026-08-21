@@ -23,9 +23,10 @@ async def verify_local_credentials(
     provided_password: str,
     *,
     allow_basic_success_cache: bool = False,
+    settings=None,
 ) -> bool:
     """Verify the single local credential with shared throttling/timing behavior."""
-    cfg = get_settings()
+    cfg = settings if settings is not None else get_settings()
     if not password_auth_ready(cfg):
         return False
 

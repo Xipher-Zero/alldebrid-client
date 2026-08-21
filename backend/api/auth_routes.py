@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import html
+import os
 import time
+from pathlib import Path
 
 from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
 from auth.csrf import (
     clear_login_csrf_cookie,
@@ -42,6 +44,24 @@ def _session_record_current(record, cfg) -> bool:
         return False
     current_version = password_credential_version(getattr(cfg, "auth_password_hash", ""))
     return bool(current_version and record.credential_version == current_version)
+
+
+def _static_asset(name: str) -> Path:
+    candidates: list[Path] = []
+    configured = os.getenv("STATIC_DIR", "").strip()
+    if configured:
+        candidates.append(Path(configured) / name)
+    candidates.extend(
+        (
+            Path(__file__).resolve().parents[2] / "frontend" / "static" / name,
+            Path("/app/frontend/static") / name,
+            Path("/app/static") / name,
+        )
+    )
+    asset = next((candidate for candidate in candidates if candidate.is_file()), None)
+    if asset is None:
+        raise RuntimeError(f"Frontend asset not found: {name}")
+    return asset
 
 
 def _login_page(
@@ -144,6 +164,19 @@ async def public_auth_status():
         "password_ready": password_auth_ready(cfg) if enabled else False,
         "oidc_enabled": False,
     }
+
+
+@router.get("/app.js", include_in_schema=False)
+async def application_javascript_bundle():
+    """Load the session/CSRF bootstrap before the existing application script."""
+    auth_js = _static_asset("auth.js").read_text(encoding="utf-8")
+    app_js = _static_asset("app.js").read_text(encoding="utf-8")
+    response = Response(
+        content=f"{auth_js}\n;\n{app_js}",
+        media_type="application/javascript",
+    )
+    response.headers["Cache-Control"] = "no-cache"
+    return response
 
 
 @router.get("/login", response_class=HTMLResponse)

@@ -83,26 +83,15 @@ class AppSettings(BaseModel):
     # Automatically block sample files, extras, and featurettes.
     # Works alongside blocked_keywords — enabling this adds the most common
     # sample/extra patterns without requiring manual keyword configuration.
-    block_samples:    bool = False   # block files matching common sample patterns
-    block_extras:     bool = False   # block extras / featurettes / behind-the-scenes
+    block_samples:    bool = False
+    block_extras:     bool = False
 
     # ── Advanced Extraction ───────────────────────────────────────────────────
-    # Optional password applied to all archive extractions (7z -p and unrar -p).
-    # Leave empty if archives are not password-protected.
     extraction_password: str = ""
 
     # Deep aria2 filesystem sync
-    # Interval in minutes (0 = disabled). Checks actual file presence on disk
-    # independently of aria2 GID/status, resolving same-filename-different-folder issues.
     aria2_deep_sync_interval_minutes: int = 10
-    # Periodic built-in aria2 restart to reclaim glibc malloc arena memory.
-    # aria2 uses glibc malloc which retains freed pages in arenas even with
-    # MALLOC_ARENA_MAX=1. A periodic restart fully resets the process heap.
-    # Set to 0 to disable. Downloads are recovered from DB within 1 poll cycle.
-    aria2_restart_interval_hours: float = 0  # 0 = disabled; recommended: 4-8h
-    # disk-cache for built-in aria2. Set to 0 for native filesystems (ext4/XFS).
-    # Set to 16M or higher for FUSE-based mounts (mergerfs, NFS, SMB) to reduce
-    # FUSE round-trips and actually lower aria2 heap usage.
+    aria2_restart_interval_hours: float = 0
 
     # Polling
     poll_interval_seconds: int = 30
@@ -112,9 +101,7 @@ class AppSettings(BaseModel):
     alldebrid_rate_limit_per_minute: int = 60
 
     # Auto-recover stalled downloads
-    # Transfers stuck in queued/downloading for longer than this are reset (0 = disabled)
     stuck_download_timeout_hours: int = 6
-    # Full AllDebrid reconciliation interval (minutes) — syncs ALL torrents incl. error/queued
     full_sync_interval_minutes: int = 5
 
     # Backups
@@ -131,70 +118,49 @@ class AppSettings(BaseModel):
     db_backup_before_wipe: bool = True
 
     # Post-download extraction
-    extract_enabled: bool = False          # auto-extract archives after download
-    extract_delete_archive: bool = True    # delete archive after successful extraction
-    extract_max_concurrent: int = 1        # max parallel extractions
-    extract_max_files: int = 20000          # archive member ceiling
-    extract_max_expanded_gb: float = 250.0  # expanded bytes per archive
-    extract_max_compression_ratio: float = 1000.0  # expanded/archive size
-    discord_notify_extract: bool = True    # Discord notification after extraction
+    extract_enabled: bool = False
+    extract_delete_archive: bool = True
+    extract_max_concurrent: int = 1
+    extract_max_files: int = 20000
+    extract_max_expanded_gb: float = 250.0
+    extract_max_compression_ratio: float = 1000.0
+    discord_notify_extract: bool = True
 
-    # AllDebrid upload retry (statusCode 5 = upload failed)
-    upload_fail_retry_count: int = 3   # max retries for statusCode 5
-    upload_fail_retry_delay_minutes: int = 5  # minutes between retries
+    # AllDebrid upload retry
+    upload_fail_retry_count: int = 3
+    upload_fail_retry_delay_minutes: int = 5
 
     # aria2 download retry on error
-    # How many times to retry a failed aria2 download before giving up (0 = no retry)
     aria2_error_retry_count: int = 3
-    # Seconds to wait between retries
     aria2_error_retry_delay_seconds: int = 60
 
-    # Labels / categories (comma-separated, empty = disabled)
+    # Labels / categories
     torrent_labels: List[str] = []
 
     # ── Statistics & Reporting ────────────────────────────────────────────────
-    # How often to take a stats snapshot (minutes, 0 = disabled)
     stats_snapshot_interval_minutes: int = 60
-    # How many days to keep snapshots
     stats_snapshot_keep_days: int = 30
-    # Auto-report: interval in hours (0 = disabled)
     stats_report_interval_hours: int = 0
     update_check_interval_hours: int = 12
-    # Report window in hours used for manual default display and scheduled reports
     stats_report_window_hours: int = 24
-    # Webhook URL that receives automated reporting payloads
     stats_report_webhook_url: str = ""
 
     # ── Event log TTL ─────────────────────────────────────────────────────────
-    # How many days to keep event log entries (0 = keep forever).
-    # Only events are pruned — torrent rows are NEVER deleted by TTL, so
-    # the unique hash constraint and status fields remain intact and prevent
-    # duplicate downloads from being started.
     events_keep_days: int = 30
 
     # ── Authentication ────────────────────────────────────────────────────────
-    # Username & Password is an explicit mechanism. auth_password is retained
-    # only as transient legacy/settings input and is never persisted after
-    # migration; auth_password_hash is the authoritative stored verifier and is
-    # excluded from normal model serialization.
     auth_password_enabled: bool = False
     auth_username: str = ""
     auth_password_hash: str = Field(default="", exclude=True)
     auth_password: str = ""
-    # Transient destructive write intent. Excluded from serialization and never
-    # persisted; it exists so an empty password can mean clear rather than keep.
     auth_password_hash_clear: bool = Field(default=False, exclude=True)
-    # Browser application sessions use absolute expiration, not sliding expiry.
     auth_session_lifetime_hours: int = 12
 
-    # Provider-neutral OpenID Connect. The client secret is excluded from normal
-    # serialization and persisted explicitly so read/update APIs cannot echo it.
     auth_oidc_enabled: bool = False
     oidc_provider_name: str = "OpenID Connect"
     oidc_issuer_url: str = ""
     oidc_client_id: str = ""
     oidc_client_secret: str = Field(default="", exclude=True)
-    # Transient write intent. Excluded from serialization and never persisted.
     oidc_client_secret_clear: bool = Field(default=False, exclude=True)
     oidc_scopes: List[str] = ["openid", "profile", "email"]
     oidc_allow_all: bool = False
@@ -202,18 +168,12 @@ class AppSettings(BaseModel):
     oidc_allowed_emails: List[str] = []
     oidc_allowed_groups: List[str] = []
     oidc_group_claim: str = "groups"
-    # Canonical externally reachable origin used only for security-critical
-    # callback construction. PUBLIC_BASE_URL, when set, overrides this value.
+    # Canonical externally reachable origin used for OIDC callback construction
+    # and secure-cookie classification behind a trusted HTTPS reverse proxy.
     public_base_url: str = ""
 
     def model_dump(self, *args, **kwargs):
-        """Carry explicit legacy clear intent across the broad settings merge.
-
-        Private auth fields remain excluded from ordinary serialization. The
-        inherited SettingsUpdate subclass adds `clear_secrets`; only when that
-        request explicitly names the local password do we inject the one-shot
-        internal clear flag consumed by save_settings().
-        """
+        """Carry explicit legacy clear intent across the broad settings merge."""
         data = super().model_dump(*args, **kwargs)
         requested_clears = {
             str(field)
@@ -225,30 +185,10 @@ class AppSettings(BaseModel):
         return data
 
     # ── Disk space guard ─────────────────────────────────────────────────────
-    # Minimum free disk space required (GB) on the download folder's filesystem.
-    # 0 = disabled.
-    #
-    # When free space drops below this threshold:
-    #   - New aria2 dispatches are deferred (not errored)
-    #   - Transfers already active in aria2 are allowed to finish
-    #
-    # When free space rises back above threshold + 0.5 GB hysteresis:
-    #   - Deferred dispatch resumes automatically
-    #
-    # Checked every disk_guard_interval_seconds (default 60 s) — not on every
-    # poll cycle — to avoid excessive stat() calls on FUSE/NFS mounts.
-    #
-    # Compatible with all filesystems: ext4, XFS, ZFS, Btrfs, FUSE, NFS,
-    # Unraid's FUSE/shfs, and Windows (shutil fallback).
     min_free_disk_gb: float = 0
-
-    # How often (seconds) to check free disk space. 30–120 is sensible.
-    # Lower values = more responsive but more stat() calls on FUSE/NFS.
     disk_guard_interval_seconds: int = 60
-
-    # Hysteresis: resume paused downloads only when free space exceeds
-    # min_free_disk_gb + disk_guard_resume_hysteresis_gb to prevent flapping.
     disk_guard_resume_hysteresis_gb: float = 0.5
+
 
 _settings: AppSettings = AppSettings()
 
@@ -270,14 +210,15 @@ def _migrate_password_settings(loaded: dict) -> bool:
     password_hash = str(loaded.get("auth_password_hash") or "").strip()
 
     if plaintext:
-        if username and not password_hash:
-            loaded["auth_password_hash"] = hash_password(plaintext)
-            password_hash = loaded["auth_password_hash"]
+        # Plaintext is explicit credential input and therefore replaces any
+        # older verifier rather than being silently discarded when both exist.
+        loaded["auth_password_hash"] = hash_password(plaintext)
+        password_hash = loaded["auth_password_hash"]
         loaded["auth_password"] = ""
         changed = True
 
     if auth_state_present and legacy_enable_semantics:
-        loaded["auth_password_enabled"] = bool(username and (password_hash or plaintext))
+        loaded["auth_password_enabled"] = bool(username and password_hash)
         changed = True
 
     return changed
@@ -291,16 +232,18 @@ def load_settings() -> AppSettings:
     loaded: dict = {}
     if CONFIG_PATH.exists():
         try:
-            with open(CONFIG_PATH, "r") as f:
+            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
                 data = json.load(f)
+            if not isinstance(data, dict):
+                raise ValueError("configuration root must be a JSON object")
             loaded = {k: v for k, v in data.items() if k in AppSettings.model_fields}
         except Exception as exc:
-            logger.warning("Config file could not be read (%s) — using defaults", exc)
+            # A missing file is a fresh/default installation. An existing file
+            # that cannot be read is materially different: defaulting it would
+            # silently turn configured authentication into open mode.
+            raise RuntimeError("Existing configuration could not be read safely") from exc
 
     # ── Performance migration: built-in aria2 only ──────────────────────────
-    # External mode targets a shared daemon. Its explicitly stored transfer
-    # values must be preserved exactly; they are ADC job policy, not defaults
-    # that a migration may silently reinterpret.
     if loaded.get("aria2_mode", "builtin") == "builtin":
         _PERF_UPGRADES = {
             "aria2_split":                     (4, 8, 16),
@@ -322,9 +265,11 @@ def load_settings() -> AppSettings:
     if password_migrated:
         try:
             save_settings(settings)
-            logger.info("Config migration: local authentication password stored as Argon2id hash")
         except Exception as exc:
-            logger.warning("Password migration could not be persisted: %s", exc)
+            # Do not run indefinitely with a successfully migrated verifier only
+            # in memory while legacy plaintext remains on persistent storage.
+            raise RuntimeError("Password migration could not be persisted safely") from exc
+        logger.info("Config migration: local authentication password stored as Argon2id hash")
     return settings
 
 
@@ -370,9 +315,6 @@ def save_settings(s: AppSettings):
     except OSError:
         pass
 
-    # Transient secret-write intent is consumed by this persistence operation.
-    # Reset it on the object that callers normally install as live settings so a
-    # later unrelated save cannot repeat an old destructive action.
     s.auth_password_hash_clear = False
     s.oidc_client_secret_clear = False
 

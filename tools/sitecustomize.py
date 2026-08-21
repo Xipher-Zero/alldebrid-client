@@ -12,6 +12,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 PATCHER = HERE / "v106_corrective_patch.py"
+POSTPATCH = HERE / "v106_corrective_postpatch.py"
 text = PATCHER.read_text(encoding="utf-8") if PATCHER.exists() else ""
 
 old_ready = '''# Ready-parent scheduler has the same duplicate guard pattern but a different set.
@@ -66,6 +67,51 @@ for old, new, label in (
         changed = True
     elif new not in text:
         raise RuntimeError(f"temporary corrective fixup could not find {label} patch block")
+
+# Extend the postpatch exactly once with fixtures that explicitly model local
+# provider ownership under the new fail-closed deletion rule.
+if POSTPATCH.exists():
+    post = POSTPATCH.read_text(encoding="utf-8")
+    marker = "# ownership-fixture-finalization-fixes"
+    if marker not in post:
+        post += r'''
+
+# ownership-fixture-finalization-fixes
+manager_tests_text = read(manager_tests)
+
+start = manager_tests_text.index("    async def test_duplicate_file_entries_skipped")
+end = manager_tests_text.index("\n\nclass Aria2RecoverySafetyTests", start)
+block = manager_tests_text[start:end]
+old = '''        fake_db.commit = AsyncMock()\n        fake_db.execute = AsyncMock(return_value=AsyncMock())\n'''
+new = '''        fake_cursor = AsyncMock()\n        fake_cursor.fetchone = AsyncMock(return_value={"source": "manual"})\n        fake_db.commit = AsyncMock()\n        fake_db.execute = AsyncMock(return_value=fake_cursor)\n'''
+if block.count(old) != 1:
+    raise RuntimeError("duplicate-file ownership DB fixture not found")
+block = block.replace(old, new, 1)
+manager_tests_text = manager_tests_text[:start] + block + manager_tests_text[end:]
+
+for test_name, torrent_id, ad_id in (
+    ("test_finalize_marks_completed_when_all_files_done", 1, "ad-1"),
+    ("test_finalize_updates_large_total_size_without_case_expression", 116, "ad-116"),
+):
+    start = manager_tests_text.index(f"    async def {test_name}")
+    next_async = manager_tests_text.find("\n    async def ", start + 10)
+    next_class = manager_tests_text.find("\n\nclass ", start + 10)
+    ends = [value for value in (next_async, next_class) if value != -1]
+    end = min(ends) if ends else len(manager_tests_text)
+    block = manager_tests_text[start:end]
+    if '"source": None' not in block:
+        raise RuntimeError(f"{test_name}: source fixture not found")
+    block = block.replace('"source": None', '"source": "manual"', 1)
+    expected = f'assert_awaited_once_with({torrent_id}, "{ad_id}")'
+    replacement = f'assert_awaited_once_with({torrent_id}, "{ad_id}", "manual")'
+    if expected not in block:
+        raise RuntimeError(f"{test_name}: completion expectation not found")
+    block = block.replace(expected, replacement, 1)
+    manager_tests_text = manager_tests_text[:start] + block + manager_tests_text[end:]
+
+write(manager_tests, manager_tests_text)
+'''
+        POSTPATCH.write_text(post, encoding="utf-8")
 
 if changed:
     PATCHER.write_text(text, encoding="utf-8")

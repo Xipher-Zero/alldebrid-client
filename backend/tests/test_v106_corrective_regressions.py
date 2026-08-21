@@ -236,7 +236,7 @@ def test_frontend_xss_and_secret_contracts():
     assert "clear_secrets: clearSecrets" in js
     assert "alldebrid_api_key_configured" in js
     assert "cdnjs.cloudflare.com/ajax/libs/Chart.js" not in html
-    assert '/vendor/chart.umd.min.js?v=4.4.1' in html
+    assert '/vendor/chart.umd.min.js?v=4.5.1' in html
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="Node.js not installed")
@@ -298,7 +298,7 @@ def test_dependency_docs_match_removed_runtime_components():
     assert "| asyncpg |" not in docs
     assert "unrar-free" not in dockerfile
     assert "| unrar-free |" not in docs
-    assert "Chart.js | 4.4.1, vendored" in docs
+    assert "Chart.js | 4.5.1, vendored" in docs
     assert (root / "licenses/Chart.js-MIT.txt").is_file()
     assert (root / "frontend/static/vendor/chart.umd.min.js").is_file()
 

@@ -71,7 +71,7 @@ DebridPulse explicitly packages that tagged notice at
 
 | Resource | Version/source | License |
 |---|---|---|
-| Chart.js | 4.4.1, vendored at `frontend/static/vendor/chart.umd.min.js` | MIT ([bundled notice](../licenses/Chart.js-MIT.txt)) |
+| Chart.js | 4.5.1, vendored at `frontend/static/vendor/chart.umd.min.js` | MIT ([bundled notice](../licenses/Chart.js-MIT.txt)) |
 
 ## Browser-loaded resources
 

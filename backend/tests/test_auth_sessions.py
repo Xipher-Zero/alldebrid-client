@@ -110,6 +110,12 @@ def test_auth_bootstrap_loads_before_application_javascript():
     assert "X-CSRF-Token" in auth_js
 
 
+def test_login_request_body_limit_is_narrower_than_general_application_limit():
+    main = (ROOT / "backend/main.py").read_text()
+    assert 'scope.get("path") == "/login"' in main
+    assert "64 * 1024" in main
+
+
 def test_process_restart_invalidates_browser_session_by_design():
     before_restart = SessionStore()
     token, _ = before_restart.create(

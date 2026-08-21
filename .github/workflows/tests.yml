@@ -9,35 +9,17 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
-
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  contents: read
 
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
     steps:
       - name: Checkout
         uses: actions/checkout@v5
-        with:
-          ref: work/v1.0.6-audit-cleanup
-          fetch-depth: 0
-
-      - name: Apply final v1.0.6 audit corrections when needed
-        run: |
-          if ! grep -q 'def _public_timestamp' backend/api/serializers.py; then
-            python tools/v106_final_audit_patch.py
-            python tools/v106_final_audit_fixup.py
-          else
-            echo 'Corrective source already present'
-          fi
-          if grep -q 'safe_error = sanitize_log_value(last_error' backend/services/aria2.py; then
-            python tools/v106_post_validation_hardening.py
-          else
-            echo 'Post-validation hardening already present'
-          fi
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v6
@@ -73,48 +55,15 @@ jobs:
       - name: Check frontend JavaScript syntax
         run: node --check frontend/static/app.js
 
-      - name: Commit corrected source after validation
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add \
-            backend/api/serializers.py \
-            backend/api/routes.py \
-            backend/core/branding.py \
-            backend/core/config.py \
-            backend/core/scheduler.py \
-            backend/db/database.py \
-            backend/services/aria2.py \
-            backend/services/aria2_runtime.py \
-            backend/services/backup.py \
-            backend/services/db_maintenance.py \
-            backend/services/maintenance_gate.py \
-            backend/services/manager_v2.py \
-            backend/services/provider_gateway.py \
-            backend/services/stats.py \
-            backend/services/transfer_service.py \
-            backend/tests/test_license_policy.py \
-            backend/tests/test_v1_scope.py \
-            backend/tests/test_v106_final_audit.py \
-            frontend/static/app.js \
-            NOTICE
-          git diff --cached --check
-          if ! git diff --cached --quiet; then
-            git commit -m "Harden final v1.0.6 audit fixes"
-            git push origin HEAD:work/v1.0.6-audit-cleanup
-          fi
-
   security:
     runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     needs: test
 
     steps:
       - name: Checkout
         uses: actions/checkout@v5
-        with:
-          ref: work/v1.0.6-audit-cleanup
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v6

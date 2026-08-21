@@ -845,44 +845,13 @@ function setStatsPeriod(el) {
   el.classList.add('active');
   loadDetailedStats(el.dataset.period);
 }
-
-let _dashboardRecentFitLimit = null;
-let _dashboardRecentResizeTimer = null;
-
 function dashboardRecentLimit() {
-  const mobile = window.matchMedia('(max-width: 700px)').matches;
-  const fallback = window.matchMedia('(max-width: 700px)').matches ? 4 : 6;
-  if (mobile) return fallback;
-
-  const wrap = document.querySelector('#dash-activity-card .dash-activity-table-wrap');
-  const head = wrap?.querySelector('thead');
-  const rows = Array.from(document.querySelectorAll('#dash-tbody tr[data-torrent-id]'));
-
-  if (!wrap || !head || !rows.length) {
-    return _dashboardRecentFitLimit || fallback;
-  }
-
-  const rowHeights = rows
-    .map(row => row.getBoundingClientRect().height)
-    .filter(height => Number.isFinite(height) && height > 0);
-
-  if (!rowHeights.length) {
-    return _dashboardRecentFitLimit || fallback;
-  }
-
-  const rowHeight = Math.max(...rowHeights);
-  const available = Math.max(
-    0,
-    wrap.clientHeight - head.getBoundingClientRect().height - 4
-  );
-  const fitted = Math.floor(available / rowHeight);
-  return Math.max(1, Math.min(32, fitted || 1));
+  return window.matchMedia('(max-width: 700px)').matches ? 4 : 6;
 }
 
 async function loadRecent() {
   try {
     const recentLimit = dashboardRecentLimit();
-    _dashboardRecentFitLimit = recentLimit;
     const {items} = await api('GET', `/torrents?limit=${recentLimit}`);
     const tb = document.getElementById('dash-tbody');
     if (!items.length) {
@@ -914,15 +883,6 @@ async function loadRecent() {
         </td>
       </tr>`;
     }).join('');
-
-    requestAnimationFrame(() => {
-      if (!document.getElementById('view-dashboard')?.classList.contains('active')) return;
-      const fittedLimit = dashboardRecentLimit();
-      if (fittedLimit !== _dashboardRecentFitLimit) {
-        _dashboardRecentFitLimit = fittedLimit;
-        loadRecent().catch(() => {});
-      }
-    });
   } catch(e) { console.error(e); }
 }
 
@@ -1437,7 +1397,7 @@ async function showDetail(id) {
             <div class="emsg">${esc(ev.message)}</div>
             <div class="etime">${fmtDate(ev.created_at)}</div>
           </div>`).join('')}
-        `:''}
+      `:''}
     `;
   } catch(e) {
     if (modalBody) {
@@ -1503,17 +1463,6 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   document.addEventListener('keydown', function(event) {
     if (event.key === 'Escape') closeAria2SpeedCapMenu();
-  });
-  window.addEventListener('resize', function() {
-    clearTimeout(_dashboardRecentResizeTimer);
-    _dashboardRecentResizeTimer = setTimeout(function() {
-      if (!document.getElementById('view-dashboard')?.classList.contains('active')) return;
-      const fittedLimit = dashboardRecentLimit();
-      if (fittedLimit !== _dashboardRecentFitLimit) {
-        _dashboardRecentFitLimit = fittedLimit;
-        loadRecent().catch(() => {});
-      }
-    }, 120);
   });
   const isLight = localStorage.getItem('theme') === 'light';
   document.body.classList.toggle('light', isLight);
@@ -2229,7 +2178,7 @@ function renderSettings() {
             </div>
           </div>
           <div class="form-group">
-            <label class="form-label">Webhook URL — Torrent Added <span style="font-weight:400;color:var(--text2)">(optional)</span></label>
+            <label class="form-label">Webhook URL — Torrent Added <span style="font-weight:400;color:var(--muted)">(optional)</span></label>
             <input class="input" id="s-discord_webhook_added" value="${s.discord_webhook_added||''}" placeholder="https://discord.com/api/webhooks/…"/>
           </div>
           <div class="toggle-row">
@@ -2238,7 +2187,7 @@ function renderSettings() {
           </div>
           <div class="toggle-row">
             <div class="toggle-info"><div class="tl">Notify on Finished</div></div>
-            <label class="toggle"><input type="checkbox" id="s-discord_notify_finished" ${s.discord_notify_finished!==false?'checked':''}><div class="ttrack"></div></label>
+            <label class="toggle"><input type="checkbox" id="s-discord_notify_finished" ${s.discord_notify_finished?'checked':''}><div class="ttrack"></div></label>
           </div>
           <div class="toggle-row">
             <div class="toggle-info"><div class="tl">Notify on Error</div></div>
@@ -2323,6 +2272,16 @@ function renderSettings() {
     </div>`);
   _sf.insertAdjacentHTML('beforeend', `<div class="stab-panel" id="tab-advanced">
       <div class="scard">
+        <div class="scard-header">🏷 Labels</div>
+        <div class="scard-body">
+          <div class="form-group">
+            <label class="form-label">Predefined Labels <span style="font-weight:400;color:var(--text2)">(comma-separated)</span></label>
+            <input class="input" id="s-torrent_labels_raw" value="${(s.torrent_labels||[]).join(', ')}" placeholder="Movies, Series, 4K, Anime"/>
+            <span class="form-hint">Leave empty — labels are optional per torrent.</span>
+          </div>
+        </div>
+      </div>
+      <div class="scard">
       <div class="scard-header">🚫 File Filters</div>
       <p class="form-hint" style="padding:4px 14px 6px;margin:0;font-size:11px;color:var(--text3)">Skip unwanted files by extension, keyword, or minimum file size.</p>
       <div class="scard-body">
@@ -2346,6 +2305,20 @@ function renderSettings() {
           <div class="form-group">
             <label class="form-label">Minimum File Size (MB, 0 = no limit)</label>
             <input class="input" type="number" id="s-min_file_size_mb" value="${s.min_file_size_mb??0}" min="0"/>
+          </div>
+          <div class="toggle-row" style="margin-top:10px">
+            <div class="toggle-info">
+              <div class="tl">Block sample / trailer files</div>
+              <div class="td">Automatically skip files matching sample, trailer, or teaser patterns.</div>
+            </div>
+            <label class="toggle"><input type="checkbox" id="s-block_samples" ${s.block_samples?'checked':''}/><span class="slider"></span></label>
+          </div>
+          <div class="toggle-row">
+            <div class="toggle-info">
+              <div class="tl">Block extras / featurettes</div>
+              <div class="td">Automatically skip files in /Extras/, /Featurettes/, /Behind the Scenes/ sub-folders.</div>
+            </div>
+            <label class="toggle"><input type="checkbox" id="s-block_extras" ${s.block_extras?'checked':''}/><span class="slider"></span></label>
           </div>
         </div>
       </div>
@@ -2509,6 +2482,7 @@ function getFormSettings() {
     discord_notify_error: c('discord_notify_error'),
     discord_notify_update: c('discord_notify_update'),
     update_check_interval_hours: n('update_check_interval_hours', 12),
+    torrent_labels: (t('torrent_labels_raw')||'').split(',').map(s=>s.trim()).filter(Boolean),
     stuck_download_timeout_hours: n('stuck_download_timeout_hours'),
     alldebrid_rate_limit_per_minute: n('alldebrid_rate_limit_per_minute'),
     full_sync_interval_minutes: n('full_sync_interval_minutes'),
@@ -3176,7 +3150,7 @@ async function uploadDiscordAvatar(input) {
     const data = await resp.json();
     if (!resp.ok) { toast(data.detail || 'Upload failed', 'error'); return; }
     // Discord requires a real HTTP URL, not a data URI
-    // The server saves the file and returns a public URL
+    // The server saves the file and returns the public URL
     document.getElementById('s-discord_avatar_url').value = data.url;
     showAvatarPreview(data.url, file.name, data.size_bytes);
     toast('Avatar uploaded — URL: ' + data.url, 'success');
@@ -4495,9 +4469,9 @@ async function showMemoryInfo() {
       'Page cache: <b style="color:var(--accent)">' + d.page_cache + '</b> &nbsp; ' +
       'Available: <b style="color:var(--green)">' + d.available + '</b><br>' +
       '<span style="font-size:11px;color:var(--text2)">' +
-      'Page cache = kernel file cache shown as "used" in Unraid dashboard, ' +
+      'Page cache = kernel file cache shown as \"used\" in Unraid dashboard, ' +
       'but reclaimed automatically when needed. ' +
-      'If large, click "Drop Page Cache" to release it immediately.' +
+      'If large, click \"Drop Page Cache\" to release it immediately.' +
       '</span>';
   } catch(e) {
     el.innerHTML = '<span style="color:var(--red)">Error: ' + esc(e.message) + '</span>';

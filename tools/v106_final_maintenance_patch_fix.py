@@ -1,0 +1,14 @@
+from pathlib import Path
+import runpy
+
+ROOT = Path(__file__).resolve().parents[1]
+runpy.run_path(str(ROOT / "tools/v106_final_maintenance_patch.py"), run_name="__main__")
+
+path = ROOT / "backend/tests/test_v106_corrective_regressions.py"
+text = path.read_text()
+old = '''@pytest.mark.asyncio\nasync def test_transfer_service_gate_blocks_resume_and_intake_during_wipe_admission():\n    from services.maintenance_gate import ApplicationMaintenanceActive, ApplicationMaintenanceGate\n    from services.transfer_service import TransferService\n\n    service = object.__new__(TransferService)\n    service._application_maintenance = ApplicationMaintenanceGate()\n    service.control = SimpleNamespace(resume_all=AsyncMock(return_value={"ok": True}))\n    service.provider = SimpleNamespace(add_magnet=AsyncMock(return_value={"ok": True}))\n\n    async with service.database_wipe_admission():\n        with pytest.raises(ApplicationMaintenanceActive):\n            await service.resume_all_downloads()\n        with pytest.raises(ApplicationMaintenanceActive):\n            await service.add_magnet_direct("magnet:?xt=urn:btih:test")\n\n    service.control.resume_all.assert_not_awaited()\n    service.provider.add_magnet.assert_not_awaited()\n'''
+new = '''@pytest.mark.asyncio\nasync def test_transfer_service_gate_blocks_resume_and_intake_during_wipe_admission():\n    from services.maintenance_gate import ApplicationMaintenanceActive, ApplicationMaintenanceGate\n    from services.transfer_service import TransferService\n\n    service = object.__new__(TransferService)\n    service._application_maintenance = ApplicationMaintenanceGate()\n    service.control = SimpleNamespace(resume_all=AsyncMock(return_value={"ok": True}))\n    service.provider = SimpleNamespace(add_magnet=AsyncMock(return_value={"ok": True}))\n\n    async def expect_resume_rejected():\n        with pytest.raises(ApplicationMaintenanceActive):\n            await service.resume_all_downloads()\n\n    async def expect_intake_rejected():\n        with pytest.raises(ApplicationMaintenanceActive):\n            await service.add_magnet_direct("magnet:?xt=urn:btih:test")\n\n    async with service.database_wipe_admission():\n        # The maintenance owner is intentionally reentrant. The race is work\n        # arriving from other request/tasks after admission has closed.\n        await asyncio.gather(\n            asyncio.create_task(expect_resume_rejected()),\n            asyncio.create_task(expect_intake_rejected()),\n        )\n\n    service.control.resume_all.assert_not_awaited()\n    service.provider.add_magnet.assert_not_awaited()\n'''
+if text.count(old) != 1:
+    raise SystemExit("expected original maintenance concurrency test exactly once")
+path.write_text(text.replace(old, new, 1))
+print("maintenance concurrency regression harness corrected")

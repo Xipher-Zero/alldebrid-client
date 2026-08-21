@@ -33,6 +33,17 @@ def _session_lifetime_seconds(cfg) -> int:
     return max(3600, min(168 * 3600, hours * 3600))
 
 
+def _session_record_current(record, cfg) -> bool:
+    if record is None:
+        return False
+    if record.principal.mechanism is not AuthMechanism.PASSWORD_SESSION:
+        return True
+    if not password_auth_ready(cfg):
+        return False
+    current_version = password_credential_version(getattr(cfg, "auth_password_hash", ""))
+    return bool(current_version and record.credential_version == current_version)
+
+
 def _login_page(
     request: Request,
     *,
@@ -144,10 +155,15 @@ async def login_page(request: Request, next: str = "/"):
 
     existing_token = session_cookie_token(request)
     existing = session_store.resolve(existing_token) if existing_token else None
-    if existing is not None:
+    if _session_record_current(existing, cfg):
         return RedirectResponse(url=return_to, status_code=303)
+    if existing_token:
+        session_store.revoke(existing_token)
 
-    return _issue_login_page(request, return_to=return_to)
+    response = _issue_login_page(request, return_to=return_to)
+    if existing_token:
+        clear_session_cookie(response, request)
+    return response
 
 
 @router.post("/login")

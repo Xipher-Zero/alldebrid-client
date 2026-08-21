@@ -845,13 +845,43 @@ function setStatsPeriod(el) {
   el.classList.add('active');
   loadDetailedStats(el.dataset.period);
 }
+let _dashboardRecentFitLimit = null;
+let _dashboardRecentResizeTimer = null;
+
 function dashboardRecentLimit() {
-  return window.matchMedia('(max-width: 700px)').matches ? 4 : 6;
+  const mobile = window.matchMedia('(max-width: 700px)').matches;
+  const fallback = window.matchMedia('(max-width: 700px)').matches ? 4 : 6;
+  if (mobile) return fallback;
+
+  const wrap = document.querySelector('#dash-activity-card .dash-activity-table-wrap');
+  const head = wrap?.querySelector('thead');
+  const rows = Array.from(document.querySelectorAll('#dash-tbody tr[data-torrent-id]'));
+
+  if (!wrap || !head || !rows.length) {
+    return _dashboardRecentFitLimit || fallback;
+  }
+
+  const rowHeights = rows
+    .map(row => row.getBoundingClientRect().height)
+    .filter(height => Number.isFinite(height) && height > 0);
+
+  if (!rowHeights.length) {
+    return _dashboardRecentFitLimit || fallback;
+  }
+
+  const rowHeight = Math.max(...rowHeights);
+  const available = Math.max(
+    0,
+    wrap.clientHeight - head.getBoundingClientRect().height - 4
+  );
+  const fitted = Math.floor(available / rowHeight);
+  return Math.max(1, Math.min(32, fitted || 1));
 }
 
 async function loadRecent() {
   try {
     const recentLimit = dashboardRecentLimit();
+    _dashboardRecentFitLimit = recentLimit;
     const {items} = await api('GET', `/torrents?limit=${recentLimit}`);
     const tb = document.getElementById('dash-tbody');
     if (!items.length) {
@@ -883,6 +913,15 @@ async function loadRecent() {
         </td>
       </tr>`;
     }).join('');
+
+    requestAnimationFrame(() => {
+      if (!document.getElementById('view-dashboard')?.classList.contains('active')) return;
+      const fittedLimit = dashboardRecentLimit();
+      if (fittedLimit !== _dashboardRecentFitLimit) {
+        _dashboardRecentFitLimit = fittedLimit;
+        loadRecent().catch(() => {});
+      }
+    });
   } catch(e) { console.error(e); }
 }
 
@@ -1463,6 +1502,17 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   document.addEventListener('keydown', function(event) {
     if (event.key === 'Escape') closeAria2SpeedCapMenu();
+  });
+  window.addEventListener('resize', function() {
+    clearTimeout(_dashboardRecentResizeTimer);
+    _dashboardRecentResizeTimer = setTimeout(function() {
+      if (!document.getElementById('view-dashboard')?.classList.contains('active')) return;
+      const fittedLimit = dashboardRecentLimit();
+      if (fittedLimit !== _dashboardRecentFitLimit) {
+        _dashboardRecentFitLimit = fittedLimit;
+        loadRecent().catch(() => {});
+      }
+    }, 120);
   });
   const isLight = localStorage.getItem('theme') === 'light';
   document.body.classList.toggle('light', isLight);

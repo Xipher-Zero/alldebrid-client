@@ -53,7 +53,10 @@ jobs:
           echo "All Python modules compile"
 
       - name: Check frontend JavaScript syntax
-        run: node --check frontend/static/app.js
+        run: |
+          node --check frontend/static/app.js
+          node --check frontend/static/auth.js
+          node --check frontend/static/auth-settings.js
 
   security:
     runs-on: ubuntu-latest

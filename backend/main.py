@@ -9,9 +9,11 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from api.auth_routes import router as auth_router
 from api.routes import router
-from auth.middleware import enforce_general_web_security, enforce_password_http_auth
+from auth.middleware import enforce_authentication, enforce_general_web_security
 from auth.policy import password_auth_enabled, password_auth_ready
+from auth.sessions import CSRF_HEADER, session_store
 from core.branding import APP_METADATA_TITLE, APP_NAME, APP_SHORT_NAME
 from core.config import get_settings as _get_log_settings
 from core.logging_utils import configure_logging, log_startup_banner, sanitize_exception, sanitize_log_value
@@ -115,17 +117,21 @@ async def lifespan(app: FastAPI):
         logger.warning("Startup aria2 housekeeping failed: %s", sanitize_exception(exc))
 
     await start_scheduler()
+    session_store.start_cleanup()
     try:
         yield
     finally:
         logger.info("Shutting down %s...", APP_NAME)
         try:
-            await stop_scheduler()
+            await session_store.stop_cleanup()
         finally:
             try:
-                await aria2_runtime.stop()
-            except Exception as exc:
-                logger.warning("Built-in aria2 shutdown failed: %s", sanitize_exception(exc))
+                await stop_scheduler()
+            finally:
+                try:
+                    await aria2_runtime.stop()
+                except Exception as exc:
+                    logger.warning("Built-in aria2 shutdown failed: %s", sanitize_exception(exc))
 
 
 class _RequestBodyTooLarge(Exception):
@@ -141,10 +147,13 @@ class RequestBodyLimitMiddleware:
         if scope.get("type") != "http" or str(scope.get("method") or "").upper() not in {"POST", "PUT", "PATCH", "DELETE"}:
             await self.app(scope, receive, send)
             return
+        # Login credentials are tiny; give the pre-auth parser a much smaller
+        # ceiling than general torrent/form application requests.
+        limit = min(self.max_bytes, 64 * 1024) if scope.get("path") == "/login" else self.max_bytes
         headers = {key.lower(): value for key, value in scope.get("headers", [])}
         raw_length = headers.get(b"content-length", b"")
         try:
-            if raw_length and int(raw_length) > self.max_bytes:
+            if raw_length and int(raw_length) > limit:
                 response = Response(content="Request body too large", status_code=413)
                 await response(scope, receive, send)
                 return
@@ -156,7 +165,7 @@ class RequestBodyLimitMiddleware:
             message = await receive()
             if message.get("type") == "http.request":
                 seen += len(message.get("body", b""))
-                if seen > self.max_bytes:
+                if seen > limit:
                     raise _RequestBodyTooLarge
             return message
         try:
@@ -193,14 +202,16 @@ app = FastAPI(
 
 _MUTATING_HTTP_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 _DATABASE_WIPE_PATH = "/api/admin/database/wipe"
+_AUTH_MUTATION_PATHS = {"/login", "/api/auth/logout"}
 
 
 @app.middleware("http")
 async def application_mutation_admission_middleware(request: Request, call_next):
-    """Serialize all state-changing HTTP work against destructive maintenance."""
+    """Serialize application state changes against destructive maintenance."""
     if (
         request.method.upper() in _MUTATING_HTTP_METHODS
         and request.url.path != _DATABASE_WIPE_PATH
+        and request.url.path not in _AUTH_MUTATION_PATHS
     ):
         try:
             async with transfer_service.application_operation():
@@ -250,7 +261,7 @@ if _cors_origins:
         allow_origins=_cors_origins,
         allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-        allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
+        allow_headers=["Authorization", "Content-Type", "X-Request-ID", CSRF_HEADER],
     )
 
 # ── Request-ID Middleware ──────────────────────────────────────────────────────
@@ -276,7 +287,7 @@ async def request_id_middleware(request: Request, call_next):
 
 @app.middleware("http")
 async def authentication_boundary_middleware(request: Request, call_next):
-    return await enforce_password_http_auth(request, call_next)
+    return await enforce_authentication(request, call_next)
 
 
 @app.middleware("http")
@@ -287,6 +298,7 @@ async def general_web_security_middleware(request: Request, call_next):
         allowed_origins=_cors_origins,
     )
 
+app.include_router(auth_router)
 app.include_router(router, prefix="/api")
 
 # ── Static files ──────────────────────────────────────────────────────────────

@@ -184,6 +184,23 @@ class AppSettings(BaseModel):
     # Browser application sessions use absolute expiration, not sliding expiry.
     auth_session_lifetime_hours: int = 12
 
+    # Provider-neutral OpenID Connect. The client secret is excluded from normal
+    # serialization and persisted explicitly so read/update APIs cannot echo it.
+    auth_oidc_enabled: bool = False
+    oidc_provider_name: str = "OpenID Connect"
+    oidc_issuer_url: str = ""
+    oidc_client_id: str = ""
+    oidc_client_secret: str = Field(default="", exclude=True)
+    oidc_scopes: List[str] = ["openid", "profile", "email"]
+    oidc_allow_all: bool = False
+    oidc_allowed_subjects: List[str] = []
+    oidc_allowed_emails: List[str] = []
+    oidc_allowed_groups: List[str] = []
+    oidc_group_claim: str = "groups"
+    # Canonical externally reachable origin used only for security-critical
+    # callback construction. PUBLIC_BASE_URL, when set, overrides this value.
+    public_base_url: str = ""
+
     # ── Disk space guard ─────────────────────────────────────────────────────
     # Minimum free disk space required (GB) on the download folder's filesystem.
     # 0 = disabled.
@@ -298,6 +315,9 @@ def save_settings(s: AppSettings):
     elif not str(getattr(s, "auth_password_hash", "") or "").strip():
         s.auth_password_hash = str(getattr(_settings, "auth_password_hash", "") or "")
 
+    if not str(getattr(s, "oidc_client_secret", "") or "").strip():
+        s.oidc_client_secret = str(getattr(_settings, "oidc_client_secret", "") or "")
+
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     try:
         os.chmod(CONFIG_PATH.parent, 0o700)
@@ -306,6 +326,7 @@ def save_settings(s: AppSettings):
     data = s.model_dump()
     data.pop("auth_password", None)
     data["auth_password_hash"] = str(getattr(s, "auth_password_hash", "") or "")
+    data["oidc_client_secret"] = str(getattr(s, "oidc_client_secret", "") or "")
     tmp = CONFIG_PATH.with_name(CONFIG_PATH.name + ".tmp")
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)

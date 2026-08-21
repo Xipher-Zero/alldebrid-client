@@ -217,6 +217,10 @@ def _build_effective_settings(loaded: dict) -> AppSettings:
 def _migrate_password_settings(loaded: dict) -> bool:
     """Migrate legacy plaintext Basic credentials to the owned password model."""
     changed = False
+    auth_state_present = any(
+        field in loaded
+        for field in ("auth_password_enabled", "auth_username", "auth_password_hash", "auth_password")
+    )
     legacy_enable_semantics = "auth_password_enabled" not in loaded
     username = str(loaded.get("auth_username") or "").strip()
     plaintext = str(loaded.get("auth_password") or "")
@@ -229,7 +233,7 @@ def _migrate_password_settings(loaded: dict) -> bool:
         loaded["auth_password"] = ""
         changed = True
 
-    if legacy_enable_semantics:
+    if auth_state_present and legacy_enable_semantics:
         loaded["auth_password_enabled"] = bool(username and (password_hash or plaintext))
         changed = True
 

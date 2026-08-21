@@ -10,7 +10,6 @@ from pathlib import Path, PurePosixPath
 from typing import Dict, List, Optional, Set, Tuple
 from urllib.parse import unquote, urlparse
 
-import aiofiles
 import aiohttp
 
 from core.config import AppSettings, get_settings

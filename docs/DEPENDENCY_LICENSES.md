@@ -7,7 +7,6 @@ the lock file and `licenses/python-runtime.json`.
 
 | Package | Version | License |
 |---|---:|---|
-| aiofiles | 25.1.0 | Apache-2.0 |
 | aiohappyeyeballs | 2.6.1 | PSF-2.0 |
 | aiohttp | 3.14.3 | Apache-2.0 AND MIT |
 | aiosignal | 1.4.0 | Apache-2.0 |
@@ -18,28 +17,22 @@ the lock file and `licenses/python-runtime.json`.
 | attrs | 26.1.0 | MIT |
 | bencode2 | 0.3.33 | MIT ([bundled notice](../licenses/bencode2-MIT.txt)) |
 | click | 8.3.3 | BSD-3-Clause |
-| fastapi | 0.136.1 | MIT |
+| fastapi | 0.141.1 | MIT |
 | frozenlist | 1.8.0 | Apache-2.0 |
 | h11 | 0.16.0 | MIT |
-| httptools | 0.7.1 | MIT |
+| httptools | 0.8.0 | MIT |
 | idna | 3.15 | BSD-3-Clause |
 | multidict | 6.7.1 | Apache-2.0 |
-| prometheus_client | 0.25.0 | Apache-2.0 AND BSD-2-Clause |
+| prometheus-client | 0.26.0 | Apache-2.0 AND BSD-2-Clause |
 | propcache | 0.5.2 | Apache-2.0 |
-| pycryptodome | 3.23.0 | BSD-2-Clause and public-domain components |
 | pydantic | 2.13.4 | MIT |
-| pydantic_core | 2.46.4 | MIT |
-| pydantic-settings | 2.14.2 | MIT |
-| python-dotenv | 1.2.2 | BSD-3-Clause |
-| python-multipart | 0.0.31 | Apache-2.0 |
-| PyYAML | 6.0.3 | MIT |
+| pydantic-core | 2.46.4 | MIT |
+| python-multipart | 0.0.32 | Apache-2.0 |
 | starlette | 1.3.1 | BSD-3-Clause |
-| typing_extensions | 4.15.0 | PSF-2.0 |
+| typing-extensions | 4.15.0 | PSF-2.0 |
 | typing-inspection | 0.4.2 | MIT |
-| uvicorn | 0.47.0 | BSD-3-Clause |
+| uvicorn | 0.52.4 | BSD-3-Clause |
 | uvloop | 0.22.1 | MIT OR Apache-2.0 |
-| watchfiles | 1.1.1 | MIT |
-| websockets | 16.0 | BSD-3-Clause |
 | yarl | 1.23.0 | Apache-2.0 |
 
 ## Container components

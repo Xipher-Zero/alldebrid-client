@@ -22,6 +22,7 @@ from auth.policy import (
     safe_return_path,
 )
 from auth.sessions import CSRF_HEADER, session_cookie_token, session_store
+from auth.transitions import settings_transition_rejection
 from core.branding import APP_SHORT_NAME
 from core.config import get_settings
 
@@ -106,6 +107,18 @@ def _session_record_still_valid(record, cfg) -> bool:
     return False
 
 
+async def _admit_authenticated(
+    request: Request,
+    call_next: CallNext,
+    principal: Principal,
+    cfg,
+) -> Response:
+    rejection = await settings_transition_rejection(request, principal, cfg)
+    if rejection is not None:
+        return rejection
+    return await call_next(request)
+
+
 async def enforce_general_web_security(
     request: Request,
     call_next: CallNext,
@@ -165,7 +178,7 @@ async def enforce_authentication(request: Request, call_next: CallNext) -> Respo
                         content={"detail": "CSRF validation failed"},
                         status_code=403,
                     )
-            return await call_next(request)
+            return await _admit_authenticated(request, call_next, record.principal, cfg)
         session_store.revoke(session_token)
 
     auth_header = str(request.headers.get("Authorization", "") or "")
@@ -193,8 +206,9 @@ async def enforce_authentication(request: Request, call_next: CallNext) -> Respo
             settings=cfg,
         ):
             username = str(getattr(cfg, "auth_username", "") or "").strip()
-            _attach_principal(request, Principal.http_basic(username))
-            return await call_next(request)
+            principal = Principal.http_basic(username)
+            _attach_principal(request, principal)
+            return await _admit_authenticated(request, call_next, principal, cfg)
         return _unauthorized(basic_challenge=True)
 
     if not interactive_auth_enabled(cfg):

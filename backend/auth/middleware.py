@@ -159,6 +159,8 @@ async def enforce_authentication(request: Request, call_next: CallNext) -> Respo
             )
         credentials = _decode_basic_credentials(auth_header)
         if credentials is None:
+            # Malformed Basic still pays the bounded dummy Argon2/throttle cost.
+            await verify_local_credentials(request, "", "", settings=cfg)
             return _unauthorized(basic_challenge=True)
         provided_user, provided_pass = credentials
         if await verify_local_credentials(
@@ -166,6 +168,7 @@ async def enforce_authentication(request: Request, call_next: CallNext) -> Respo
             provided_user,
             provided_pass,
             allow_basic_success_cache=True,
+            settings=cfg,
         ):
             username = str(getattr(cfg, "auth_username", "") or "").strip()
             _attach_principal(request, Principal.http_basic(username))
@@ -187,7 +190,6 @@ async def enforce_authentication(request: Request, call_next: CallNext) -> Respo
     return _unauthorized()
 
 
-# Compatibility name for the phase-2 tests and any downstream imports while the
-# final manager API settles. All requests now use the application-session-aware
-# implementation above.
+# Compatibility name for phase-2 tests/downstream imports while the manager API
+# settles. All requests now use the application-session-aware implementation.
 enforce_password_http_auth = enforce_authentication

@@ -17,6 +17,7 @@ from joserfc import jwt
 from joserfc.jwk import KeySet
 
 from auth.models import Principal
+from auth.oidc_version import oidc_configuration_version_from_config
 from auth.policy import oidc_auth_enabled, safe_return_path
 
 
@@ -205,7 +206,9 @@ def _normalize_issuer(value: str) -> str:
         raise OidcConfigurationError("OIDC issuer URL must not contain user information")
     if parsed.query or parsed.fragment:
         raise OidcConfigurationError("OIDC issuer URL must not contain a query or fragment")
-    return raw.rstrip("/")
+    # Issuer identifiers are exact strings under OIDC. Do not normalize away a
+    # trailing slash; providers such as authentik legitimately publish one.
+    return raw
 
 
 def effective_public_base_url(settings) -> str:
@@ -279,7 +282,7 @@ def _discovery_url(issuer: str) -> str:
 
 
 def _parse_discovery(config: OidcConfiguration, data: Mapping[str, Any]) -> OidcDiscovery:
-    discovered_issuer = str(data.get("issuer") or "").strip().rstrip("/")
+    discovered_issuer = str(data.get("issuer") or "").strip()
     if not discovered_issuer or discovered_issuer != config.issuer:
         raise OidcProtocolError("OIDC discovery issuer does not match the configured issuer")
 
@@ -537,7 +540,7 @@ def authorize_oidc_claims(
     claims: Mapping[str, Any],
 ) -> Principal:
     subject = str(claims.get("sub") or "").strip()
-    issuer = str(claims.get("iss") or "").strip().rstrip("/")
+    issuer = str(claims.get("iss") or "").strip()
     if not subject or issuer != config.issuer:
         raise OidcAuthorizationError("OIDC identity is not authorized")
 
@@ -589,6 +592,7 @@ def authorize_oidc_claims(
         f"{issuer}|{subject}",
         display_name=display_name,
         claims=public_claims,
+        credential_version=oidc_configuration_version_from_config(config),
     )
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from urllib.parse import parse_qs, urlsplit
 
 from fastapi import APIRouter, Request
@@ -7,6 +8,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
 from api import auth_routes as interactive_routes
+from auth.api_tokens import api_token_store
 from auth.csrf import clear_login_csrf_cookie
 from auth.oidc import (
     OIDC_CORRELATION_COOKIE,
@@ -24,6 +26,7 @@ from core.config import get_settings
 
 
 router = APIRouter()
+logger = logging.getLogger("alldebrid.auth")
 
 
 class OidcVerificationRequest(BaseModel):
@@ -43,6 +46,10 @@ class OidcVerificationRequest(BaseModel):
     oidc_group_claim: str | None = None
     public_base_url: str | None = None
     return_to: str = "/settings"
+
+
+class ApiTokenEnableRequest(BaseModel):
+    enabled: bool
 
 
 def _build_proposed_settings(request: OidcVerificationRequest):
@@ -101,6 +108,57 @@ def _clear_pending_correlation_cookie(response) -> None:
         httponly=True,
         samesite="lax",
     )
+
+
+@router.get("/api/auth/api-token")
+async def api_token_status():
+    response = JSONResponse(api_token_store.status())
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@router.put("/api/auth/api-token")
+async def set_api_token_enabled(update: ApiTokenEnableRequest):
+    try:
+        api_token_store.set_enabled(update.enabled)
+    except ValueError:
+        return JSONResponse(
+            {"detail": "Generate an API token before enabling bearer authentication"},
+            status_code=409,
+            headers={"Cache-Control": "no-store"},
+        )
+    logger.info("API token authentication %s", "enabled" if update.enabled else "disabled")
+    payload = {"ok": True, **api_token_store.status()}
+    response = JSONResponse(payload)
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@router.post("/api/auth/api-token")
+async def generate_or_rotate_api_token():
+    rotated = api_token_store.configured
+    token = api_token_store.generate()
+    logger.info("API token %s", "rotated" if rotated else "generated")
+    response = JSONResponse(
+        {
+            "ok": True,
+            "enabled": True,
+            "configured": True,
+            "rotated": rotated,
+            "token": token,
+        }
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@router.delete("/api/auth/api-token")
+async def clear_api_token():
+    api_token_store.clear()
+    logger.info("API token cleared")
+    response = JSONResponse({"ok": True, "enabled": False, "configured": False})
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @router.post("/api/auth/oidc/verify-config")

@@ -10,7 +10,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from api.routes import router
-from auth.middleware import enforce_general_web_security, enforce_legacy_basic_auth
+from auth.middleware import enforce_general_web_security, enforce_password_http_auth
+from auth.policy import password_auth_enabled, password_auth_ready
 from core.branding import APP_METADATA_TITLE, APP_NAME, APP_SHORT_NAME
 from core.config import get_settings as _get_log_settings
 from core.logging_utils import configure_logging, log_startup_banner, sanitize_exception, sanitize_log_value
@@ -59,6 +60,7 @@ async def _reset_stuck_downloads_sqlite():
 async def lifespan(app: FastAPI):
     from core.config import get_settings as _gs
     cfg = _gs()
+    password_enabled = password_auth_enabled(cfg)
     log_startup_banner(
         logger,
         version=read_version(),
@@ -66,10 +68,12 @@ async def lifespan(app: FastAPI):
         database="SQLite",
         download_client=("aria2 builtin" if getattr(cfg, "aria2_mode", "builtin") == "builtin" else "aria2 external"),
         web_ui=f"http://0.0.0.0:{getattr(cfg, 'port', 8080)}",
-        auth=("enabled" if getattr(cfg, "auth_username", "") and getattr(cfg, "auth_password", "") else "disabled"),
+        auth=("enabled" if password_enabled else "disabled"),
     )
-    if not (str(getattr(cfg, "auth_username", "") or "").strip() and str(getattr(cfg, "auth_password", "") or "").strip()):
+    if not password_enabled:
         logger.warning("HTTP authentication is disabled; restrict DebridPulse to a trusted network or authenticated reverse proxy")
+    elif not password_auth_ready(cfg):
+        logger.error("Username & Password authentication is enabled but not fully configured; protected access is fail-closed")
 
     try:
         from core.config import get_settings, apply_settings, save_settings
@@ -266,13 +270,13 @@ async def request_id_middleware(request: Request, call_next):
     return response
 
 # ── Authentication / Browser Security ─────────────────────────────────────────
-# Phase 1 preserves existing HTTP Basic behavior while moving authentication
-# ownership out of main.py. Browser cross-site mutation protection is general
-# security and remains active even when authentication is intentionally disabled.
+# Authentication is an outer request boundary. Browser cross-site mutation
+# protection is general security and remains active even when authentication is
+# intentionally disabled.
 
 @app.middleware("http")
 async def authentication_boundary_middleware(request: Request, call_next):
-    return await enforce_legacy_basic_auth(request, call_next)
+    return await enforce_password_http_auth(request, call_next)
 
 
 @app.middleware("http")

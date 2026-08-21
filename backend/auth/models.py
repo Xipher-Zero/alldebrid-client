@@ -29,6 +29,32 @@ class Principal:
         return cls()
 
     @classmethod
+    def password_session(cls, username: str) -> "Principal":
+        username = str(username or "")
+        return cls(
+            authenticated=True,
+            mechanism=AuthMechanism.PASSWORD_SESSION,
+            subject=username,
+            display_name=username,
+        )
+
+    @classmethod
+    def oidc_session(
+        cls,
+        subject: str,
+        *,
+        display_name: str = "",
+        claims: Mapping[str, Any] | None = None,
+    ) -> "Principal":
+        return cls(
+            authenticated=True,
+            mechanism=AuthMechanism.OIDC_SESSION,
+            subject=str(subject or ""),
+            display_name=str(display_name or subject or ""),
+            claims=dict(claims or {}),
+        )
+
+    @classmethod
     def http_basic(cls, username: str) -> "Principal":
         username = str(username or "")
         return cls(

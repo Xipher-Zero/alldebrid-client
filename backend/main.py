@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from api.auth_config_routes import router as auth_config_router
 from api.auth_routes import router as auth_router
 from api.routes import router
 from auth.middleware import enforce_authentication, enforce_general_web_security
@@ -218,7 +219,11 @@ app = FastAPI(
 
 _MUTATING_HTTP_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 _DATABASE_WIPE_PATH = "/api/admin/database/wipe"
-_AUTH_MUTATION_PATHS = {"/login", "/api/auth/logout"}
+_AUTH_MUTATION_PATHS = {
+    "/login",
+    "/api/auth/logout",
+    "/api/auth/oidc/verify-config",
+}
 
 
 @app.middleware("http")
@@ -314,6 +319,9 @@ async def general_web_security_middleware(request: Request, call_next):
         allowed_origins=_cors_origins,
     )
 
+# Pending OIDC callback is registered first so verified proposed configuration
+# can become authoritative before the replacement application session is issued.
+app.include_router(auth_config_router)
 app.include_router(auth_router)
 app.include_router(router, prefix="/api")
 

@@ -107,6 +107,7 @@ def _validate(cfg) -> List[Tuple[str, str, Any, Any]]:
         "stats_snapshot_keep_days":       (1, 365),
         "stats_report_interval_hours":    (0, 168),
         "stats_report_window_hours":      (1, 8760),
+        "auth_session_lifetime_hours":    (1, 168),
         "min_file_size_mb":               (0, 100_000),
         "extract_max_files":              (1, 1_000_000),
         "extract_max_expanded_gb":        (1, 10_000),

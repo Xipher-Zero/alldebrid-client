@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 from typing import Any, Mapping
 
@@ -7,6 +8,7 @@ from fastapi import Request, Response
 from fastapi.responses import JSONResponse
 
 from auth.models import AuthMechanism, Principal
+from auth.oidc import OidcConfigurationError, oidc_configuration
 from auth.policy import interactive_auth_enabled, oidc_auth_enabled, password_auth_enabled
 
 
@@ -88,6 +90,45 @@ def _prospective_password_ready(payload: Mapping[str, Any], current) -> bool:
     return bool(username and (plaintext or stored_hash))
 
 
+def _prospective_oidc_ready(payload: Mapping[str, Any], current) -> bool:
+    """Return whether the proposed OIDC mechanism is locally usable.
+
+    This intentionally does not claim provider reachability. It prevents the
+    broad compatibility settings API from making an incomplete configuration,
+    or a deny-everyone authorization policy, the installation's only
+    interactive authentication mechanism.
+    """
+    candidate = copy.copy(current)
+    fields = CRITICAL_OIDC_FIELDS | {"auth_oidc_enabled", "oidc_provider_name"}
+    for field in fields:
+        if field not in payload:
+            continue
+        value = payload[field]
+        # Blank secret input preserves the stored secret unless an explicit
+        # clear flag is present, matching the normal settings-write contract.
+        if field == "oidc_client_secret" and not str(value or "").strip():
+            continue
+        setattr(candidate, field, value)
+
+    clears = {str(item) for item in payload.get("clear_secrets", []) if str(item)}
+    if "oidc_client_secret" in clears or payload.get("clear_oidc_client_secret") is True:
+        setattr(candidate, "oidc_client_secret", "")
+
+    try:
+        config = oidc_configuration(candidate)
+    except OidcConfigurationError:
+        return False
+
+    # Deny-by-default remains the authorization model, but a deny-everyone
+    # policy cannot safely become the sole interactive authentication path.
+    return bool(
+        config.allow_all
+        or config.allowed_subjects
+        or config.allowed_emails
+        or config.allowed_groups
+    )
+
+
 async def settings_transition_rejection(
     request: Request,
     principal: Principal,
@@ -128,6 +169,19 @@ async def settings_transition_rejection(
                 status_code=409,
             )
         return None
+
+    # Any configured-auth state must retain at least one locally usable
+    # interactive mechanism. This closes the legacy /api/settings bypass where
+    # incomplete Password/OIDC settings could otherwise become authoritative
+    # and immediately strand the operator. A broken supplemental mechanism is
+    # still permitted when the other mechanism remains usable.
+    password_ready = proposed_password and _prospective_password_ready(payload, current)
+    oidc_ready = proposed_oidc and _prospective_oidc_ready(payload, current)
+    if (proposed_password or proposed_oidc) and not (password_ready or oidc_ready):
+        return JSONResponse(
+            {"detail": "At least one enabled interactive authentication mechanism must be locally usable"},
+            status_code=409,
+        )
 
     # Leaving OIDC as the sole interactive mechanism is permitted only when
     # this exact request is made from a real OIDC application session. A local

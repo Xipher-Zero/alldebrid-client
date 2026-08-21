@@ -8,7 +8,7 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from auth.oidc_version import oidc_configuration_version_from_config
+from auth.oidc_version import oidc_configuration_version
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,7 +56,14 @@ class PendingOidcConfigurationStore:
         while len(self._entries) > self.max_entries:
             self._entries.popitem(last=False)
 
-    def consume_verified(self, state: str, transaction_config: Any) -> PendingOidcConfiguration | None:
+    def has(self, state: str) -> bool:
+        if not state:
+            return False
+        self.cleanup()
+        return self._fingerprint(state) in self._entries
+
+    def consume_verified(self, state: str) -> PendingOidcConfiguration | None:
+        """Consume a staged config after the matching OIDC transaction succeeded."""
         if not state:
             return None
         item = self._entries.pop(self._fingerprint(state), None)
@@ -64,8 +71,10 @@ class PendingOidcConfigurationStore:
             return None
         if item.expires_at <= self._clock():
             return None
-        actual = oidc_configuration_version_from_config(transaction_config)
-        if not secrets.compare_digest(item.configuration_version, actual):
+        # The proposed settings object must still represent the exact config that
+        # was staged before the browser left for the IdP.
+        actual = oidc_configuration_version(item.settings)
+        if not actual or not secrets.compare_digest(item.configuration_version, actual):
             return None
         return item
 
@@ -90,9 +99,9 @@ class PendingOidcConfigurationStore:
         return len(self._entries)
 
 
-def commit_verified_pending_oidc(state: str, transaction_config: Any) -> bool:
+def commit_verified_pending_oidc(state: str) -> bool:
     """Commit a staged config only after the matching full OIDC login succeeds."""
-    item = pending_oidc_store.consume_verified(state, transaction_config)
+    item = pending_oidc_store.consume_verified(state)
     if item is None:
         return False
 

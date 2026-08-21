@@ -107,7 +107,9 @@ jobs:
           done
 
           if [ "$healthy" -ne 1 ]; then
-            docker logs "$container_name"
+            echo "Container failed to become healthy"
+            docker inspect "$container_name" --format 'running={{.State.Running}} status={{.State.Status}} exit={{.State.ExitCode}} error={{.State.Error}}' || true
+            docker logs "$container_name" || true
             exit 1
           fi
 
@@ -141,6 +143,35 @@ jobs:
           docker exec "$container_name" test -f /app/licenses/python-runtime.json
           docker exec "$container_name" test -f /app/licenses/bencode2-MIT.txt
           docker exec "$container_name" grep -q "Chris Moore" /app/NOTICE
+
+          # Container/runtime modernization contract. RAR support is provided by
+          # Debian's 7zip-rar codec loaded by the external 7z process.
+          echo "Checking Debian Trixie base"
+          docker exec "$container_name" grep -q '^VERSION_CODENAME=trixie$' /etc/os-release
+
+          echo "Checking required Debian packages"
+          docker exec "$container_name" dpkg-query -W 7zip 7zip-rar aria2 gosu
+
+          echo "Checking 7zip-rar notices"
+          docker exec "$container_name" test -f /usr/share/doc/7zip-rar/copyright
+          docker exec "$container_name" test -f /usr/share/doc/7zip-rar/unRarLicense.txt
+
+          echo "Checking RAR codec registration"
+          if ! docker exec "$container_name" sh -c '7z i | grep -qi rar'; then
+            docker exec "$container_name" sh -c '7z i' || true
+            exit 1
+          fi
+
+          echo "Checking 7z create/extract round-trip"
+          docker exec "$container_name" sh -c '
+            set -eu
+            rm -rf /tmp/debridpulse-7z-smoke
+            mkdir -p /tmp/debridpulse-7z-smoke/input /tmp/debridpulse-7z-smoke/output
+            printf "debridpulse-7z-smoke\n" > /tmp/debridpulse-7z-smoke/input/payload.txt
+            (cd /tmp/debridpulse-7z-smoke/input && 7z a -bd -y ../archive.7z payload.txt)
+            7z x -bd -y /tmp/debridpulse-7z-smoke/archive.7z -o/tmp/debridpulse-7z-smoke/output
+            grep -q "debridpulse-7z-smoke" /tmp/debridpulse-7z-smoke/output/payload.txt
+          '
 
           if [ "$health_version" != "$expected_version" ]; then
             echo "Health version mismatch: expected $expected_version, got $health_version"

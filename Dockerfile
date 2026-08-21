@@ -1,4 +1,4 @@
-FROM python:3.12.14-slim-bookworm
+FROM python:3.12.14-slim-trixie
 
 WORKDIR /app
 
@@ -11,12 +11,23 @@ LABEL org.opencontainers.image.source="https://github.com/Xipher-Zero/debridpuls
 LABEL org.opencontainers.image.revision="${VCS_REF}"
 LABEL org.opencontainers.image.licenses="GPL-2.0-or-later"
 
-# System deps + gosu (for PUID/PGID user-switching)
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# System deps + gosu (for PUID/PGID user-switching).
+# Debian's RAR codec is in non-free and plugs into the 7zip `7z` binary.
+# The slim base excludes most /usr/share/doc content, so explicitly re-include
+# the 7zip-rar notices needed to ship its licensing terms with the image. The
+# zz- prefix ensures these last-match-wins dpkg rules sort after the base image's
+# docker filter configuration.
+RUN printf '%s\n' \
+      'path-include=/usr/share/doc/7zip-rar/copyright' \
+      'path-include=/usr/share/doc/7zip-rar/unRarLicense.txt' \
+      > /etc/dpkg/dpkg.cfg.d/zz-debridpulse-license-notices && \
+    sed -ri 's/^Components: main$/Components: main non-free/' /etc/apt/sources.list.d/debian.sources && \
+    apt-get update && apt-get install -y --no-install-recommends \
     aria2 \
     curl \
     gosu \
-    p7zip-full && rm -rf /var/lib/apt/lists/*
+    7zip \
+    7zip-rar && rm -rf /var/lib/apt/lists/*
 
 # Python deps
 COPY backend/requirements.txt .

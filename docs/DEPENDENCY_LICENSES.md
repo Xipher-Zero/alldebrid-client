@@ -37,7 +37,7 @@ the lock file and `licenses/python-runtime.json`.
 
 ## Container components
 
-The official image is built from `python:3.12.14-slim-bookworm`. The base image
+The official image is built from `python:3.12.14-slim-trixie`. The base image
 contains Python under the Python Software Foundation License and Debian system
 components under their package-specific terms. DebridPulse directly installs the
 following Debian packages; resolved binary versions and transitive packages are
@@ -48,11 +48,19 @@ recorded in the image's SBOM attestation.
 | aria2 | GPL-2.0-or-later |
 | curl | curl |
 | gosu | Apache-2.0 |
-| p7zip-full | LGPL-2.1-or-later and package-specific component terms |
+| 7zip | LGPL-2.1-or-later and package-specific component terms |
+| 7zip-rar | Debian non-free RAR codec; UnRAR restricted freeware terms |
 
 Package copyright files and common license texts remain installed in the
 image. `SOURCE_OFFER.md` explains how to request corresponding source for
 copyleft-covered binaries.
+
+`7zip-rar` is installed from Debian's `non-free` component solely to provide
+RAR extraction through the external `7z` process. Because the slim base filters
+most package documentation, the Docker build explicitly re-includes the
+`7zip-rar` Debian copyright notice and
+`/usr/share/doc/7zip-rar/unRarLicense.txt` so those terms remain in the shipped
+image.
 
 Python packages retain their installed `.dist-info` license and notice files.
 `bencode2` 0.3.33 is the exception: its wheel omits the upstream MIT text, so

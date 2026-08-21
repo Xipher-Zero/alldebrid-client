@@ -7,7 +7,7 @@ Supports: .zip, .tar, .tar.gz, .tgz, .tar.bz2, .tar.xz, .gz,
 
 Strategy:
   1. Python-native for zip / tar / gz / bz2 / xz (zero extra deps)
-  2. System binary `7z` (from p7zip-full) for .7z, .tar.zst, .tar.lzma, and RAR
+  2. System binary `7z` (Debian 7zip; RAR via 7zip-rar) for .7z, .tar.zst, .tar.lzma, and RAR
   3. RAR extraction fails closed unless a 7z-compatible binary is available
 
 After successful extraction the source archive is deleted.
@@ -324,7 +324,7 @@ def _extract_7z_to(archive: Path, dest: Path) -> None:
             if rc == 0:
                 return
         raise RuntimeError(f"{binary} failed to extract {archive.name}")
-    raise RuntimeError("No 7z binary found (install p7zip-full in the container)")
+    raise RuntimeError("No 7z binary found (install 7zip in the container)")
 
 
 def _extract_7z(archive: Path, dest: Path) -> None:

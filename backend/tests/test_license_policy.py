@@ -124,3 +124,18 @@ def test_license_attribution_is_prominent_and_available_in_application_help():
     assert "SOURCE_OFFER.md" in frontend
     assert "docs/DEPENDENCY_LICENSES.md" in frontend
     assert (REPO_ROOT / ".github/ISSUE_TEMPLATE/source_request.yml").is_file()
+
+
+def test_container_runtime_declares_trixie_and_rar_codec_notices():
+    dockerfile = (REPO_ROOT / "Dockerfile").read_text()
+    dependency_licenses = (REPO_ROOT / "docs/DEPENDENCY_LICENSES.md").read_text()
+
+    assert dockerfile.startswith("FROM python:3.12.14-slim-trixie\n")
+    assert "Components: main non-free" in dockerfile
+    assert "    7zip" in dockerfile
+    assert "    7zip-rar" in dockerfile
+    assert "path-include=/usr/share/doc/7zip-rar/copyright" in dockerfile
+    assert "path-include=/usr/share/doc/7zip-rar/unRarLicense.txt" in dockerfile
+    assert "7zip-rar" in dependency_licenses
+    assert "UnRAR restricted freeware" in dependency_licenses
+    assert "/usr/share/doc/7zip-rar/unRarLicense.txt" in dependency_licenses

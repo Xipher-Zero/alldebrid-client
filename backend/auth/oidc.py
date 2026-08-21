@@ -1,0 +1,568 @@
+from __future__ import annotations
+
+import hashlib
+import hmac
+import os
+import secrets
+import time
+from collections import OrderedDict
+from dataclasses import dataclass
+from typing import Any, Callable, Mapping
+from urllib.parse import urlsplit
+
+import httpx
+from authlib.integrations.httpx_client import AsyncOAuth2Client
+from authlib.oidc.core import CodeIDToken
+from joserfc import jwt
+from joserfc.jwk import KeySet
+
+from auth.models import Principal
+from auth.policy import oidc_auth_enabled, safe_return_path
+
+
+OIDC_CALLBACK_PATH = "/auth/oidc/callback"
+OIDC_CORRELATION_COOKIE = "__Host-debridpulse-oidc"
+OIDC_TRANSACTION_TTL_SECONDS = 600
+
+
+class OidcError(Exception):
+    """Base class for sanitized OIDC failures safe to map at the HTTP boundary."""
+
+
+class OidcConfigurationError(OidcError):
+    pass
+
+
+class OidcProtocolError(OidcError):
+    pass
+
+
+class OidcAuthorizationError(OidcError):
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class OidcConfiguration:
+    issuer: str
+    client_id: str
+    client_secret: str
+    scopes: tuple[str, ...]
+    callback_url: str
+    provider_name: str
+    allow_all: bool
+    allowed_subjects: tuple[str, ...]
+    allowed_emails: tuple[str, ...]
+    allowed_groups: tuple[str, ...]
+    group_claim: str
+
+
+@dataclass(frozen=True, slots=True)
+class OidcDiscovery:
+    issuer: str
+    authorization_endpoint: str
+    token_endpoint: str
+    jwks_uri: str
+    token_endpoint_auth_methods: tuple[str, ...]
+    signing_algorithms: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class OidcTransaction:
+    nonce: str
+    code_verifier: str
+    correlation_fingerprint: bytes
+    created_at: float
+    expires_at: float
+    return_to: str
+    config: OidcConfiguration
+    discovery: OidcDiscovery
+
+
+class OidcTransactionStore:
+    """Bounded one-time OIDC transaction state kept only in process memory."""
+
+    def __init__(
+        self,
+        *,
+        ttl_seconds: float = OIDC_TRANSACTION_TTL_SECONDS,
+        max_entries: int = 128,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self.ttl_seconds = max(60.0, float(ttl_seconds))
+        self.max_entries = max(1, int(max_entries))
+        self._clock = clock
+        self._key = secrets.token_bytes(32)
+        self._entries: OrderedDict[bytes, OidcTransaction] = OrderedDict()
+
+    def _fingerprint(self, value: str) -> bytes:
+        return hmac.new(
+            self._key,
+            str(value or "").encode("utf-8", errors="surrogatepass"),
+            hashlib.sha256,
+        ).digest()
+
+    def create(
+        self,
+        *,
+        state: str,
+        correlation: str,
+        nonce: str,
+        code_verifier: str,
+        return_to: str,
+        config: OidcConfiguration,
+        discovery: OidcDiscovery,
+    ) -> None:
+        now = self._clock()
+        self.cleanup()
+        key = self._fingerprint(state)
+        self._entries[key] = OidcTransaction(
+            nonce=str(nonce),
+            code_verifier=str(code_verifier),
+            correlation_fingerprint=self._fingerprint(correlation),
+            created_at=now,
+            expires_at=now + self.ttl_seconds,
+            return_to=safe_return_path(return_to),
+            config=config,
+            discovery=discovery,
+        )
+        self._entries.move_to_end(key)
+        while len(self._entries) > self.max_entries:
+            self._entries.popitem(last=False)
+
+    def consume(self, state: str, correlation: str) -> OidcTransaction | None:
+        if not state or not correlation:
+            return None
+        key = self._fingerprint(state)
+        transaction = self._entries.pop(key, None)
+        if transaction is None:
+            return None
+        now = self._clock()
+        if transaction.expires_at <= now:
+            return None
+        if not secrets.compare_digest(
+            transaction.correlation_fingerprint,
+            self._fingerprint(correlation),
+        ):
+            return None
+        return transaction
+
+    def cleanup(self) -> int:
+        now = self._clock()
+        expired = [key for key, item in self._entries.items() if item.expires_at <= now]
+        for key in expired:
+            self._entries.pop(key, None)
+        return len(expired)
+
+    def clear(self) -> None:
+        self._entries.clear()
+
+    @property
+    def size(self) -> int:
+        self.cleanup()
+        return len(self._entries)
+
+
+def _https_origin(value: str, *, field: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        raise OidcConfigurationError(f"{field} is required")
+    try:
+        parsed = urlsplit(raw)
+    except ValueError as exc:
+        raise OidcConfigurationError(f"{field} is invalid") from exc
+    if parsed.scheme.casefold() != "https" or not parsed.hostname:
+        raise OidcConfigurationError(f"{field} must be an HTTPS origin")
+    if parsed.username is not None or parsed.password is not None:
+        raise OidcConfigurationError(f"{field} must not contain user information")
+    if parsed.query or parsed.fragment or parsed.path not in ("", "/"):
+        raise OidcConfigurationError(f"{field} must be scheme://host[:port] only")
+    return raw.rstrip("/")
+
+
+def _https_endpoint(value: str, *, field: str) -> str:
+    raw = str(value or "").strip()
+    try:
+        parsed = urlsplit(raw)
+    except ValueError as exc:
+        raise OidcProtocolError(f"OIDC discovery returned an invalid {field}") from exc
+    if parsed.scheme.casefold() != "https" or not parsed.hostname:
+        raise OidcProtocolError(f"OIDC discovery returned a non-HTTPS {field}")
+    if parsed.username is not None or parsed.password is not None or parsed.fragment:
+        raise OidcProtocolError(f"OIDC discovery returned an invalid {field}")
+    return raw
+
+
+def _normalize_issuer(value: str) -> str:
+    raw = str(value or "").strip()
+    try:
+        parsed = urlsplit(raw)
+    except ValueError as exc:
+        raise OidcConfigurationError("OIDC issuer URL is invalid") from exc
+    if parsed.scheme.casefold() != "https" or not parsed.hostname:
+        raise OidcConfigurationError("OIDC issuer URL must use HTTPS")
+    if parsed.username is not None or parsed.password is not None:
+        raise OidcConfigurationError("OIDC issuer URL must not contain user information")
+    if parsed.query or parsed.fragment:
+        raise OidcConfigurationError("OIDC issuer URL must not contain a query or fragment")
+    return raw.rstrip("/")
+
+
+def effective_public_base_url(settings) -> str:
+    configured = (os.getenv("PUBLIC_BASE_URL", "") or "").strip()
+    if not configured:
+        configured = str(getattr(settings, "public_base_url", "") or "").strip()
+    return _https_origin(configured, field="Public Base URL")
+
+
+def oidc_callback_url(settings) -> str:
+    return effective_public_base_url(settings) + OIDC_CALLBACK_PATH
+
+
+def oidc_configuration(settings) -> OidcConfiguration:
+    if not oidc_auth_enabled(settings):
+        raise OidcConfigurationError("OpenID Connect is disabled")
+    issuer = _normalize_issuer(getattr(settings, "oidc_issuer_url", ""))
+    client_id = str(getattr(settings, "oidc_client_id", "") or "").strip()
+    if not client_id:
+        raise OidcConfigurationError("OIDC Client ID is required")
+    scopes: list[str] = []
+    for item in getattr(settings, "oidc_scopes", []) or []:
+        value = str(item or "").strip()
+        if value and value not in scopes:
+            scopes.append(value)
+    if "openid" not in scopes:
+        scopes.insert(0, "openid")
+    group_claim = str(getattr(settings, "oidc_group_claim", "groups") or "groups").strip()
+    if not group_claim:
+        raise OidcConfigurationError("OIDC group claim must not be empty")
+    return OidcConfiguration(
+        issuer=issuer,
+        client_id=client_id,
+        client_secret=str(getattr(settings, "oidc_client_secret", "") or ""),
+        scopes=tuple(scopes),
+        callback_url=oidc_callback_url(settings),
+        provider_name=str(getattr(settings, "oidc_provider_name", "") or "OpenID Connect").strip()
+        or "OpenID Connect",
+        allow_all=bool(getattr(settings, "oidc_allow_all", False)),
+        allowed_subjects=tuple(
+            str(item or "").strip()
+            for item in (getattr(settings, "oidc_allowed_subjects", []) or [])
+            if str(item or "").strip()
+        ),
+        allowed_emails=tuple(
+            str(item or "").strip().casefold()
+            for item in (getattr(settings, "oidc_allowed_emails", []) or [])
+            if str(item or "").strip()
+        ),
+        allowed_groups=tuple(
+            str(item or "").strip()
+            for item in (getattr(settings, "oidc_allowed_groups", []) or [])
+            if str(item or "").strip()
+        ),
+        group_claim=group_claim,
+    )
+
+
+def oidc_auth_ready(settings) -> bool:
+    if not oidc_auth_enabled(settings):
+        return False
+    try:
+        oidc_configuration(settings)
+    except OidcConfigurationError:
+        return False
+    return True
+
+
+def _discovery_url(issuer: str) -> str:
+    return issuer.rstrip("/") + "/.well-known/openid-configuration"
+
+
+def _parse_discovery(config: OidcConfiguration, data: Mapping[str, Any]) -> OidcDiscovery:
+    discovered_issuer = str(data.get("issuer") or "").strip().rstrip("/")
+    if not discovered_issuer or discovered_issuer != config.issuer:
+        raise OidcProtocolError("OIDC discovery issuer does not match the configured issuer")
+
+    methods = tuple(
+        str(item)
+        for item in (data.get("token_endpoint_auth_methods_supported") or [])
+        if str(item or "").strip()
+    )
+    algorithms = tuple(
+        str(item)
+        for item in (data.get("id_token_signing_alg_values_supported") or ["RS256"])
+        if str(item or "").strip() and str(item) != "none"
+    )
+    if not algorithms:
+        raise OidcProtocolError("OIDC provider advertises no usable ID-token signing algorithm")
+
+    pkce = data.get("code_challenge_methods_supported")
+    if pkce is not None and "S256" not in pkce:
+        raise OidcProtocolError("OIDC provider does not advertise PKCE S256 support")
+
+    return OidcDiscovery(
+        issuer=config.issuer,
+        authorization_endpoint=_https_endpoint(
+            str(data.get("authorization_endpoint") or ""),
+            field="authorization endpoint",
+        ),
+        token_endpoint=_https_endpoint(
+            str(data.get("token_endpoint") or ""),
+            field="token endpoint",
+        ),
+        jwks_uri=_https_endpoint(str(data.get("jwks_uri") or ""), field="JWKS URI"),
+        token_endpoint_auth_methods=methods,
+        signing_algorithms=algorithms,
+    )
+
+
+async def discover_oidc(
+    config: OidcConfiguration,
+    *,
+    client: httpx.AsyncClient | None = None,
+) -> OidcDiscovery:
+    owns_client = client is None
+    http = client or httpx.AsyncClient(timeout=8.0, follow_redirects=False)
+    try:
+        response = await http.get(
+            _discovery_url(config.issuer),
+            headers={"Accept": "application/json"},
+        )
+        response.raise_for_status()
+        data = response.json()
+        if not isinstance(data, dict):
+            raise OidcProtocolError("OIDC discovery did not return a JSON object")
+        return _parse_discovery(config, data)
+    except OidcError:
+        raise
+    except (httpx.HTTPError, ValueError) as exc:
+        raise OidcProtocolError("OIDC discovery is unavailable") from exc
+    finally:
+        if owns_client:
+            await http.aclose()
+
+
+def _token_endpoint_auth_method(config: OidcConfiguration, discovery: OidcDiscovery) -> str:
+    supported = set(discovery.token_endpoint_auth_methods)
+    if not config.client_secret:
+        if supported and "none" not in supported:
+            raise OidcConfigurationError("OIDC provider requires client authentication")
+        return "none"
+    if not supported or "client_secret_basic" in supported:
+        return "client_secret_basic"
+    if "client_secret_post" in supported:
+        return "client_secret_post"
+    raise OidcConfigurationError("OIDC provider does not support a compatible client-secret method")
+
+
+async def begin_oidc_login(settings, *, return_to: str = "/") -> tuple[str, str]:
+    config = oidc_configuration(settings)
+    discovery = await discover_oidc(config)
+    state = secrets.token_urlsafe(32)
+    nonce = secrets.token_urlsafe(32)
+    code_verifier = secrets.token_urlsafe(48)
+    correlation = secrets.token_urlsafe(32)
+    client = AsyncOAuth2Client(
+        client_id=config.client_id,
+        client_secret=config.client_secret or None,
+        scope=" ".join(config.scopes),
+        redirect_uri=config.callback_url,
+        code_challenge_method="S256",
+        token_endpoint_auth_method=_token_endpoint_auth_method(config, discovery),
+    )
+    try:
+        authorization_url, generated_state = client.create_authorization_url(
+            discovery.authorization_endpoint,
+            state=state,
+            code_verifier=code_verifier,
+            nonce=nonce,
+        )
+    finally:
+        await client.aclose()
+    if generated_state != state:
+        raise OidcProtocolError("OIDC state generation was inconsistent")
+    oidc_transaction_store.create(
+        state=state,
+        correlation=correlation,
+        nonce=nonce,
+        code_verifier=code_verifier,
+        return_to=return_to,
+        config=config,
+        discovery=discovery,
+    )
+    return authorization_url, correlation
+
+
+async def _fetch_json(url: str) -> Mapping[str, Any]:
+    try:
+        async with httpx.AsyncClient(timeout=8.0, follow_redirects=False) as client:
+            response = await client.get(url, headers={"Accept": "application/json"})
+            response.raise_for_status()
+            data = response.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        raise OidcProtocolError("OIDC key set is unavailable") from exc
+    if not isinstance(data, dict):
+        raise OidcProtocolError("OIDC key set did not return a JSON object")
+    return data
+
+
+def _validate_authorized_party(claims: Mapping[str, Any], client_id: str) -> None:
+    audience = claims.get("aud")
+    if isinstance(audience, str):
+        audiences = [audience]
+    elif isinstance(audience, list) and all(isinstance(item, str) for item in audience):
+        audiences = audience
+    else:
+        raise OidcProtocolError("OIDC ID token contains an invalid audience")
+    if client_id not in audiences:
+        raise OidcProtocolError("OIDC ID token audience is invalid")
+    azp = claims.get("azp")
+    if len(audiences) > 1 and not azp:
+        raise OidcProtocolError("OIDC ID token is missing the authorized party")
+    if azp is not None and azp != client_id:
+        raise OidcProtocolError("OIDC ID token authorized party is invalid")
+
+
+async def validate_id_token(
+    token_response: Mapping[str, Any],
+    transaction: OidcTransaction,
+) -> Mapping[str, Any]:
+    encoded = str(token_response.get("id_token") or "")
+    if not encoded:
+        raise OidcProtocolError("OIDC token response did not include an ID token")
+    jwks = await _fetch_json(transaction.discovery.jwks_uri)
+    try:
+        key_set = KeySet.import_key_set(dict(jwks))
+        token = jwt.decode(
+            encoded,
+            key_set,
+            algorithms=list(transaction.discovery.signing_algorithms),
+        )
+        claims = CodeIDToken(
+            token.claims,
+            token.header,
+            options={
+                "iss": {"essential": True, "value": transaction.config.issuer},
+                "sub": {"essential": True},
+                "aud": {"essential": True},
+                "exp": {"essential": True},
+                "iat": {"essential": True},
+            },
+            params={
+                "nonce": transaction.nonce,
+                "client_id": transaction.config.client_id,
+                "access_token": token_response.get("access_token"),
+            },
+        )
+        claims.validate(leeway=60)
+    except OidcError:
+        raise
+    except Exception as exc:
+        raise OidcProtocolError("OIDC ID token validation failed") from exc
+    if claims.get("nonce") != transaction.nonce:
+        raise OidcProtocolError("OIDC ID token nonce is invalid")
+    _validate_authorized_party(claims, transaction.config.client_id)
+    return dict(claims)
+
+
+def authorize_oidc_claims(
+    config: OidcConfiguration,
+    claims: Mapping[str, Any],
+) -> Principal:
+    subject = str(claims.get("sub") or "").strip()
+    issuer = str(claims.get("iss") or "").strip().rstrip("/")
+    if not subject or issuer != config.issuer:
+        raise OidcAuthorizationError("OIDC identity is not authorized")
+
+    if not config.allow_all and not (
+        config.allowed_subjects or config.allowed_emails or config.allowed_groups
+    ):
+        raise OidcAuthorizationError("OIDC identity is not authorized")
+
+    if config.allowed_subjects:
+        composite = f"{issuer}|{subject}"
+        if subject not in config.allowed_subjects and composite not in config.allowed_subjects:
+            raise OidcAuthorizationError("OIDC identity is not authorized")
+
+    if config.allowed_emails:
+        email = str(claims.get("email") or "").strip().casefold()
+        if claims.get("email_verified") is False or email not in config.allowed_emails:
+            raise OidcAuthorizationError("OIDC identity is not authorized")
+
+    if config.allowed_groups:
+        raw_groups = claims.get(config.group_claim)
+        if isinstance(raw_groups, str):
+            groups = {raw_groups}
+        elif isinstance(raw_groups, (list, tuple, set)):
+            groups = {str(item) for item in raw_groups}
+        else:
+            raise OidcAuthorizationError("OIDC identity is not authorized")
+        if not groups.intersection(config.allowed_groups):
+            raise OidcAuthorizationError("OIDC identity is not authorized")
+
+    display_name = str(
+        claims.get("name")
+        or claims.get("preferred_username")
+        or claims.get("email")
+        or subject
+    )
+    public_claims = {
+        key: claims[key]
+        for key in (
+            "iss",
+            "sub",
+            "email",
+            "email_verified",
+            "name",
+            "preferred_username",
+            config.group_claim,
+        )
+        if key in claims
+    }
+    return Principal.oidc_session(
+        f"{issuer}|{subject}",
+        display_name=display_name,
+        claims=public_claims,
+    )
+
+
+async def complete_oidc_login(
+    *,
+    state: str,
+    code: str,
+    correlation: str,
+) -> tuple[Principal, str]:
+    transaction = oidc_transaction_store.consume(state, correlation)
+    if transaction is None:
+        raise OidcProtocolError("OIDC login transaction is invalid or expired")
+    if not code:
+        raise OidcProtocolError("OIDC callback did not include an authorization code")
+
+    client = AsyncOAuth2Client(
+        client_id=transaction.config.client_id,
+        client_secret=transaction.config.client_secret or None,
+        scope=" ".join(transaction.config.scopes),
+        redirect_uri=transaction.config.callback_url,
+        state=state,
+        code_challenge_method="S256",
+        token_endpoint_auth_method=_token_endpoint_auth_method(
+            transaction.config,
+            transaction.discovery,
+        ),
+    )
+    try:
+        token_response = await client.fetch_token(
+            transaction.discovery.token_endpoint,
+            grant_type="authorization_code",
+            code=code,
+            code_verifier=transaction.code_verifier,
+        )
+    except Exception as exc:
+        raise OidcProtocolError("OIDC authorization-code exchange failed") from exc
+    finally:
+        await client.aclose()
+    claims = await validate_id_token(token_response, transaction)
+    principal = authorize_oidc_claims(transaction.config, claims)
+    return principal, transaction.return_to
+
+
+oidc_transaction_store = OidcTransactionStore()

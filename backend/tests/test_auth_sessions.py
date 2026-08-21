@@ -203,6 +203,15 @@ def test_safe_return_path_blocks_open_redirects():
     assert safe_return_path("/login") == "/"
 
 
+def test_login_route_remains_behind_general_cross_site_mutation_defense():
+    main = (ROOT / "backend/main.py").read_text()
+    middleware = (ROOT / "backend/auth/middleware.py").read_text()
+    assert 'request.url.path not in _AUTH_MUTATION_PATHS' in main
+    assert 'fetch_site == "cross-site"' in middleware
+    assert 'Response(content="Forbidden origin", status_code=403)' in middleware
+    assert 'app.include_router(auth_router)' in main
+
+
 @pytest.mark.asyncio
 async def test_session_mutation_requires_csrf_and_correct_token_passes(monkeypatch):
     import auth.middleware as middleware

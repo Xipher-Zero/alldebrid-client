@@ -1,4 +1,6 @@
-  File "/home/runner/work/debridpulse/debridpulse/tools/sitecustomize.py", line 85
-    old = '''        fake_db.commit = AsyncMock()\n        fake_db.execute = AsyncMock(return_value=AsyncMock())\n'''
-                     ^^^^^^^
-SyntaxError: invalid syntax
+Traceback (most recent call last):
+  File "/home/runner/work/debridpulse/debridpulse/tools/v106_corrective_patch.py", line 168, in <module>
+    replace_once(
+  File "/home/runner/work/debridpulse/debridpulse/tools/v106_corrective_patch.py", line 23, in replace_once
+    raise RuntimeError(f"{path}: expected exactly one match, found {count}: {old[:100]!r}")
+RuntimeError: backend/services/manager_v2.py: expected exactly one match, found 0: '        if torrent_id in self._active or torrent_id in self._ready_parent_task_ids:\n            retu'

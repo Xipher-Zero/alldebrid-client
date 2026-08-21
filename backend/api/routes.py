@@ -1410,17 +1410,22 @@ async def wipe_database_admin(body: dict | None = None):
 
     async with _database_wipe_lock:
         scheduler_was_running = scheduler_runtime.scheduler_running()
+        scheduler_stopped = False
         quiesced = False
         try:
             async with transfer_service.database_wipe_admission():
-                # A Resume could have been admitted immediately before maintenance
-                # closed admission. The gate drains it first; re-check the durable
-                # Pause All invariant only after that drain completes.
-                if not getattr(get_settings(), "paused", False):
+                # A state-changing request could have been admitted immediately
+                # before maintenance closed admission. The gate drains it first;
+                # refresh every destructive setting only after that drain.
+                cfg = get_settings()
+                if not getattr(cfg, "db_wipe_enabled", False):
+                    raise HTTPException(400, "Database wipe is disabled in settings")
+                if not getattr(cfg, "paused", False):
                     raise HTTPException(409, "Pause processing before wiping the database")
 
                 if scheduler_was_running:
                     await scheduler_runtime.stop_scheduler()
+                    scheduler_stopped = True
 
                 try:
                     quiesce_result = await transfer_service.quiesce_for_database_wipe()
@@ -1453,7 +1458,7 @@ async def wipe_database_admin(body: dict | None = None):
         finally:
             # Restart only after application admission has reopened so new
             # scheduler tasks cannot immediately bounce off the maintenance gate.
-            if scheduler_was_running:
+            if scheduler_stopped:
                 await scheduler_runtime.start_scheduler()
 
 
@@ -1709,7 +1714,7 @@ async def disk_guard_status():
     Current disk-space guard state.
 
     Returns free_gb, min_free_gb, and whether the guard is active
-    (downloads currently paused due to low disk space).
+    (new dispatches currently deferred due to low disk space).
     """
     return await transfer_service.check_disk_space_guard()
 

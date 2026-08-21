@@ -183,6 +183,29 @@ app = FastAPI(
 )
 
 
+_MUTATING_HTTP_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+_DATABASE_WIPE_PATH = "/api/admin/database/wipe"
+
+
+@app.middleware("http")
+async def application_mutation_admission_middleware(request: Request, call_next):
+    """Serialize all state-changing HTTP work against destructive maintenance."""
+    if (
+        request.method.upper() in _MUTATING_HTTP_METHODS
+        and request.url.path != _DATABASE_WIPE_PATH
+    ):
+        try:
+            async with transfer_service.application_operation():
+                return await call_next(request)
+        except ApplicationMaintenanceActive:
+            return Response(
+                content="Application maintenance in progress",
+                status_code=503,
+                headers={"Retry-After": "2"},
+            )
+    return await call_next(request)
+
+
 @app.exception_handler(PermissionError)
 async def permission_error_handler(_request: Request, _exc: PermissionError):
     """Do not turn service-layer authorization failures into HTTP 500 responses."""

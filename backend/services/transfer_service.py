@@ -155,6 +155,10 @@ class TransferService:
         async with self._application_maintenance.operation():
             return await self._engine.delete_torrent(*args, **kwargs)
 
+    def application_operation(self):
+        """Admit one state-changing application operation unless maintenance owns admission."""
+        return self._application_maintenance.operation()
+
     def database_wipe_admission(self):
         """Close application mutation/execution admission for destructive maintenance."""
         return self._application_maintenance.maintenance()

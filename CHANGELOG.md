@@ -8,7 +8,7 @@
 - Moved parent state persistence behind `TransferRepository`; `TransferStateMachine` now performs derivation and event publication without importing the database or HTTP layers.
 - Centralized external-aria2 mutation authorization at the gateway so foreign GIDs cannot be paused, resumed, or removed by DebridPulse.
 - Added browser-facing serializers that strip magnets, source/unlocked download URLs, and aria2 request URIs from ordinary API responses.
-- Hardened database wipe with an application mutation/execution admission gate, post-drain Pause All revalidation, provider/materialization drain, scheduler suspension, an exclusive fail-closed database maintenance gate, and required pre-wipe backup verification.
+- Hardened database wipe with an application mutation/execution admission gate covering all state-changing HTTP requests, post-drain destructive-setting revalidation, provider/materialization drain, scheduler suspension, an exclusive fail-closed database maintenance gate, and required pre-wipe backup verification.
 - Hardened backup rotation with DebridPulse ownership manifests so unrelated directories under a configured backup root are never recursively removed.
 - Added bounded request-body handling, baseline browser security headers, and retained same-origin mutation checks for Basic Auth browser sessions.
 - Added extraction file-count, expanded-size, and compression-ratio budgets; external 7z/RAR extraction now uses isolated staging plus pre/post validation before merging files into the destination.

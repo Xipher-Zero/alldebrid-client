@@ -49,7 +49,7 @@ Archive extraction enforces member-path/type checks plus file-count, expanded-si
 
 ### Backups and database maintenance
 
-Database wipe first closes and drains application mutation/execution admission, then suspends scheduler activity and drains provider/materialization work before holding an exclusive database-maintenance gate that rejects concurrent non-owner application DB sessions; it also fails closed if a required pre-wipe backup fails. The SQLite online-backup API may hold a separate read-only source connection, but it cannot mutate or repopulate the live database. Backup rotation only recursively removes DebridPulse-owned directories carrying the expected ownership manifest.
+Database wipe first closes and drains application mutation/execution admission (including all state-changing HTTP requests), then suspends scheduler activity and drains provider/materialization work before holding an exclusive database-maintenance gate that rejects concurrent non-owner application DB sessions; it also fails closed if a required pre-wipe backup fails. The SQLite online-backup API may hold a separate read-only source connection, but it cannot mutate or repopulate the live database. Backup rotation only recursively removes DebridPulse-owned directories carrying the expected ownership manifest.
 
 ### Discord webhook URL
 

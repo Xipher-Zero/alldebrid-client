@@ -4845,10 +4845,11 @@ class TorrentManager:
         folder  = str(cfg.download_folder or "").strip() or "/download"
 
         if min_gb <= 0:
-            # Guard disabled — ensure any previously paused downloads are resumed
+            # Guard disabled — clear it before kicking deferred dispatch so the
+            # queue path does not immediately no-op on the old guard state.
             if self._disk_guard_active:
-                await self._disk_guard_resume_all()
                 self._disk_guard_active = False
+                await self._disk_guard_resume_all()
             return {"enabled": False, "active": False, "free_gb": -1.0, "min_free_gb": 0}
 
         free_gb = self._get_free_gb(folder)

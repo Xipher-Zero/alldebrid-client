@@ -414,7 +414,7 @@ async def test_database_wipe_rechecks_pause_after_application_admission_drain(mo
         await routes.wipe_database_admin({"confirm": True})
     assert getattr(exc.value, "status_code", None) == 409
     routes.scheduler_runtime.stop_scheduler.assert_not_awaited()
-    routes.scheduler_runtime.start_scheduler.assert_awaited_once()
+    routes.scheduler_runtime.start_scheduler.assert_not_awaited()
     assert calls == ["app-gate-enter", "app-gate-exit"]
 
 
@@ -440,3 +440,56 @@ def test_dead_disk_guard_pause_path_removed():
     manager = (Path(__file__).resolve().parents[1] / "services" / "manager_v2.py").read_text()
     assert "_disk_guard_pause_all" not in manager
     assert "_disk_guard_paused" not in manager
+
+
+
+def test_mutating_http_requests_share_application_maintenance_admission():
+    main = (Path(__file__).resolve().parents[1] / "main.py").read_text()
+    block = main.split("async def application_mutation_admission_middleware", 1)[1].split("@app.exception_handler", 1)[0]
+    assert '_MUTATING_HTTP_METHODS = {"POST", "PUT", "PATCH", "DELETE"}' in main
+    assert '_DATABASE_WIPE_PATH = "/api/admin/database/wipe"' in main
+    assert "request.url.path != _DATABASE_WIPE_PATH" in block
+    assert "transfer_service.application_operation()" in block
+    assert "ApplicationMaintenanceActive" in block
+    assert 'status_code=503' in block
+
+
+@pytest.mark.asyncio
+async def test_database_wipe_refreshes_disabled_setting_after_admission_drain(monkeypatch):
+    import api.routes as routes
+
+    state = SimpleNamespace(enabled=True, paused=True)
+    monkeypatch.setattr(
+        routes,
+        "get_settings",
+        lambda: SimpleNamespace(
+            db_wipe_enabled=state.enabled,
+            paused=state.paused,
+            db_backup_before_wipe=False,
+        ),
+    )
+    monkeypatch.setattr(routes.scheduler_runtime, "scheduler_running", lambda: True)
+
+    @asynccontextmanager
+    async def application_gate():
+        state.enabled = False
+        yield
+
+    monkeypatch.setattr(routes.transfer_service, "database_wipe_admission", application_gate)
+    monkeypatch.setattr(routes.scheduler_runtime, "stop_scheduler", AsyncMock())
+    monkeypatch.setattr(routes.scheduler_runtime, "start_scheduler", AsyncMock())
+
+    with pytest.raises(Exception) as exc:
+        await routes.wipe_database_admin({"confirm": True})
+    assert getattr(exc.value, "status_code", None) == 400
+    routes.scheduler_runtime.stop_scheduler.assert_not_awaited()
+    routes.scheduler_runtime.start_scheduler.assert_not_awaited()
+
+
+def test_disk_guard_disable_clears_gate_before_dispatch_kick():
+    manager = (Path(__file__).resolve().parents[1] / "services" / "manager_v2.py").read_text()
+    block = manager.split("if min_gb <= 0:", 1)[1].split("free_gb =", 1)[0]
+    assert block.index("self._disk_guard_active = False") < block.index("await self._disk_guard_resume_all()")
+    routes = (Path(__file__).resolve().parents[1] / "api" / "routes.py").read_text()
+    assert "downloads currently paused due to low disk space" not in routes
+    assert "new dispatches currently deferred due to low disk space" in routes

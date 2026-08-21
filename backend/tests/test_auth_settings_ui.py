@@ -27,7 +27,7 @@ def _settings(**updates):
         "oidc_provider_name": "Authentik",
         "oidc_issuer_url": "https://id.example/application/o/debridpulse",
         "oidc_client_id": "client",
-        "oidc_client_secret": "secret",
+        "oidc_client_secret": "super-private-oidc-value",
         "oidc_scopes": ["openid", "profile", "email"],
         "oidc_allow_all": True,
         "oidc_allowed_subjects": [],
@@ -210,8 +210,8 @@ async def test_authentication_payload_is_secret_free(monkeypatch):
     assert payload["oidc_client_secret_configured"] is True
     assert payload["api_token_configured"] is True
     assert payload["current_session_mechanism"] == "oidc_session"
-    assert "stored-hash" not in encoded
-    assert "secret" not in encoded
+    assert "super-private-oidc-value" not in encoded
+    assert "placeholder$placeholder" not in encoded
     assert "oidc_client_secret" not in payload
     assert "auth_password_hash" not in payload
 

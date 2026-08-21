@@ -79,15 +79,6 @@ def _browser_login_redirect(request: Request) -> Response:
     return RedirectResponse(url=f"/login?next={quote(target, safe='')}", status_code=303)
 
 
-def _password_session_still_valid(record, cfg) -> bool:
-    if record.principal.mechanism is not AuthMechanism.PASSWORD_SESSION:
-        return True
-    if not password_auth_ready(cfg):
-        return False
-    current_version = password_credential_version(getattr(cfg, "auth_password_hash", ""))
-    return bool(current_version and record.credential_version == current_version)
-
-
 def _oidc_ready(cfg) -> bool:
     if not oidc_auth_enabled(cfg):
         return False
@@ -95,6 +86,24 @@ def _oidc_ready(cfg) -> bool:
     from auth.oidc import oidc_auth_ready
 
     return oidc_auth_ready(cfg)
+
+
+def _session_record_still_valid(record, cfg) -> bool:
+    mechanism = record.principal.mechanism
+    if mechanism is AuthMechanism.PASSWORD_SESSION:
+        if not password_auth_ready(cfg):
+            return False
+        current_version = password_credential_version(getattr(cfg, "auth_password_hash", ""))
+        return bool(current_version and record.credential_version == current_version)
+    if mechanism is AuthMechanism.OIDC_SESSION:
+        if not _oidc_ready(cfg):
+            return False
+        from auth.oidc_version import oidc_configuration_version
+
+        current_version = oidc_configuration_version(cfg)
+        return bool(current_version and record.credential_version == current_version)
+    # Only password_session and oidc_session are valid application-session mechanisms.
+    return False
 
 
 async def enforce_general_web_security(
@@ -146,7 +155,7 @@ async def enforce_authentication(request: Request, call_next: CallNext) -> Respo
     session_token = session_cookie_token(request)
     if session_token:
         record = session_store.resolve(session_token)
-        if record is not None and _password_session_still_valid(record, cfg):
+        if record is not None and _session_record_still_valid(record, cfg):
             _attach_principal(request, record.principal)
             _attach_session(request, session_token)
             if request.method.upper() in MUTATING_HTTP_METHODS:

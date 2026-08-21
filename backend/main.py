@@ -4,10 +4,9 @@ import os
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
-
 from fastapi import FastAPI, Request, Response
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from api.routes import router
@@ -17,10 +16,10 @@ from core.config import get_settings as _get_log_settings
 from core.logging_utils import configure_logging, log_startup_banner, sanitize_exception, sanitize_log_value
 from core.scheduler import start_scheduler, stop_scheduler
 from core.version import read_version
-from db.database import DB_PATH, DatabaseMaintenanceActive, init_db
+from db.database import DatabaseMaintenanceActive, init_db, DB_PATH
 from services.aria2_runtime import runtime as aria2_runtime
-from services.maintenance_gate import ApplicationMaintenanceActive
 from services.transfer_service import transfer_service
+from services.maintenance_gate import ApplicationMaintenanceActive
 
 _log_cfg = _get_log_settings()
 configure_logging(
@@ -32,20 +31,16 @@ logger = logging.getLogger("alldebrid.main")
 
 # persistence initialization on startup
 
-
 async def _reset_stuck_downloads_sqlite():
     """Resets torrents that were stuck in 'downloading' state when the app last stopped."""
     import aiosqlite as _aiosqlite
-
     async with _aiosqlite.connect(DB_PATH, timeout=30) as _db:
         _db.row_factory = _aiosqlite.Row
-        stuck = await (
-            await _db.execute(
-                """SELECT id, alldebrid_id, name FROM torrents
+        stuck = await (await _db.execute(
+            """SELECT id, alldebrid_id, name FROM torrents
                WHERE status='downloading'
                  AND id NOT IN (SELECT DISTINCT torrent_id FROM download_files)"""
-            )
-        ).fetchall()
+        )).fetchall()
         for row in stuck:
             await _db.execute(
                 "UPDATE torrents SET status='ready', updated_at=CURRENT_TIMESTAMP WHERE id=?",
@@ -63,37 +58,22 @@ async def _reset_stuck_downloads_sqlite():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     from core.config import get_settings as _gs
-
     cfg = _gs()
     log_startup_banner(
         logger,
         version=read_version(),
         mode="Docker / Unraid",
         database="SQLite",
-        download_client=(
-            "aria2 builtin"
-            if getattr(cfg, "aria2_mode", "builtin") == "builtin"
-            else "aria2 external"
-        ),
+        download_client=("aria2 builtin" if getattr(cfg, "aria2_mode", "builtin") == "builtin" else "aria2 external"),
         web_ui=f"http://0.0.0.0:{getattr(cfg, 'port', 8080)}",
-        auth=(
-            "enabled"
-            if getattr(cfg, "auth_username", "") and getattr(cfg, "auth_password", "")
-            else "disabled"
-        ),
+        auth=("enabled" if getattr(cfg, "auth_username", "") and getattr(cfg, "auth_password", "") else "disabled"),
     )
-    if not (
-        str(getattr(cfg, "auth_username", "") or "").strip()
-        and str(getattr(cfg, "auth_password", "") or "").strip()
-    ):
-        logger.warning(
-            "HTTP authentication is disabled; restrict DebridPulse to a trusted network or authenticated reverse proxy"
-        )
+    if not (str(getattr(cfg, "auth_username", "") or "").strip() and str(getattr(cfg, "auth_password", "") or "").strip()):
+        logger.warning("HTTP authentication is disabled; restrict DebridPulse to a trusted network or authenticated reverse proxy")
 
     try:
-        from core.config import apply_settings, get_settings, save_settings
+        from core.config import get_settings, apply_settings, save_settings
         from core.config_validator import validate_and_sanitise
-
         raw = get_settings()
         clean = validate_and_sanitise(raw)
         if clean is not raw:
@@ -107,11 +87,9 @@ async def lifespan(app: FastAPI):
         stuck = await _reset_stuck_downloads_sqlite()
         for row in stuck:
             if row["alldebrid_id"]:
-                asyncio.create_task(
-                    transfer_service.control.start_download(
-                        row["id"], str(row["alldebrid_id"]), str(row["name"] or "")
-                    )
-                )
+                asyncio.create_task(transfer_service.control.start_download(
+                    row["id"], str(row["alldebrid_id"]), str(row["name"] or "")
+                ))
     except Exception as exc:
         logger.warning("Startup stuck-download cleanup failed: %s", sanitize_exception(exc))
 
@@ -156,12 +134,7 @@ class RequestBodyLimitMiddleware:
         self.max_bytes = max(1, int(max_bytes))
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope.get("type") != "http" or str(scope.get("method") or "").upper() not in {
-            "POST",
-            "PUT",
-            "PATCH",
-            "DELETE",
-        }:
+        if scope.get("type") != "http" or str(scope.get("method") or "").upper() not in {"POST", "PUT", "PATCH", "DELETE"}:
             await self.app(scope, receive, send)
             return
         headers = {key.lower(): value for key, value in scope.get("headers", [])}
@@ -174,7 +147,6 @@ class RequestBodyLimitMiddleware:
         except ValueError:
             pass
         seen = 0
-
         async def limited_receive() -> Message:
             nonlocal seen
             message = await receive()
@@ -183,7 +155,6 @@ class RequestBodyLimitMiddleware:
                 if seen > self.max_bytes:
                     raise _RequestBodyTooLarge
             return message
-
         try:
             await self.app(scope, limited_receive, send)
         except _RequestBodyTooLarge:
@@ -192,13 +163,7 @@ class RequestBodyLimitMiddleware:
 
 
 try:
-    _MAX_REQUEST_BODY_BYTES = max(
-        1024 * 1024,
-        min(
-            100 * 1024 * 1024,
-            int(os.getenv("DEBRIDPULSE_MAX_REQUEST_BYTES", str(20 * 1024 * 1024))),
-        ),
-    )
+    _MAX_REQUEST_BODY_BYTES = max(1024 * 1024, min(100 * 1024 * 1024, int(os.getenv("DEBRIDPULSE_MAX_REQUEST_BYTES", str(20 * 1024 * 1024)))))
 except ValueError:
     _MAX_REQUEST_BODY_BYTES = 20 * 1024 * 1024
 
@@ -274,11 +239,7 @@ async def application_maintenance_handler(_request: Request, _exc: ApplicationMa
 app.add_middleware(RequestBodyLimitMiddleware, max_bytes=_MAX_REQUEST_BODY_BYTES)
 
 
-_cors_origins = [
-    origin.strip()
-    for origin in os.getenv("CORS_ORIGINS", "").split(",")
-    if origin.strip()
-]
+_cors_origins = [origin.strip() for origin in os.getenv("CORS_ORIGINS", "").split(",") if origin.strip()]
 if _cors_origins:
     app.add_middleware(
         CORSMiddleware,
@@ -292,7 +253,6 @@ if _cors_origins:
 # Adds X-Request-ID to every response for log correlation.
 # Reuses the client-provided ID if present, otherwise generates a new UUID4.
 
-
 @app.middleware("http")
 async def request_id_middleware(request: Request, call_next):
     req_id = str(request.headers.get("X-Request-ID") or "").strip()
@@ -305,13 +265,10 @@ async def request_id_middleware(request: Request, call_next):
     response.headers.setdefault("X-Frame-Options", "DENY")
     return response
 
-
-# ── Authentication / browser-security boundary ────────────────────────────────
-# Phase 1 preserves the inherited Basic-auth behavior while moving ownership out
-# of main.py. General Origin / Fetch-Metadata mutation checks are deliberately
-# independent of authentication so open LAN deployments still reject browser
-# cross-site mutation attempts.
-
+# ── Authentication / Browser Security ─────────────────────────────────────────
+# Phase 1 preserves existing HTTP Basic behavior while moving authentication
+# ownership out of main.py. Browser cross-site mutation protection is general
+# security and remains active even when authentication is intentionally disabled.
 
 @app.middleware("http")
 async def authentication_boundary_middleware(request: Request, call_next):
@@ -325,7 +282,6 @@ async def general_web_security_middleware(request: Request, call_next):
         call_next,
         allowed_origins=_cors_origins,
     )
-
 
 app.include_router(router, prefix="/api")
 

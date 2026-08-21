@@ -11,12 +11,30 @@ from typing import Any, Callable
 from auth.oidc_version import oidc_configuration_version
 
 
+_OIDC_COMMIT_FIELDS = (
+    "auth_oidc_enabled",
+    "oidc_provider_name",
+    "oidc_issuer_url",
+    "oidc_client_id",
+    "oidc_client_secret",
+    "oidc_client_secret_clear",
+    "oidc_scopes",
+    "oidc_allow_all",
+    "oidc_allowed_subjects",
+    "oidc_allowed_emails",
+    "oidc_allowed_groups",
+    "oidc_group_claim",
+    "public_base_url",
+)
+
+
 @dataclass(frozen=True, slots=True)
 class PendingOidcConfiguration:
     settings: Any
     configuration_version: str
     created_at: float
     expires_at: float
+    apply_password_enabled: bool = False
 
 
 class PendingOidcConfigurationStore:
@@ -42,7 +60,14 @@ class PendingOidcConfigurationStore:
             hashlib.sha256,
         ).digest()
 
-    def stage(self, state: str, settings: Any, *, configuration_version: str) -> None:
+    def stage(
+        self,
+        state: str,
+        settings: Any,
+        *,
+        configuration_version: str,
+        apply_password_enabled: bool = False,
+    ) -> None:
         now = self._clock()
         self.cleanup()
         key = self._fingerprint(state)
@@ -51,6 +76,7 @@ class PendingOidcConfigurationStore:
             configuration_version=str(configuration_version),
             created_at=now,
             expires_at=now + self.ttl_seconds,
+            apply_password_enabled=bool(apply_password_enabled),
         )
         self._entries.move_to_end(key)
         while len(self._entries) > self.max_entries:
@@ -99,6 +125,19 @@ class PendingOidcConfigurationStore:
         return len(self._entries)
 
 
+def _merge_verified_oidc_settings(current: Any, item: PendingOidcConfiguration):
+    """Apply the fully verified OIDC snapshot without rolling back live app state."""
+    proposed = item.settings
+    updates = {
+        field: getattr(proposed, field)
+        for field in _OIDC_COMMIT_FIELDS
+        if hasattr(proposed, field)
+    }
+    if item.apply_password_enabled:
+        updates["auth_password_enabled"] = bool(getattr(proposed, "auth_password_enabled", False))
+    return current.model_copy(update=updates, deep=True)
+
+
 def commit_verified_pending_oidc(state: str) -> bool:
     """Commit a staged config only after the matching full OIDC login succeeds."""
     item = pending_oidc_store.consume_verified(state)
@@ -107,12 +146,20 @@ def commit_verified_pending_oidc(state: str) -> bool:
 
     from auth.models import AuthMechanism
     from auth.sessions import session_store
-    from core.config import apply_settings, save_settings
+    from core.config import apply_settings, get_settings, save_settings
+
+    # The IdP round-trip can overlap unrelated settings/password changes. Merge
+    # only the exact OIDC snapshot that was proven onto the current live config;
+    # never restore a stale whole-application snapshot from before the login.
+    merged = _merge_verified_oidc_settings(get_settings(), item)
 
     # Persist first; if persistence fails, the current in-memory configuration
     # remains authoritative and no successful pending transition is reported.
-    save_settings(item.settings)
-    apply_settings(item.settings)
+    save_settings(merged)
+    # Clear transient write intent after persistence so it cannot affect a later
+    # unrelated save of the authoritative in-memory settings object.
+    authoritative = merged.model_copy(update={"oidc_client_secret_clear": False}, deep=True)
+    apply_settings(authoritative)
     # Critical OIDC policy/config changed. Existing OIDC sessions were proven
     # under the previous policy and must not remain usable indefinitely.
     session_store.revoke_mechanism(AuthMechanism.OIDC_SESSION)

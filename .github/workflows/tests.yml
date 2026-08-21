@@ -29,6 +29,7 @@ jobs:
         run: |
           if ! grep -q 'def _public_timestamp' backend/api/serializers.py; then
             python tools/v106_final_audit_patch.py
+            python tools/v106_final_audit_fixup.py
           else
             echo 'Corrective source already present'
           fi
@@ -89,6 +90,8 @@ jobs:
             backend/services/provider_gateway.py \
             backend/services/stats.py \
             backend/services/transfer_service.py \
+            backend/tests/test_license_policy.py \
+            backend/tests/test_v1_scope.py \
             frontend/static/app.js \
             NOTICE \
             .github/workflows/fork-image.yml

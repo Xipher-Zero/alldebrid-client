@@ -12,7 +12,12 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from api.auth_routes import router as auth_router
 from api.routes import router
 from auth.middleware import enforce_authentication, enforce_general_web_security
-from auth.policy import password_auth_enabled, password_auth_ready
+from auth.policy import (
+    interactive_auth_enabled,
+    oidc_auth_enabled,
+    password_auth_enabled,
+    password_auth_ready,
+)
 from auth.sessions import CSRF_HEADER, session_store
 from core.branding import APP_METADATA_TITLE, APP_NAME, APP_SHORT_NAME
 from core.config import get_settings as _get_log_settings
@@ -37,7 +42,7 @@ logger = logging.getLogger("alldebrid.main")
 async def _reset_stuck_downloads_sqlite():
     """Resets torrents that were stuck in 'downloading' state when the app last stopped."""
     import aiosqlite as _aiosqlite
-    async with _aiosqlite.connect(DB_PATH, timeout=30) as _db:
+    async with aiosqlite.connect(DB_PATH, timeout=30) as _db:
         _db.row_factory = _aiosqlite.Row
         stuck = await (await _db.execute(
             """SELECT id, alldebrid_id, name FROM torrents
@@ -63,6 +68,13 @@ async def lifespan(app: FastAPI):
     from core.config import get_settings as _gs
     cfg = _gs()
     password_enabled = password_auth_enabled(cfg)
+    oidc_enabled = oidc_auth_enabled(cfg)
+    interactive_enabled = interactive_auth_enabled(cfg)
+    auth_mechanisms = []
+    if password_enabled:
+        auth_mechanisms.append("password")
+    if oidc_enabled:
+        auth_mechanisms.append("oidc")
     log_startup_banner(
         logger,
         version=read_version(),
@@ -70,12 +82,16 @@ async def lifespan(app: FastAPI):
         database="SQLite",
         download_client=("aria2 builtin" if getattr(cfg, "aria2_mode", "builtin") == "builtin" else "aria2 external"),
         web_ui=f"http://0.0.0.0:{getattr(cfg, 'port', 8080)}",
-        auth=("enabled" if password_enabled else "disabled"),
+        auth=("+".join(auth_mechanisms) if auth_mechanisms else "disabled"),
     )
-    if not password_enabled:
-        logger.warning("HTTP authentication is disabled; restrict DebridPulse to a trusted network or authenticated reverse proxy")
-    elif not password_auth_ready(cfg):
-        logger.error("Username & Password authentication is enabled but not fully configured; protected access is fail-closed")
+    if not interactive_enabled:
+        logger.warning("Interactive authentication is disabled; DebridPulse is intentionally operating in open mode")
+    if password_enabled and not password_auth_ready(cfg):
+        logger.error("Username & Password authentication is enabled but not fully configured; that mechanism is unavailable")
+    if oidc_enabled:
+        from auth.oidc import oidc_auth_ready
+        if not oidc_auth_ready(cfg):
+            logger.error("OpenID Connect is enabled but its local configuration is incomplete; OIDC is unavailable and protected access remains fail-closed unless another configured mechanism is usable")
 
     try:
         from core.config import get_settings, apply_settings, save_settings

@@ -13,12 +13,12 @@ import logging
 import os
 import time
 from pathlib import Path
-from typing import Optional, AsyncGenerator
+from typing import Optional, AsyncGenerator, Literal
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from core.branding import APP_SHORT_NAME, REPOSITORY_API_URL
 from core.config import (
@@ -210,13 +210,28 @@ async def version_check():
         return {"current": current, "latest": None, "update_available": False, "error": sanitize_exception(exc)}
 
 
-@router.put("/settings")
-async def update_settings(new: AppSettings):
-    previous = get_settings()
-    merged = new.model_dump()
+class SettingsUpdate(AppSettings):
+    clear_secrets: list[str] = Field(default_factory=list)
+
+
+def _merge_secret_settings(new: SettingsUpdate, previous: AppSettings) -> dict:
+    requested_clears = {str(field) for field in getattr(new, "clear_secrets", [])}
+    unknown = requested_clears - _SECRET_SETTINGS
+    if unknown:
+        raise HTTPException(400, f"Unsupported secret field(s): {', '.join(sorted(unknown))}")
+    merged = new.model_dump(exclude={"clear_secrets"})
     for field in _SECRET_SETTINGS:
-        if field in merged and not str(merged.get(field) or "").strip():
+        if field in requested_clears:
+            merged[field] = ""
+        elif not str(merged.get(field) or "").strip():
             merged[field] = getattr(previous, field, "")
+    return merged
+
+
+@router.put("/settings")
+async def update_settings(new: SettingsUpdate):
+    previous = get_settings()
+    merged = _merge_secret_settings(new, previous)
     clean = validate_and_sanitise(AppSettings(**merged))
     if getattr(clean, "max_concurrent_downloads", None) is not None:
         clean = clean.model_copy(update={"aria2_max_active_downloads": clean.max_concurrent_downloads})
@@ -932,7 +947,7 @@ async def set_torrent_label(torrent_id: int, body: LabelUpdate):
 
 class BulkAction(BaseModel):
     ids: list
-    action: str  # "delete" | "retry" | "remove_label"
+    action: Literal["delete", "retry", "reset", "pause", "resume", "remove_label"]
 
 
 @router.post("/torrents/bulk")
@@ -1386,23 +1401,29 @@ async def wipe_database_admin(body: dict | None = None):
     if not (body or {}).get("confirm"):
         raise HTTPException(400, "Wipe confirmation required")
 
+    quiesced = False
     try:
-        quiesce_result = await transfer_service.quiesce_for_database_wipe()
-    except Exception as exc:
-        raise HTTPException(409, _sanitize_error(exc))
+        try:
+            quiesce_result = await transfer_service.quiesce_for_database_wipe()
+            quiesced = True
+        except Exception as exc:
+            raise HTTPException(409, _sanitize_error(exc))
 
-    backup_result = None
-    if getattr(cfg, "db_backup_before_wipe", True):
-        from services.db_maintenance import run_database_backup
-        backup_result = await run_database_backup()
-        if backup_result.get("skipped"):
-            raise HTTPException(409, "Pre-wipe database backup is required but disabled")
-        if backup_result.get("errors"):
-            raise HTTPException(500, "Pre-wipe database backup failed; wipe aborted")
+        backup_result = None
+        if getattr(cfg, "db_backup_before_wipe", True):
+            from services.db_maintenance import run_database_backup
+            backup_result = await run_database_backup()
+            if backup_result.get("skipped"):
+                raise HTTPException(409, "Pre-wipe database backup is required but disabled")
+            if backup_result.get("errors"):
+                raise HTTPException(500, "Pre-wipe database backup failed; wipe aborted")
 
-    from services.db_maintenance import wipe_database
-    result = await wipe_database(verified_quiesced=True)
-    return {**result, "backup": backup_result, "quiesced": quiesce_result}
+        from services.db_maintenance import wipe_database
+        result = await wipe_database(verified_quiesced=True)
+        return {**result, "backup": backup_result, "quiesced": quiesce_result}
+    finally:
+        if quiesced:
+            await transfer_service.release_database_wipe_quiescence()
 
 
 
@@ -1794,9 +1815,9 @@ async def run_recovery():
 @router.post("/admin/cleanup-alldebrid-orphans")
 async def cleanup_alldebrid_orphans_endpoint():
     """
-    Delete from AllDebrid any magnets with error/no-peer status that are not
-    tracked by the local DB (or already marked deleted locally).
-    Returns the number of magnets removed.
+    Conservatively scan provider-side error/no-peer objects. Automatic deletion
+    is limited to objects with positive local ownership evidence; unknown, imported
+    and local-only-deleted provider objects are preserved.
     """
     deleted = await transfer_service.cleanup_alldebrid_orphans()
     return {"ok": True, "deleted": deleted}

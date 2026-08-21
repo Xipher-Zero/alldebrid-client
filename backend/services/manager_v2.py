@@ -314,6 +314,8 @@ class TorrentManager:
         self._direct_link_task_ids: Set[int] = set()
         self._ready_parent_tasks: Set[asyncio.Task] = set()
         self._ready_parent_task_ids: Set[int] = set()
+        self._maintenance_tasks: Set[asyncio.Task] = set()
+        self._materialization_quiescing = False
         self._aria2_state_lock = asyncio.Lock()
         self._aria2_dispatch_lock = asyncio.Lock()
         self._aria2_ownership_lock = asyncio.Lock()
@@ -325,6 +327,65 @@ class TorrentManager:
 
     def is_paused(self) -> bool:
         return bool(get_settings().paused)
+
+    @staticmethod
+    def _provider_delete_authorized(source: object) -> bool:
+        """Automatic provider deletion requires positive local ownership evidence."""
+        normalized = str(source or "").strip()
+        return bool(normalized) and normalized not in {"alldebrid_existing", "import_existing"}
+
+    def set_materialization_quiescing(self, value: bool) -> None:
+        self._materialization_quiescing = bool(value)
+
+    def _track_maintenance_task(self, coro, *, label: str) -> asyncio.Task:
+        task = asyncio.create_task(coro)
+        self._maintenance_tasks.add(task)
+
+        def _finished(done: asyncio.Task) -> None:
+            self._maintenance_tasks.discard(done)
+            try:
+                done.result()
+            except asyncio.CancelledError:
+                pass
+            except Exception as exc:
+                logger.error(
+                    "Background materialization task %s failed: %s",
+                    label,
+                    sanitize_exception(exc, max_length=300),
+                )
+
+        task.add_done_callback(_finished)
+        return task
+
+    async def wait_for_materialization_idle(self) -> None:
+        """Drain provider-triggered/materialization tasks before destructive maintenance."""
+        while True:
+            tasks = [
+                task
+                for task in (
+                    *self._direct_link_tasks,
+                    *self._ready_parent_tasks,
+                    *self._maintenance_tasks,
+                )
+                if not task.done()
+            ]
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+                continue
+            if self._active:
+                await asyncio.sleep(0.05)
+                continue
+            async with self._deferred_submission_lock:
+                pass
+            if not self._active and not any(
+                not task.done()
+                for task in (
+                    *self._direct_link_tasks,
+                    *self._ready_parent_tasks,
+                    *self._maintenance_tasks,
+                )
+            ):
+                return
 
     def notify(self):
         if self._architecture is not None:
@@ -938,6 +999,8 @@ class TorrentManager:
         self, torrent_id: int, links: List[str]
     ) -> None:
         """Keep a strong reference to the background preparation task."""
+        if self._materialization_quiescing:
+            return
         if torrent_id in self._active or torrent_id in self._direct_link_task_ids:
             return
         task = asyncio.create_task(
@@ -1013,6 +1076,8 @@ class TorrentManager:
         self, torrent_id: int, links: List[str]
     ) -> None:
         """Generate AllDebrid URLs and stage their files for the aria2 dispatcher."""
+        if self._materialization_quiescing:
+            return
         if self.is_paused():
             async with get_db() as db:
                 current = await db.fetchone(
@@ -1426,6 +1491,8 @@ class TorrentManager:
 
     async def resume_deferred_provider_submissions(self) -> dict:
         """Start provider work that was durably accepted while Pause All was active."""
+        if self._materialization_quiescing:
+            return {"started": 0, "failed": 0}
         if self.is_paused():
             return {"started": 0, "failed": 0}
 
@@ -2244,23 +2311,10 @@ class TorrentManager:
                 await db.commit()
 
     async def cleanup_no_peer_errors(self):
-        """
-        Finds torrents in 'error' status with a confirmed provider-side fatal
-        error and removes the failed provider object while retaining the local
-        transfer and event history.
-
-        Handles:
-          - "No peer after 30 minutes" (provider_status_code=8 or LIKE '%no peer%')
-          - "Download took more than 3 days" (AllDebrid timeout)
-          - Any other provider timeout/abort patterns
-
-        Local polling/transport timeouts are deliberately excluded: only rows
-        whose provider_status is already 'error' are eligible. A client-side
-        timeout must never authorize deletion of an upstream magnet.
-        """
+        """Clean confirmed fatal provider errors only for locally owned objects."""
         async with get_db() as db:
             rows = await (await db.execute(
-                """SELECT id, name, alldebrid_id, error_message, provider_status_code
+                """SELECT id, name, alldebrid_id, source, error_message, provider_status_code
                    FROM torrents
                    WHERE status = 'error'
                      AND provider_status = 'error'
@@ -2281,26 +2335,44 @@ class TorrentManager:
         logger.info("cleanup_no_peer_errors: found %d torrent(s) to clean up", len(rows))
 
         for row in rows:
-            ad_id = str(row["alldebrid_id"] or "").strip()
-            name  = row["name"] or f"torrent {row['id']}"
+            ad_id = str(row.get("alldebrid_id") or "").strip()
+            name = row.get("name") or f"torrent {row['id']}"
+            owned = self._provider_delete_authorized(row.get("source"))
             removed_from_provider = False
 
-            if ad_id and ad_id.lower() not in ("none", "null", ""):
+            if ad_id and ad_id.lower() not in ("none", "null", "") and owned:
                 try:
-                    logger.info("no-peer cleanup: removing %s (%s) from AllDebrid", row["id"], name)
-                    await self.ad().delete_magnet(ad_id)
-                    removed_from_provider = True
+                    logger.info(
+                        "no-peer cleanup: removing owned AllDebrid object for %s (%s)",
+                        row["id"],
+                        name,
+                    )
+                    removed_from_provider = bool(await self.ad().delete_magnet(ad_id))
                 except Exception as exc:
-                    logger.warning("no-peer cleanup: could not delete magnet %s: %s", ad_id, exc)
+                    logger.warning(
+                        "no-peer cleanup: could not delete owned magnet %s: %s",
+                        ad_id,
+                        sanitize_exception(exc),
+                    )
                 event_msg = (
-                    "Provider download failed — failed magnet removed from AllDebrid; local history retained"
+                    "Provider download failed — owned failed object removed from AllDebrid; local history retained"
                     if removed_from_provider
-                    else "Provider download failed — AllDebrid cleanup failed; local history retained"
+                    else "Provider download failed — owned AllDebrid cleanup failed; local history retained"
+                )
+            elif ad_id and ad_id.lower() not in ("none", "null", ""):
+                logger.info(
+                    "no-peer cleanup: preserving unowned AllDebrid object %s for torrent %s",
+                    ad_id,
+                    row["id"],
+                )
+                event_msg = (
+                    "Provider download failed — AllDebrid object preserved because this instance does not own it"
                 )
             else:
                 logger.info(
-                    "no-peer cleanup: torrent %s (%s) has no AllDebrid ID — "
-                    "retaining failed local record", row["id"], name
+                    "no-peer cleanup: torrent %s (%s) has no AllDebrid ID — retaining failed local record",
+                    row["id"],
+                    name,
                 )
                 event_msg = "Provider download failed — no AllDebrid ID remains; local history retained"
 
@@ -2310,108 +2382,71 @@ class TorrentManager:
                        SET status='error', provider_status='failed',
                            updated_at=CURRENT_TIMESTAMP
                        WHERE id=?""",
-                    (row["id"],)
+                    (row["id"],),
                 )
                 await db.execute(
                     "INSERT INTO events (torrent_id, level, message) VALUES (?, 'warn', ?)",
-                    (row["id"], event_msg)
+                    (row["id"], event_msg),
                 )
                 await db.commit()
 
-            # Discord webhook notification
             await self._notify_provider_error(
                 name,
-                reason=str(row["error_message"] or "Provider download failed"),
-                context=(f"Failed AllDebrid ID {ad_id} removed; DebridPulse history retained"
-                         if removed_from_provider
-                         else (f"Failed AllDebrid ID {ad_id} retained after cleanup error; DebridPulse history retained"
-                               if ad_id and ad_id.lower() not in ("none", "null", "")
-                               else "No AllDebrid ID available; DebridPulse history retained")),
+                reason=str(row.get("error_message") or "Provider download failed"),
+                context=(
+                    f"Failed owned AllDebrid ID {ad_id} removed; DebridPulse history retained"
+                    if removed_from_provider
+                    else (
+                        f"AllDebrid ID {ad_id} preserved; DebridPulse history retained"
+                        if ad_id and ad_id.lower() not in ("none", "null", "")
+                        else "No AllDebrid ID available; DebridPulse history retained"
+                    )
+                ),
                 alldebrid_id=str(ad_id or ""),
-                status_code=row["provider_status_code"],
+                status_code=row.get("provider_status_code"),
             )
 
     async def cleanup_alldebrid_orphans(self) -> int:
-        """
-        Delete from AllDebrid any magnets with error/no-peer status that are
-        either:
-          (a) not in the local DB at all (orphans from outside the client), or
-          (b) already in the DB as 'error' but cleanup_no_peer_errors missed them.
+        """Conservatively clean only locally owned error objects.
 
-        Targets statusCode 7 (virus), 8 (no peer) and any 5-15 error codes plus
-        the "File not available" / "no peer" message variants.
-
-        Returns the number of magnets deleted from AllDebrid.
+        Absence from the local database is never deletion authority. Imported
+        objects and local-only deleted rows remain untouched.
         """
         try:
-            all_magnets = await self.ad().get_magnet_status()
+            magnets = await self.ad().get_magnet_status()
         except Exception as exc:
-            logger.debug("cleanup_alldebrid_orphans: could not fetch magnets: %s", exc)
+            logger.warning("cleanup_alldebrid_orphans: provider scan failed: %s", exc)
             return 0
-
-        if not all_magnets:
-            return 0
-
-        _ERROR_CODES_AD = set(range(5, 16))
-        deleted = 0
-
         async with get_db() as db:
-            # Build set of alldebrid_ids we know about locally
-            known_rows = await db.fetchall(
-                "SELECT alldebrid_id, status FROM torrents WHERE alldebrid_id IS NOT NULL"
+            rows = await db.fetchall(
+                "SELECT alldebrid_id, status, source, provider_status FROM torrents WHERE alldebrid_id IS NOT NULL"
             )
-        known: dict[str, str] = {
-            str(r["alldebrid_id"]): str(r["status"])
-            for r in (known_rows or [])
-        }
-
-        for m in all_magnets:
-            ad_id   = str(m.get("id") or "").strip()
-            code    = int(m.get("statusCode") or 0)
-            msg     = str(m.get("status") or m.get("statusText") or "").lower()
-            name    = str(m.get("filename") or m.get("name") or ad_id)
-
-            is_error = (
-                code in _ERROR_CODES_AD
-                or "no peer" in msg
-                or "file not available" in msg
-                or "virus" in msg
-            )
-            if not is_error:
+        known = {str(row["alldebrid_id"]): row for row in rows if row.get("alldebrid_id")}
+        deleted = 0
+        for magnet in magnets or []:
+            ad_id = str(magnet.get("id") or "").strip()
+            status_code = int(magnet.get("statusCode") or 0)
+            status_text = str(magnet.get("status") or "").lower()
+            fatal = status_code in ERROR_CODES or "no peer" in status_text or "not available" in status_text
+            if not ad_id or not fatal:
                 continue
-
-            local_status = known.get(ad_id)
-
-            if local_status is None:
-                # Orphan: exists on AllDebrid but not in our DB
-                logger.info(
-                    "cleanup_alldebrid_orphans: deleting orphan AD magnet %s "
-                    "'%s' (code=%s msg='%s')",
-                    ad_id, name[:60], code, msg[:40],
-                )
-            elif local_status == "deleted":
-                # Already deleted locally but still on AllDebrid
+            local = known.get(ad_id)
+            if (
+                local is None
+                or str(local.get("status") or "") != "error"
+                or str(local.get("provider_status") or "") == "failed"
+                or not self._provider_delete_authorized(local.get("source"))
+            ):
                 logger.debug(
-                    "cleanup_alldebrid_orphans: deleting already-local-deleted "
-                    "AD magnet %s '%s'",
-                    ad_id, name[:60],
+                    "cleanup_alldebrid_orphans: preserving unowned/unknown provider object %s",
+                    ad_id,
                 )
-            else:
-                # Known to us and not yet deleted — let cleanup_no_peer_errors handle it
                 continue
-
             try:
-                await self.ad().delete_magnet(ad_id)
-                deleted += 1
+                if await self.ad().delete_magnet(ad_id):
+                    deleted += 1
             except Exception as exc:
-                logger.debug(
-                    "cleanup_alldebrid_orphans: could not delete %s: %s", ad_id, exc
-                )
-
-        if deleted:
-            logger.info("cleanup_alldebrid_orphans: removed %d orphan magnet(s) from AllDebrid (no-peer/error)", deleted)
-        else:
-            logger.debug("cleanup_alldebrid_orphans: no orphaned error magnets found on AllDebrid")
+                logger.warning("cleanup_alldebrid_orphans: delete %s failed: %s", ad_id, exc)
         return deleted
 
     async def _apply_provider_update(self, row: Dict, magnet: Dict, normalized: Dict[str, object]):
@@ -2599,7 +2634,7 @@ class TorrentManager:
                         (row["id"],),
                     )
                     await _db.commit()
-                asyncio.create_task(self._handle_expired_reimport(row, magnet_link))
+                self._track_maintenance_task(self._handle_expired_reimport(row, magnet_link), label=f"expired-reimport-{row['id']}")
             else:
                 logger.warning(
                     "Magnet expired on AllDebrid (torrent %s '%s') — no magnet stored, marking error",
@@ -2627,7 +2662,7 @@ class TorrentManager:
                         "No peers for torrent %s (id=%s) — scheduling re-upload attempt",
                         row["id"], row.get("alldebrid_id", "?"),
                     )
-                    asyncio.create_task(self._handle_upload_failed(row, error_message))
+                    self._track_maintenance_task(self._handle_upload_failed(row, error_message), label=f"upload-failed-{row['id']}")
                 else:
                     logger.info(
                         "No peers for torrent %s (id=%s) — no magnet stored, removing",
@@ -2640,15 +2675,29 @@ class TorrentManager:
                         alldebrid_id=str(row.get("alldebrid_id") or ""),
                         status_code=status_code,
                     )
-                    await self._log_event(row["id"], "warn",
-                        f"No peers after 30 minutes (code {status_code}) — no magnet stored, removing from AllDebrid")
-                    try:
-                        await self.ad().delete_magnet(str(row["alldebrid_id"]))
-                    except Exception as exc:
-                        logger.debug("Could not delete no-peer magnet %s: %s", row["alldebrid_id"], exc)
+                    if self._provider_delete_authorized(row.get("source")):
+                        await self._log_event(
+                            row["id"],
+                            "warn",
+                            f"No peers after 30 minutes (code {status_code}) — no magnet stored; removing owned AllDebrid object",
+                        )
+                        try:
+                            await self.ad().delete_magnet(str(row["alldebrid_id"]))
+                        except Exception as exc:
+                            logger.debug(
+                                "Could not delete owned no-peer magnet %s: %s",
+                                row["alldebrid_id"],
+                                sanitize_exception(exc),
+                            )
+                    else:
+                        await self._log_event(
+                            row["id"],
+                            "warn",
+                            f"No peers after 30 minutes (code {status_code}) — observed AllDebrid object preserved",
+                        )
                     await self._fail_torrent(row["id"], "No peers after 30 minutes — no magnet stored for re-upload", notify=False)
             elif status_code == UPLOAD_FAILED_CODE:
-                asyncio.create_task(self._handle_upload_failed(row, error_message))
+                self._track_maintenance_task(self._handle_upload_failed(row, error_message), label=f"upload-failed-{row['id']}")
             else:
                 await self._fail_torrent(row["id"], error_message, notify=True)
         elif provider_status == "error" and current_status == TorrentStatus.ERROR and status_code in (7, 8):
@@ -2715,7 +2764,8 @@ class TorrentManager:
         """
         torrent_id = int(torrent_id)
         if (
-            self.is_paused()
+            self._materialization_quiescing
+            or self.is_paused()
             or self._disk_guard_active
             or torrent_id in self._active
             or torrent_id in self._ready_parent_task_ids
@@ -3080,6 +3130,10 @@ class TorrentManager:
                 await db.commit()
 
         async with get_db() as db:
+            source_row = await db.fetchone(
+                "SELECT source FROM torrents WHERE id=?", (torrent_id,)
+            )
+            transfer_source = source_row.get("source") if source_row else None
             await db.execute(
                 "UPDATE torrents SET status=?, local_path=?, size_bytes=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
                 (final_status, str(destination_root), total_size_bytes, torrent_id),
@@ -3112,7 +3166,7 @@ class TorrentManager:
         )
 
         if final_status == "completed":
-            await self._delete_magnet_after_completion(torrent_id, ad_id)
+            await self._delete_magnet_after_completion(torrent_id, ad_id, transfer_source)
             await self._mark_finished(torrent_id, name=name)
             # For all-blocked torrents: partial notification already sent above;
             # skip the completed notification to avoid a confusing "0 files" message.
@@ -4440,12 +4494,15 @@ class TorrentManager:
             )
         else:
             await self._delete_magnet_after_completion(
-                torrent_id, torrent_dict["alldebrid_id"]
+                torrent_id,
+                torrent_dict["alldebrid_id"],
+                torrent_dict.get("source"),
             )
         await self._mark_finished(torrent_id, name=torrent_dict.get("name",""))
         # Trigger auto-extraction if enabled
-        asyncio.create_task(
-            self._extract_torrent(torrent_id, torrent_dict)
+        self._track_maintenance_task(
+            self._extract_torrent(torrent_id, torrent_dict),
+            label=f"extract-{torrent_id}",
         )
         if get_settings().discord_notify_finished:
             await self.notify().send_complete(
@@ -4691,42 +4748,37 @@ class TorrentManager:
             await db.execute("INSERT INTO events (torrent_id, level, message) VALUES (?, ?, ?)", (torrent_id, level, message))
             await db.commit()
 
-    async def _delete_magnet_after_completion(self, torrent_id: int, ad_id: str) -> bool:
-        """
-        Deletes the magnet from AllDebrid after a successful download.
-        Status stays 'completed' so the dashboard counts it correctly.
-        sync_alldebrid_status already filters status NOT IN ('completed','deleted','error').
-        """
+    async def _delete_magnet_after_completion(
+        self, torrent_id: int, ad_id: str, source: object = None
+    ) -> bool:
+        """Delete a completed provider object only with positive local ownership."""
         ad_id = str(ad_id or "").strip()
-        if not ad_id or ad_id.lower() in ("none", "null", ""):
+        if not self._provider_delete_authorized(source):
+            await self._log_event(
+                torrent_id,
+                "info",
+                "Completed locally; observed AllDebrid object preserved (not owned by this instance)",
+            )
+            return False
+        if not ad_id or ad_id.lower() in ("none", "null"):
             logger.warning(
                 "torrent %s: skipping AllDebrid deletion — no alldebrid_id", torrent_id
             )
-            async with get_db() as db:
-                await db.execute(
-                    "INSERT INTO events (torrent_id, level, message) VALUES (?, 'warn', ?)",
-                    (torrent_id, "Completed locally, but no AllDebrid ID — cannot remove from AllDebrid"),
-                )
-                await db.commit()
+            await self._log_event(
+                torrent_id,
+                "warn",
+                "Completed locally, but no AllDebrid ID — cannot remove from AllDebrid",
+            )
             return False
 
-        logger.info("torrent %s: removing from AllDebrid (id=%s)", torrent_id, ad_id)
-        deleted = await self.ad().delete_magnet(ad_id)
-        async with get_db() as db:
-            msg = ("Removed from AllDebrid after completion" if deleted
-                   else f"Completed, but AllDebrid removal failed (id={ad_id})")
-            level = "info" if deleted else "warn"
-            await db.execute(
-                "INSERT INTO events (torrent_id, level, message) VALUES (?, ?, ?)",
-                (torrent_id, level, msg),
-            )
-            await db.commit()
-        if not deleted:
-            logger.warning(
-                "torrent %s: failed to remove from AllDebrid (id=%s) — "
-                "it may have already been deleted or the API key lacks permission",
-                torrent_id, ad_id,
-            )
+        logger.info("torrent %s: removing owned AllDebrid object (id=%s)", torrent_id, ad_id)
+        deleted = bool(await self.ad().delete_magnet(ad_id))
+        msg = (
+            "Removed owned object from AllDebrid after completion"
+            if deleted
+            else f"Completed, but AllDebrid removal failed (id={ad_id})"
+        )
+        await self._log_event(torrent_id, "info" if deleted else "warn", msg)
         return deleted
 
     async def _mark_finished(self, torrent_id: int, name: str = ""):
@@ -5081,7 +5133,7 @@ class TorrentManager:
             )
 
         # Delete the failed magnet from AllDebrid so we can re-upload
-        if ad_id:
+        if ad_id and self._provider_delete_authorized(row.get("source")):
             try:
                 await self.ad().delete_magnet(ad_id)
                 logger.info("Deleted failed magnet %s from AllDebrid before re-upload", ad_id)

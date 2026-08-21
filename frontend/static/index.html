@@ -688,7 +688,7 @@
               <details open style="margin-bottom:10px"><summary style="cursor:pointer;font-weight:600;color:var(--text1);font-size:13px">General</summary>
                 <div style="padding:6px 0 0 12px">
                   <b>AllDebrid API Key</b> — Required. Get at alldebrid.com/apikeys.<br>
-                  <b>Access Control</b> — Optional HTTP Basic Auth. Set both username and password to enable. Leave either empty to disable. Exempt paths: /api/stats, /api/version, /api/avatar (for health checks).<br>
+                  <b>Access Control</b> — Optional HTTP Basic Auth. Set both username and password to enable. Leave either empty to disable. Exempt paths: /api/health, /api/version, /api/avatar.<br>
                 </div>
               </details>
 
@@ -697,7 +697,7 @@
                   <b>Max Concurrent Downloads</b> — How many torrents are processed (unlocked + dispatched) simultaneously. Default: 3.<br>
                   <b>Built-in aria2 Download Folder</b> — Local path used by DebridPulse and built-in aria2.<br>
                   <b>External aria2 Download Path</b> — Path to that download location as seen by an external aria2 daemon.<br>
-                  <b>Min Free Disk Space (GB)</b> — If less than this is available, the download is aborted with an error (torrent row kept). 0 = disabled.<br>
+                  <b>Min Free Disk Space (GB)</b> — If less than this is available, active transfers are allowed to finish while new dispatches are deferred until space recovers. 0 = disabled.<br>
                   <b>Stalled download timeout (hours)</b> — Downloads left queued or downloading without an update longer than this are reset for retry. 0 = disabled.
                 </div>
               </details>
@@ -753,7 +753,7 @@
                   1. Check the <b>Built-in aria2 Download Folder</b> path — it must be accessible inside the container.<br>
                   2. In Unraid: ensure the path mapping in the Docker template is correct (host path → container path).<br>
                   3. If using an external aria2 instance, set the <b>External aria2 Download Path</b> to the path seen by that daemon (it may differ from the DebridPulse container path).<br>
-                  4. Check the <code>min_free_disk_gb</code> setting — if the disk is full, downloads abort with an error.
+                  4. Check the <code>min_free_disk_gb</code> setting — when the guard is active, new downloads are deferred until free space recovers.
                 </div>
               </details>
 
@@ -775,7 +775,7 @@
 
               <details><summary style="cursor:pointer;font-weight:600;color:var(--text1)">Auth is enabled but I'm locked out</summary>
                 <div style="color:var(--text2);padding:8px 0 0 12px;line-height:1.7">
-                  Edit <code>settings.json</code> in your data folder (default: <code>/app/data/settings.json</code>) and set <code>"auth_username": ""</code> and <code>"auth_password": ""</code>, then restart the container. Auth is disabled when either field is empty.
+                  Edit the configured settings file (documented container default: <code>/app/config/config.json</code>) and set <code>"auth_username": ""</code> and <code>"auth_password": ""</code>, then restart the container. Auth is disabled when either field is empty.
                 </div>
               </details>
 
@@ -861,7 +861,7 @@
 <input id="torrent-file-input" type="file" accept=".torrent,application/x-bittorrent" hidden onchange="uploadTorrentFile(this)">
 
 <script src="/app.js?v=12" defer></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="/vendor/chart.umd.min.js?v=4.4.1"></script>
 <div id="mobile-overlay" onclick="closeSidebar()"></div>
 </body>
 </html>

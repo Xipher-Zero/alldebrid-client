@@ -15,7 +15,6 @@ the lock file and `licenses/python-runtime.json`.
 | annotated-doc | 0.0.4 | MIT |
 | annotated-types | 0.7.0 | MIT |
 | anyio | 4.13.0 | MIT |
-| asyncpg | 0.31.0 | Apache-2.0 |
 | attrs | 26.1.0 | MIT |
 | bencode2 | 0.3.33 | MIT ([bundled notice](../licenses/bencode2-MIT.txt)) |
 | click | 8.3.3 | BSD-3-Clause |
@@ -57,7 +56,6 @@ recorded in the image's SBOM attestation.
 | curl | curl |
 | gosu | Apache-2.0 |
 | p7zip-full | LGPL-2.1-or-later and package-specific component terms |
-| unrar-free | GPL-2.0-or-later |
 
 Package copyright files and common license texts remain installed in the
 image. `SOURCE_OFFER.md` explains how to request corresponding source for
@@ -68,14 +66,19 @@ Python packages retain their installed `.dist-info` license and notice files.
 DebridPulse explicitly packages that tagged notice at
 `licenses/bencode2-MIT.txt`.
 
+## Vendored browser resources
+
+| Resource | Version/source | License |
+|---|---|---|
+| Chart.js | 4.4.1, vendored at `frontend/static/vendor/chart.umd.min.js` | MIT ([bundled notice](../licenses/Chart.js-MIT.txt)) |
+
 ## Browser-loaded resources
 
-These resources are requested by the browser from third-party CDNs and are not
+These font resources are requested by the browser from third-party CDNs and are not
 copied into the repository or container image:
 
 | Resource | Version/source | License |
 |---|---|---|
-| Chart.js | 4.4.1 from cdnjs | MIT |
 | Outfit | Google Fonts | OFL-1.1 |
 | JetBrains Mono | Google Fonts | OFL-1.1 |
 | Bricolage Grotesque | Google Fonts (project landing page) | OFL-1.1 |

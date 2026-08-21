@@ -158,17 +158,18 @@ function sourceLabel(source) {
 
 function sanitizeErrorMsg(message) {
   const text = String(message || 'Request failed');
-  const limited = text.length > 500
-    ? text.slice(0, 497) + '...'
-    : text;
-  return esc(limited);
+  return text.length > 500 ? text.slice(0, 497) + '...' : text;
 }
 
 function toast(msg, type = 'info') {
   const icons = {success:'✅',error:'❌',warn:'⚠️',info:'ℹ️'};
   const el = document.createElement('div');
   el.className = `toast ${type}`;
-  el.innerHTML = `<span>${icons[type]||'·'}</span><span>${msg}</span>`;
+  const icon = document.createElement('span');
+  icon.textContent = icons[type] || '·';
+  const text = document.createElement('span');
+  text.textContent = String(msg ?? '');
+  el.append(icon, text);
   document.getElementById('toasts').appendChild(el);
   setTimeout(() => el.style.opacity = '0', 3000);
   setTimeout(() => el.remove(), 3400);
@@ -480,7 +481,7 @@ async function checkConnections() {
 async function checkPremiumStatus() {
   try {
     const cfg = settingsData;
-    if (!cfg || !cfg.alldebrid_api_key) return;
+    if (!cfg || !cfg.alldebrid_api_key_configured) return;
     const r = await api('POST', '/settings/test-alldebrid');
     _updatePremiumLabel(r);
     setDot('api', 'ok', `AllDebrid: ${r.username||'online'}`);
@@ -1548,7 +1549,7 @@ function filterEvents() {
   el.innerHTML = evs.map(ev=>`
     <div class="event-item">
       <div class="elevel ${ev.level}"></div>
-      <div><div class="emsg">${esc(ev.message)}</div>${ev.torrent_name?`<div class="ename">${ev.torrent_name}</div>`:''}</div>
+      <div><div class="emsg">${esc(ev.message)}</div>${ev.torrent_name?`<div class="ename">${esc(ev.torrent_name)}</div>`:''}</div>
       <div class="etime">${fmtDate(ev.created_at)}</div>
     </div>`).join('');
 }
@@ -1563,7 +1564,7 @@ async function loadChangelog() {
     const md = data.content || 'No changelog content found.';
     el.innerHTML = renderMarkdown(md);
   } catch(e) {
-    el.innerHTML = `<p style="color:#f87171">Failed to load changelog: ${e.message}</p>`;
+    el.innerHTML = `<p style="color:#f87171">Failed to load changelog: ${esc(e.message)}</p>`;
     toast(e.message, 'error');
   }
 }
@@ -1669,7 +1670,7 @@ function renderSettings() {
 
       <div class="scard">
       <div class="scard-header">🔐 Access Control</div>
-      <p class="form-hint" style="padding:4px 14px 6px;margin:0;font-size:11px;color:var(--text3)">Optional HTTP Basic Auth. Set both fields to enable; leave either empty to disable. The browser will prompt for credentials on next load.</p>
+      <p class="form-hint" style="padding:4px 14px 6px;margin:0;font-size:11px;color:var(--text3)">Optional HTTP Basic Auth. Username remains visible; the saved password is never returned. Enter a password to set or replace it, or explicitly clear it in Stored Secrets below.</p>
       <div class="scard-body">
         <div class="form-group">
           <label class="form-label">Username</label>
@@ -1677,16 +1678,36 @@ function renderSettings() {
         </div>
         <div class="form-group">
           <label class="form-label">Password</label>
-          <input class="input" type="password" id="s-auth_password" value="${s.auth_password||''}" placeholder="Leave empty to disable auth"/>
-          <span class="form-hint">⚠️ Save settings and reload the page to activate. Keep both fields empty to disable.</span>
+          <input class="input" type="password" id="s-auth_password" value="" placeholder="${s.auth_password_configured?'Stored password configured — leave blank to keep':'Enter password to enable auth'}"/>
+          <span class="form-hint">Save settings and reload the page after changing credentials. Use Stored Secrets below to explicitly clear the saved password.</span>
         </div>
       </div>
     </div>
 
       <div class="scard">
+        <div class="scard-header">🧹 Stored Secrets</div>
+        <p class="form-hint" style="padding:4px 14px 6px;margin:0;font-size:11px;color:var(--text3)">Redacted secrets are preserved when their input is left blank. Check a configured item here to explicitly erase it on Save.</p>
+        <div class="scard-body">
+          ${[
+            ['alldebrid_api_key','AllDebrid API key'],
+            ['aria2_secret','aria2 RPC secret'],
+            ['discord_webhook_url','Discord webhook'],
+            ['discord_webhook_added','Torrent-added webhook'],
+            ['stats_report_webhook_url','Reporting webhook'],
+            ['auth_password','Basic Auth password'],
+            ['extraction_password','Extraction password']
+          ].filter(([field])=>s[field+'_configured']).map(([field,label])=>`
+            <label class="toggle-row" style="cursor:pointer">
+              <div class="toggle-info"><div class="tl">${label}</div><div class="ts">Erase the stored value on Save</div></div>
+              <input type="checkbox" id="s-clear-${field}">
+            </label>`).join('') || '<div class="form-hint">No stored secrets are currently configured.</div>'}
+        </div>
+      </div>
+
+      <div class="scard">
         <div class="scard-header">💾 Disk Space Guard</div>
         <p class="form-hint" style="padding:4px 14px 6px;margin:0;font-size:11px;color:var(--text3)">
-          Automatically <b>pauses</b> active downloads and blocks new ones when free space drops below
+          Allows active downloads to finish and <b>defers new dispatches</b> when free space drops below
           the threshold. Resumes automatically when space recovers (with hysteresis to prevent flapping).
           Works on all filesystems: ext4, XFS, ZFS, Btrfs, <b>Unraid (FUSE/shfs)</b>, NFS.
         </p>
@@ -1694,7 +1715,7 @@ function renderSettings() {
           <div class="form-group">
             <label class="form-label">Minimum Free Disk Space (GB, 0 = disabled)</label>
             <input class="input" type="number" id="s-min_free_disk_gb" value="${s.min_free_disk_gb??0}" min="0" step="0.5"/>
-            <span class="form-hint">Downloads are <b>paused</b> (not errored) when free space drops below this. They resume automatically when space recovers.</span>
+            <span class="form-hint">New dispatches are deferred when free space drops below this; active transfers continue. Deferred work starts automatically when space recovers.</span>
           </div>
           <div class="form-group">
             <label class="form-label">Resume Hysteresis (GB above threshold)</label>
@@ -2048,7 +2069,7 @@ function renderSettings() {
             <label class="form-label toggle-label"><span>Enable Auto-Extraction</span>
               <label class="tswitch"><input type="checkbox" id="s-extract_enabled" ${s.extract_enabled?'checked':''}/><span class="tslider"></span></label>
             </label>
-            <span class="form-hint">Automatically extract archives (.zip .rar .7z .tar.gz .tar.bz2 .tar.xz and more) after download completes. p7zip-full and unrar-free are included in the Docker image.</span>
+            <span class="form-hint">Automatically extract archives (.zip .rar .7z .tar.gz .tar.bz2 .tar.xz and more) after download completes. p7zip-full (7-Zip) is included in the Docker image; RAR extraction uses the same preflight-capable 7z path.</span>
           </div>
           <div class="form-group">
             <label class="form-label toggle-label"><span>Delete Archive After Extraction</span>
@@ -2372,9 +2393,20 @@ function getFormSettings() {
     'aria2_max_active_downloads',
     Number(settingsData.max_concurrent_downloads ?? 3),
   );
+  const secretFields = [
+    'alldebrid_api_key', 'aria2_secret', 'discord_webhook_url',
+    'discord_webhook_added', 'stats_report_webhook_url',
+    'auth_password', 'extraction_password'
+  ];
+  const clearSecrets = secretFields.filter(field =>
+    document.getElementById(`s-clear-${field}`)?.checked
+  );
   return {
     ...settingsData,
+    clear_secrets: clearSecrets,
     alldebrid_api_key: t('alldebrid_api_key'),
+    auth_username: t('auth_username'),
+    auth_password: t('auth_password'),
     alldebrid_agent:   t('alldebrid_agent')||'DebridPulse',
     download_folder: t('download_folder'), max_concurrent_downloads: maxConcurrentDownloads,
     max_speed_mbps: (settingsData && settingsData.max_speed_mbps != null)

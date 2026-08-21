@@ -131,20 +131,39 @@ class TransferService:
         return await self._engine.delete_torrent(*args, **kwargs)
 
     async def quiesce_for_database_wipe(self):
-        """Physically park owned aria2 work before destructive DB maintenance."""
-        pause_result = await self.pause_all_downloads()
-        failed = int((pause_result or {}).get("failed") or 0)
-        if failed:
-            raise RuntimeError(f"Could not confirm pause for {failed} transfer(s)")
-        # Prove the daemon is reachable before trusting an observational snapshot.
-        await self.aria2.test()
-        owned = await self.aria2.get_owned()
-        live = [item for item in owned if item.status in {"active", "waiting"}]
-        if live:
-            raise RuntimeError(
-                f"Database wipe refused: {len(live)} owned aria2 job(s) are still live"
-            )
-        return {"pause": pause_result, "owned_checked": len(owned)}
+        """Quiesce provider, materialization and owned aria2 work before DB wipe."""
+        self._engine.set_materialization_quiescing(True)
+        provider_quiesced = False
+        try:
+            await self.provider.begin_quiescence()
+            provider_quiesced = True
+            pause_result = await self.pause_all_downloads()
+            failed = int((pause_result or {}).get("failed") or 0)
+            if failed:
+                raise RuntimeError(f"Could not confirm pause for {failed} transfer(s)")
+            await self._engine.wait_for_materialization_idle()
+            await self.aria2.test()
+            owned = await self.aria2.get_owned()
+            live = [item for item in owned if item.status in {"active", "waiting"}]
+            if live:
+                raise RuntimeError(
+                    f"Database wipe refused: {len(live)} owned aria2 job(s) are still live"
+                )
+            return {
+                "pause": pause_result,
+                "owned_checked": len(owned),
+                "provider_operations_drained": True,
+                "materialization_drained": True,
+            }
+        except Exception:
+            if provider_quiesced:
+                await self.provider.end_quiescence()
+            self._engine.set_materialization_quiescing(False)
+            raise
+
+    async def release_database_wipe_quiescence(self):
+        await self.provider.end_quiescence()
+        self._engine.set_materialization_quiescing(False)
 
     def reset_services(self):
         self.control.reset_runtime_state()

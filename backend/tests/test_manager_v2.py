@@ -497,6 +497,7 @@ class ProviderHistoryRetentionTests(unittest.IsolatedAsyncioTestCase):
             "id": 67,
             "name": "Unavailable Torrent",
             "alldebrid_id": "ad-67",
+            "source": "manual",
             "error_message": "No peers after 30 minutes",
             "provider_status_code": 8,
         }
@@ -825,7 +826,7 @@ class FinishedEntryTests(unittest.IsolatedAsyncioTestCase):
         torrent_row = {
             "id": 1, "status": "queued", "alldebrid_id": "ad-1", "name": "Test Torrent",
             "hash": None, "magnet": None, "size_bytes": 0, "progress": 0,
-            "download_url": None, "local_path": None, "source": None,
+            "download_url": None, "local_path": None, "source": "manual",
             "provider_status": None, "provider_status_code": None,
             "polling_failures": 0, "download_client": "aria2",
             "error_message": None, "created_at": None, "updated_at": None,
@@ -864,7 +865,7 @@ class FinishedEntryTests(unittest.IsolatedAsyncioTestCase):
              )):
             await mgr._finalize_aria2_torrent(1)
 
-        mgr._delete_magnet_after_completion.assert_awaited_once_with(1, "ad-1")
+        mgr._delete_magnet_after_completion.assert_awaited_once_with(1, "ad-1", "manual")
         self.assertEqual(mgr._mark_finished.await_count, 1)
 
     async def test_finalize_does_not_complete_when_files_still_active(self):
@@ -921,7 +922,7 @@ class FinishedEntryTests(unittest.IsolatedAsyncioTestCase):
         torrent_row = {
             "id": 116, "status": "queued", "alldebrid_id": "ad-116", "name": "Big Torrent",
             "hash": None, "magnet": None, "size_bytes": 0, "progress": 0,
-            "download_url": None, "local_path": None, "source": None,
+            "download_url": None, "local_path": None, "source": "manual",
             "provider_status": None, "provider_status_code": None,
             "polling_failures": 0, "download_client": "aria2",
             "error_message": None, "created_at": None, "updated_at": None,
@@ -967,7 +968,7 @@ class FinishedEntryTests(unittest.IsolatedAsyncioTestCase):
         update_sql, update_params = update_calls[0]
         self.assertNotIn("CASE WHEN", update_sql)
         self.assertEqual(update_params, (4505585317, 116))
-        mgr._delete_magnet_after_completion.assert_awaited_once_with(116, "ad-116")
+        mgr._delete_magnet_after_completion.assert_awaited_once_with(116, "ad-116", "manual")
 
     async def test_delete_magnet_keeps_completed_status(self):
         """
@@ -1039,8 +1040,10 @@ class FinishedEntryTests(unittest.IsolatedAsyncioTestCase):
         fake_db = AsyncMock()
         fake_db.__aenter__ = AsyncMock(return_value=fake_db)
         fake_db.__aexit__ = AsyncMock(return_value=False)
+        fake_cursor = AsyncMock()
+        fake_cursor.fetchone = AsyncMock(return_value={"source": "manual"})
         fake_db.commit = AsyncMock()
-        fake_db.execute = AsyncMock(return_value=AsyncMock())
+        fake_db.execute = AsyncMock(return_value=fake_cursor)
 
         with patch("services.manager_v2.get_settings", return_value=fake_cfg), \
              patch("services.manager_v2.aiosqlite.connect", return_value=fake_db):

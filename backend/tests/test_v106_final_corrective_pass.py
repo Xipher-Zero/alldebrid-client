@@ -102,3 +102,12 @@ def test_public_payload_normalizes_event_timestamp():
 
     payload = public_payload({"message": "x", "created_at": "2026-08-21 03:00:00"})
     assert payload["created_at"] == "2026-08-21T03:00:00Z"
+
+
+def test_missing_gid_recovery_log_omits_capability_url():
+    source = (Path(__file__).parents[1] / "services" / "manager_v2.py").read_text()
+    sync = source.split("async def sync_aria2_downloads", 1)[1].split(
+        "async def _engine_reset_torrent_for_redownload", 1
+    )[0]
+    assert "(path=%s, url=%s) -> scheduling reset" not in sync
+    assert "(path=%s) -> scheduling reset" in sync

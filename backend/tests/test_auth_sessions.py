@@ -106,9 +106,10 @@ async def test_auth_bootstrap_loads_before_application_javascript():
     assert auth_marker in bundle
     assert app_marker in bundle
     assert bundle.index(auth_marker) < bundle.index(app_marker)
-    assert "localStorage" not in bundle.split(app_marker, 1)[0]
-    assert "sessionStorage" not in bundle.split(app_marker, 1)[0]
-    assert "X-CSRF-Token" in bundle.split(app_marker, 1)[0]
+    bootstrap = bundle.split(app_marker, 1)[0]
+    assert "localStorage" not in bootstrap
+    assert "sessionStorage" not in bootstrap
+    assert "X-CSRF-Token" in bootstrap
     assert bundle_response.headers["cache-control"] == "no-cache"
 
 

@@ -1,36 +1,38 @@
 from __future__ import annotations
 
-import asyncio
 import base64
 import binascii
-import secrets
 from collections.abc import Awaitable, Callable, Iterable
+from urllib.parse import quote
 
 from fastapi import Request, Response
+from fastapi.responses import JSONResponse, RedirectResponse
 
-from auth.models import Principal
-from auth.passwords import basic_verification_cache, verify_password_candidate
+from auth.manager import verify_local_credentials
+from auth.models import AuthMechanism, Principal
+from auth.passwords import password_credential_version
 from auth.policy import (
     MUTATING_HTTP_METHODS,
     is_public_path,
     normalized_origin_host,
     password_auth_enabled,
     password_auth_ready,
+    safe_return_path,
 )
-from auth.throttle import password_failure_throttle
+from auth.sessions import CSRF_HEADER, session_cookie_token, session_store
 from core.branding import APP_SHORT_NAME
 from core.config import get_settings
 
 
 CallNext = Callable[[Request], Awaitable[Response]]
-# The default Argon2id parameters use substantial memory by design. Bound
-# simultaneous unauthenticated verification work rather than letting the default
-# thread pool multiply that memory cost under attack.
-_PASSWORD_VERIFY_SLOTS = asyncio.Semaphore(2)
 
 
 def _attach_principal(request: Request, principal: Principal) -> None:
     request.state.principal = principal
+
+
+def _attach_session(request: Request, token: str) -> None:
+    request.state.auth_session_token = token
 
 
 def _has_basic_scheme(header: str) -> bool:
@@ -55,17 +57,33 @@ def _decode_basic_credentials(header: str) -> tuple[str, str] | None:
     return username, password
 
 
-def _peer_key(request: Request) -> str:
-    client = request.client
-    return str(client.host if client else "unknown")
+def _unauthorized(*, basic_challenge: bool = False) -> Response:
+    headers = {"WWW-Authenticate": f'Basic realm="{APP_SHORT_NAME}"'} if basic_challenge else None
+    return JSONResponse(content={"detail": "Unauthorized"}, status_code=401, headers=headers)
 
 
-def _unauthorized() -> Response:
-    return Response(
-        content="Unauthorized",
-        status_code=401,
-        headers={"WWW-Authenticate": f'Basic realm="{APP_SHORT_NAME}"'},
-    )
+def _is_browser_navigation(request: Request) -> bool:
+    if request.method.upper() != "GET" or request.url.path.startswith("/api/"):
+        return False
+    accept = str(request.headers.get("Accept", "") or "").casefold()
+    return "text/html" in accept
+
+
+def _browser_login_redirect(request: Request) -> Response:
+    target = request.url.path or "/"
+    if request.url.query:
+        target += "?" + request.url.query
+    target = safe_return_path(target)
+    return RedirectResponse(url=f"/login?next={quote(target, safe='')}", status_code=303)
+
+
+def _password_session_still_valid(record, cfg) -> bool:
+    if record.principal.mechanism is not AuthMechanism.PASSWORD_SESSION:
+        return True
+    if not password_auth_ready(cfg):
+        return False
+    current_version = password_credential_version(getattr(cfg, "auth_password_hash", ""))
+    return bool(current_version and record.credential_version == current_version)
 
 
 async def enforce_general_web_security(
@@ -106,63 +124,70 @@ async def enforce_general_web_security(
     return await call_next(request)
 
 
-async def enforce_password_http_auth(request: Request, call_next: CallNext) -> Response:
-    """Admit open requests or authenticate explicit HTTP Basic credentials.
-
-    Browser form sessions replace the native Basic challenge in phase 3. Phase 2
-    keeps the existing interactive behavior while switching persistence and
-    verification to the final Argon2id credential model.
-    """
+async def enforce_authentication(request: Request, call_next: CallNext) -> Response:
+    """Outer authentication boundary for open, browser-session and Basic access."""
     _attach_principal(request, Principal.anonymous())
     cfg = get_settings()
-
-    if not password_auth_enabled(cfg):
-        return await call_next(request)
 
     if is_public_path(request.url.path):
         return await call_next(request)
 
-    if not password_auth_ready(cfg):
-        return Response(content="Password authentication unavailable", status_code=503)
+    session_token = session_cookie_token(request)
+    if session_token:
+        record = session_store.resolve(session_token)
+        if record is not None and _password_session_still_valid(record, cfg):
+            _attach_principal(request, record.principal)
+            _attach_session(request, session_token)
+            if request.method.upper() in MUTATING_HTTP_METHODS:
+                csrf = str(request.headers.get(CSRF_HEADER, "") or "")
+                if not session_store.verify_csrf(session_token, csrf):
+                    return JSONResponse(
+                        content={"detail": "CSRF validation failed"},
+                        status_code=403,
+                    )
+            return await call_next(request)
+        session_store.revoke(session_token)
 
     auth_header = str(request.headers.get("Authorization", "") or "")
-    if not _has_basic_scheme(auth_header):
-        return _unauthorized()
-
-    peer = _peer_key(request)
-    delay = password_failure_throttle.delay_for(peer)
-    if delay:
-        await asyncio.sleep(delay)
-
-    credentials = _decode_basic_credentials(auth_header)
-    if credentials is None:
-        password_failure_throttle.record_failure(peer)
-        return _unauthorized()
-
-    provided_user, provided_pass = credentials
-    username = str(getattr(cfg, "auth_username", "") or "").strip()
-    password_hash = str(getattr(cfg, "auth_password_hash", "") or "").strip()
-    user_ok = secrets.compare_digest(provided_user.encode(), username.encode())
-
-    verified = False
-    if user_ok:
-        verified = basic_verification_cache.contains(username, provided_pass, password_hash)
-
-    if not verified:
-        async with _PASSWORD_VERIFY_SLOTS:
-            verified = await asyncio.to_thread(
-                verify_password_candidate,
-                password_hash,
-                provided_pass,
-                use_configured_hash=user_ok,
+    if _has_basic_scheme(auth_header):
+        if not password_auth_enabled(cfg):
+            return await call_next(request)
+        if not password_auth_ready(cfg):
+            return JSONResponse(
+                content={"detail": "Password authentication unavailable"},
+                status_code=503,
             )
-        if verified:
-            basic_verification_cache.remember(username, provided_pass, password_hash)
+        credentials = _decode_basic_credentials(auth_header)
+        if credentials is None:
+            return _unauthorized(basic_challenge=True)
+        provided_user, provided_pass = credentials
+        if await verify_local_credentials(
+            request,
+            provided_user,
+            provided_pass,
+            allow_basic_success_cache=True,
+        ):
+            username = str(getattr(cfg, "auth_username", "") or "").strip()
+            _attach_principal(request, Principal.http_basic(username))
+            return await call_next(request)
+        return _unauthorized(basic_challenge=True)
 
-    if verified:
-        password_failure_throttle.record_success(peer)
-        _attach_principal(request, Principal.http_basic(username))
+    if not password_auth_enabled(cfg):
         return await call_next(request)
 
-    password_failure_throttle.record_failure(peer)
+    if not password_auth_ready(cfg):
+        return JSONResponse(
+            content={"detail": "Password authentication unavailable"},
+            status_code=503,
+        )
+
+    if _is_browser_navigation(request):
+        return _browser_login_redirect(request)
+
     return _unauthorized()
+
+
+# Compatibility name for the phase-2 tests and any downstream imports while the
+# final manager API settles. All requests now use the application-session-aware
+# implementation above.
+enforce_password_http_auth = enforce_authentication

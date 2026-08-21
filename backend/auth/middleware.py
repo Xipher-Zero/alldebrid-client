@@ -8,6 +8,7 @@ from urllib.parse import quote
 from fastapi import Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse
 
+from auth.api_tokens import api_token_store
 from auth.manager import verify_local_credentials
 from auth.models import AuthMechanism, Principal
 from auth.passwords import password_credential_version
@@ -43,6 +44,21 @@ def _has_basic_scheme(header: str) -> bool:
     return bool(separator and scheme.casefold() == "basic")
 
 
+def _has_bearer_scheme(header: str) -> bool:
+    scheme, separator, _token = str(header or "").strip().partition(" ")
+    return bool(separator and scheme.casefold() == "bearer")
+
+
+def _decode_bearer_token(header: str) -> str | None:
+    scheme, separator, token = str(header or "").strip().partition(" ")
+    if not separator or scheme.casefold() != "bearer":
+        return None
+    token = token.strip()
+    if not token or len(token) > 4096 or any(ch.isspace() for ch in token):
+        return None
+    return token
+
+
 def _decode_basic_credentials(header: str) -> tuple[str, str] | None:
     scheme, separator, token = str(header or "").strip().partition(" ")
     if not separator or scheme.casefold() != "basic":
@@ -60,8 +76,12 @@ def _decode_basic_credentials(header: str) -> tuple[str, str] | None:
     return username, password
 
 
-def _unauthorized(*, basic_challenge: bool = False) -> Response:
-    headers = {"WWW-Authenticate": f'Basic realm="{APP_SHORT_NAME}"'} if basic_challenge else None
+def _unauthorized(*, basic_challenge: bool = False, bearer_challenge: bool = False) -> Response:
+    headers = None
+    if bearer_challenge:
+        headers = {"WWW-Authenticate": "Bearer"}
+    elif basic_challenge:
+        headers = {"WWW-Authenticate": f'Basic realm="{APP_SHORT_NAME}"'}
     return JSONResponse(content={"detail": "Unauthorized"}, status_code=401, headers=headers)
 
 
@@ -158,13 +178,15 @@ async def enforce_general_web_security(
 
 
 async def enforce_authentication(request: Request, call_next: CallNext) -> Response:
-    """Outer authentication boundary for open, browser-session and Basic access."""
+    """Outer authentication boundary for open, session, Bearer and Basic access."""
     _attach_principal(request, Principal.anonymous())
     cfg = get_settings()
 
     if is_public_path(request.url.path):
         return await call_next(request)
 
+    # Application sessions are authoritative even if an intermediary or client
+    # unexpectedly adds another Authorization credential.
     session_token = session_cookie_token(request)
     if session_token:
         record = session_store.resolve(session_token)
@@ -182,6 +204,20 @@ async def enforce_authentication(request: Request, call_next: CallNext) -> Respo
         session_store.revoke(session_token)
 
     auth_header = str(request.headers.get("Authorization", "") or "")
+
+    # The machine token supplements configured interactive auth. It never turns
+    # deliberate open mode into token-only mode, so Authorization is ignored when
+    # both interactive mechanisms are intentionally disabled.
+    if _has_bearer_scheme(auth_header):
+        if not interactive_auth_enabled(cfg):
+            return await call_next(request)
+        provided_token = _decode_bearer_token(auth_header)
+        if provided_token is not None and api_token_store.verify(provided_token):
+            principal = Principal.api_token()
+            _attach_principal(request, principal)
+            return await _admit_authenticated(request, call_next, principal, cfg)
+        return _unauthorized(bearer_challenge=True)
+
     if _has_basic_scheme(auth_header):
         if not password_auth_enabled(cfg):
             if not interactive_auth_enabled(cfg):
@@ -214,7 +250,7 @@ async def enforce_authentication(request: Request, call_next: CallNext) -> Respo
     if not interactive_auth_enabled(cfg):
         return await call_next(request)
 
-    if not (password_auth_ready(cfg) or _oidc_ready(cfg)):
+    if not (password_auth_ready(cfg) or _oidc_ready(cfg) or (api_token_store.enabled and api_token_store.configured)):
         return JSONResponse(
             content={"detail": "Configured authentication is unavailable"},
             status_code=503,

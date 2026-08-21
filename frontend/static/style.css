@@ -1086,9 +1086,9 @@ textarea.input { resize: vertical; }
 
 /* External aria2 read-only topbar state */
 #aria2-speed-badge.external-control {
-  flex: 0 0 auto;
-  width: auto;
-  min-width: 0;
+  flex: 0 0 280px;
+  width: 280px;
+  min-width: 280px;
   justify-content: flex-start;
 }
 #aria2-speed-badge.external-control #aria2-badge-speed {

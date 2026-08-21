@@ -23,7 +23,11 @@ from auth.policy import (
     safe_return_path,
 )
 from auth.sessions import CSRF_HEADER, session_cookie_token, session_store
-from auth.transitions import settings_transition_rejection
+from auth.transitions import (
+    authentication_configuration_lock,
+    is_auth_settings_mutation,
+    settings_transition_rejection,
+)
 from core.branding import APP_SHORT_NAME
 from core.config import get_settings
 
@@ -103,7 +107,6 @@ def _browser_login_redirect(request: Request) -> Response:
 def _oidc_ready(cfg) -> bool:
     if not oidc_auth_enabled(cfg):
         return False
-    # Lazy import keeps the general policy layer independent of protocol code.
     from auth.oidc import oidc_auth_ready
 
     return oidc_auth_ready(cfg)
@@ -123,7 +126,6 @@ def _session_record_still_valid(record, cfg) -> bool:
 
         current_version = oidc_configuration_version(cfg)
         return bool(current_version and record.credential_version == current_version)
-    # Only password_session and oidc_session are valid application-session mechanisms.
     return False
 
 
@@ -145,12 +147,7 @@ async def enforce_general_web_security(
     *,
     allowed_origins: Iterable[str] = (),
 ) -> Response:
-    """Reject explicit cross-site browser mutations independently of authentication.
-
-    Machine clients normally send neither Origin nor Fetch Metadata headers and
-    therefore continue to work in open/no-auth deployments. Explicitly allowed
-    CORS origins retain their configured mutation behavior.
-    """
+    """Reject explicit cross-site browser mutations independently of authentication."""
     if request.method.upper() not in MUTATING_HTTP_METHODS:
         return await call_next(request)
 
@@ -177,16 +174,19 @@ async def enforce_general_web_security(
     return await call_next(request)
 
 
-async def enforce_authentication(request: Request, call_next: CallNext) -> Response:
-    """Outer authentication boundary for open, session, Bearer and Basic access."""
+async def _enforce_authentication_unlocked(request: Request, call_next: CallNext) -> Response:
+    """Authentication implementation; caller serializes auth-config writes."""
     _attach_principal(request, Principal.anonymous())
     cfg = get_settings()
+
+    # CORS middleware is authoritative for preflight. OPTIONS carries no
+    # application mutation and must reach it before interactive authentication.
+    if request.method.upper() == "OPTIONS":
+        return await call_next(request)
 
     if is_public_path(request.url.path):
         return await call_next(request)
 
-    # Application sessions are authoritative even if an intermediary or client
-    # unexpectedly adds another Authorization credential.
     session_token = session_cookie_token(request)
     if session_token:
         record = session_store.resolve(session_token)
@@ -205,12 +205,9 @@ async def enforce_authentication(request: Request, call_next: CallNext) -> Respo
 
     auth_header = str(request.headers.get("Authorization", "") or "")
 
-    # The machine token supplements configured interactive auth. It never turns
-    # deliberate open mode into token-only mode, so Authorization is ignored when
-    # both interactive mechanisms are intentionally disabled.
     if _has_bearer_scheme(auth_header):
         if not interactive_auth_enabled(cfg):
-            return await call_next(request)
+            return await _admit_authenticated(request, call_next, Principal.anonymous(), cfg)
         provided_token = _decode_bearer_token(auth_header)
         if provided_token is not None and api_token_store.verify(provided_token):
             principal = Principal.api_token()
@@ -221,7 +218,7 @@ async def enforce_authentication(request: Request, call_next: CallNext) -> Respo
     if _has_basic_scheme(auth_header):
         if not password_auth_enabled(cfg):
             if not interactive_auth_enabled(cfg):
-                return await call_next(request)
+                return await _admit_authenticated(request, call_next, Principal.anonymous(), cfg)
             return _unauthorized(basic_challenge=True)
         if not password_auth_ready(cfg):
             return JSONResponse(
@@ -230,7 +227,6 @@ async def enforce_authentication(request: Request, call_next: CallNext) -> Respo
             )
         credentials = _decode_basic_credentials(auth_header)
         if credentials is None:
-            # Malformed Basic still pays the bounded dummy Argon2/throttle cost.
             await verify_local_credentials(request, "", "", settings=cfg)
             return _unauthorized(basic_challenge=True)
         provided_user, provided_pass = credentials
@@ -248,9 +244,15 @@ async def enforce_authentication(request: Request, call_next: CallNext) -> Respo
         return _unauthorized(basic_challenge=True)
 
     if not interactive_auth_enabled(cfg):
-        return await call_next(request)
+        # Open mode still runs the auth-transition state machine. This is
+        # critical when an anonymous operator enables the first mechanism.
+        return await _admit_authenticated(request, call_next, Principal.anonymous(), cfg)
 
-    if not (password_auth_ready(cfg) or _oidc_ready(cfg) or (api_token_store.enabled and api_token_store.configured)):
+    if not (
+        password_auth_ready(cfg)
+        or _oidc_ready(cfg)
+        or (api_token_store.enabled and api_token_store.configured)
+    ):
         return JSONResponse(
             content={"detail": "Configured authentication is unavailable"},
             status_code=503,
@@ -260,6 +262,17 @@ async def enforce_authentication(request: Request, call_next: CallNext) -> Respo
         return _browser_login_redirect(request)
 
     return _unauthorized()
+
+
+async def enforce_authentication(request: Request, call_next: CallNext) -> Response:
+    """Outer authentication boundary for open, session, Bearer and Basic access."""
+    if is_auth_settings_mutation(request):
+        # Hold the lock from credential validation through FastAPI route
+        # persistence. This closes the middleware-check/route-commit TOCTOU
+        # window for both broad and dedicated settings APIs.
+        async with authentication_configuration_lock:
+            return await _enforce_authentication_unlocked(request, call_next)
+    return await _enforce_authentication_unlocked(request, call_next)
 
 
 # Compatibility name for phase-2 tests/downstream imports while the manager API

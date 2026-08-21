@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import copy
 import json
 from typing import Any, Mapping
@@ -9,6 +10,7 @@ from fastapi.responses import JSONResponse
 
 from auth.models import AuthMechanism, Principal
 from auth.oidc import OidcConfigurationError, oidc_configuration
+from auth.passwords import is_usable_password_hash
 from auth.policy import interactive_auth_enabled, oidc_auth_enabled, password_auth_enabled
 
 
@@ -28,6 +30,15 @@ CRITICAL_OIDC_FIELDS = frozenset(
 )
 _AUTH_SETTINGS_PATHS = frozenset({"/api/settings", "/api/auth/config"})
 
+# Authentication configuration changes must be evaluated and committed against
+# one authoritative state. Middleware holds this lock through the settings route
+# so concurrent requests cannot both pass lockout checks against stale state.
+authentication_configuration_lock = asyncio.Lock()
+
+
+def is_auth_settings_mutation(request: Request) -> bool:
+    return request.method.upper() == "PUT" and request.url.path in _AUTH_SETTINGS_PATHS
+
 
 def _normalized_list(value: Any, *, casefold: bool = False) -> tuple[str, ...]:
     if not isinstance(value, (list, tuple, set)):
@@ -42,7 +53,7 @@ def _normalized_list(value: Any, *, casefold: bool = False) -> tuple[str, ...]:
 
 
 def _normalized_critical(field: str, value: Any) -> Any:
-    if field in {"oidc_allow_all"}:
+    if field == "oidc_allow_all":
         return bool(value)
     if field == "oidc_scopes":
         scopes = list(_normalized_list(value))
@@ -53,8 +64,12 @@ def _normalized_critical(field: str, value: Any) -> Any:
         return _normalized_list(value, casefold=True)
     if field in {"oidc_allowed_subjects", "oidc_allowed_groups"}:
         return _normalized_list(value)
-    if field in {"oidc_issuer_url", "public_base_url"}:
+    if field == "public_base_url":
         return str(value or "").strip().rstrip("/")
+    if field == "oidc_issuer_url":
+        # OIDC issuer identifiers are exact values. A trailing slash is not
+        # equivalent to the same string without one.
+        return str(value or "").strip()
     return str(value or "").strip()
 
 
@@ -87,7 +102,9 @@ def _prospective_password_ready(payload: Mapping[str, Any], current) -> bool:
     clears = {str(item) for item in payload.get("clear_secrets", []) if str(item)}
     if "auth_password" in clears or payload.get("clear_password") is True:
         stored_hash = ""
-    return bool(username and (plaintext or stored_hash))
+    # New plaintext will be converted to an Argon2id verifier by save_settings.
+    # Existing state counts only when it is already a parseable Argon2id hash.
+    return bool(username and (plaintext or is_usable_password_hash(stored_hash)))
 
 
 def _prospective_oidc_ready(payload: Mapping[str, Any], current) -> bool:
@@ -140,7 +157,7 @@ async def settings_transition_rejection(
     endpoint pass through this single state machine so UI/API compatibility
     cannot create a policy bypass.
     """
-    if request.method.upper() != "PUT" or request.url.path not in _AUTH_SETTINGS_PATHS:
+    if not is_auth_settings_mutation(request):
         return None
 
     try:
@@ -162,7 +179,10 @@ async def settings_transition_rejection(
     # installations do not need to confirm that they remain open.
     if not proposed_password and not proposed_oidc and interactive_auth_enabled(current):
         if not principal.authenticated:
-            return JSONResponse({"detail": "Authentication is required for open-mode transition"}, status_code=401)
+            return JSONResponse(
+                {"detail": "Authentication is required for open-mode transition"},
+                status_code=401,
+            )
         if payload.get("confirm_open_mode") is not True:
             return JSONResponse(
                 {"detail": "Explicit confirmation is required to disable all interactive authentication"},

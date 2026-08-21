@@ -58,9 +58,9 @@ class ProviderGateway:
     def quiescing(self) -> bool:
         return self._quiescing
 
-    def client(self):
-        """Return the configured AllDebrid client for read-only/provider-only operations."""
-        return self.engine.ad()
+    async def get_magnet_files(self, magnet_ids):
+        async with self._operation():
+            return await self.engine.ad().get_magnet_files(magnet_ids)
 
     async def sync_status(self):
         async with self._operation():
@@ -108,4 +108,4 @@ class ProviderGateway:
 
     async def test(self):
         async with self._operation():
-            return await self.client().get_user()
+            return await self.engine.ad().get_user()

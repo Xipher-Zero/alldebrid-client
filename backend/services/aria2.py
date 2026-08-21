@@ -294,7 +294,7 @@ class Aria2Service:
             for attempt in range(1, max_retries + 1):
                 try:
                     gid = await self._call("aria2.addUri", [[normalized_uri], rpc_options])
-                    logger.info("aria2: queued download %s (%s)", sanitize_log_value(normalized_uri, max_length=120), gid)
+                    logger.info("aria2: queued download accepted as GID %s", gid)
                     return gid
                 except Aria2ConnectionError as exc:
                     last_error = exc

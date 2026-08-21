@@ -111,13 +111,17 @@ async def lifespan(app: FastAPI):
         logger.warning("Startup aria2 housekeeping failed: %s", sanitize_exception(exc))
 
     await start_scheduler()
-    yield
-    logger.info("Shutting down %s...", APP_NAME)
-    await stop_scheduler()
     try:
-        await aria2_runtime.stop()
-    except Exception as exc:
-        logger.warning("Built-in aria2 shutdown failed: %s", sanitize_exception(exc))
+        yield
+    finally:
+        logger.info("Shutting down %s...", APP_NAME)
+        try:
+            await stop_scheduler()
+        finally:
+            try:
+                await aria2_runtime.stop()
+            except Exception as exc:
+                logger.warning("Built-in aria2 shutdown failed: %s", sanitize_exception(exc))
 
 
 class _RequestBodyTooLarge(Exception):

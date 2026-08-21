@@ -337,11 +337,8 @@ async def test_alldebrid():
     cfg = get_settings()
     if not cfg.alldebrid_api_key:
         raise HTTPException(400, "No API key configured")
-    from services.alldebrid import AllDebridService
-    svc = AllDebridService(cfg.alldebrid_api_key, cfg.alldebrid_agent)
     try:
-        user = await svc.get_user()
-        await svc.close()
+        user = await transfer_service.provider.test()
         u = user.get("user", user)
         return {
             "ok":           True,
@@ -751,7 +748,7 @@ async def torrent_files_preview(torrent_id: int):
     if not row["alldebrid_id"]:
         raise HTTPException(400, "Torrent has no AllDebrid ID — not ready yet")
     try:
-        files_data = await transfer_service.provider.client().get_magnet_files([str(row["alldebrid_id"])])
+        files_data = await transfer_service.provider.get_magnet_files([str(row["alldebrid_id"])])
         from services.alldebrid import flatten_files
         for entry in files_data:
             if str(entry.get("id", "")) == str(row["alldebrid_id"]):
@@ -807,7 +804,7 @@ async def get_torrent(torrent_id: int):
         return {
             **public_torrent(row),
             "files": [public_download_file(file_row) for file_row in files],
-            "events": [dict(event) for event in events],
+            "events": [public_payload(dict(event)) for event in events],
         }
 
 
@@ -1014,13 +1011,14 @@ async def bulk_action(body: BulkAction):
 @router.get("/events")
 async def get_events(limit: int = Query(200, le=500)):
     async with get_db() as db:
-        return await db.fetchall(
+        rows = await db.fetchall(
             """SELECT e.*, t.name AS torrent_name
                FROM events e
                LEFT JOIN torrents t ON t.id = e.torrent_id
                ORDER BY e.created_at DESC LIMIT ?""",
             (limit,),
         )
+    return public_payload(rows)
 
 
 @router.get("/admin/performance")
@@ -1600,7 +1598,7 @@ async def list_stats_snapshots(limit: int = Query(30, le=100)):
             "SELECT id, created_at FROM stats_snapshots ORDER BY created_at DESC LIMIT ?",
             (limit,),
         )
-    return {"snapshots": rows}
+    return {"snapshots": public_payload(rows)}
 
 
 @router.get("/stats/export")

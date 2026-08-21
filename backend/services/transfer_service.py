@@ -66,10 +66,6 @@ class TransferService:
 
     # ----- provider boundary -----
 
-    def ad(self):
-        """Compatibility name retained for one provider-only route; no fallback."""
-        return self.provider.client()
-
     async def sync_alldebrid_status(self):
         async with self._application_maintenance.operation():
             return await self.provider.sync_status()

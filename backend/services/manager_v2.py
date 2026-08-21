@@ -230,9 +230,13 @@ def _terminal_torrent_status(status: str) -> bool:
     return status in {"completed", "deleted", "error"}
 
 
-def _safe_persisted_error(exc: BaseException) -> str:
+def _safe_persisted_error(exc: BaseException, capability: str = "") -> str:
     """Never persist provider/download capability material from an exception."""
-    return sanitize_exception(exc, max_length=300)
+    raw = str(exc).strip() or repr(exc)
+    exact = str(capability or "").strip()
+    if exact:
+        raw = raw.replace(exact, "<capability-url>")
+    return sanitize_exception(Exception(raw), max_length=300)
 
 
 def _aria2_status_rank(status: str) -> int:
@@ -1231,7 +1235,7 @@ class TorrentManager:
                                 row["source_url"], row["index"]
                             ),
                             "size_bytes": 0,
-                            "error": sanitize_exception(exc, max_length=500),
+                            "error": _safe_persisted_error(exc, row["source_url"]),
                             "missing": (
                                 isinstance(exc, AllDebridAPIError)
                                 and exc.code == "LINK_DOWN"
@@ -3459,7 +3463,13 @@ class TorrentManager:
                 local_path = Path(row["local_path"])
                 if row["_err"]:
                     error = row["_err"]
-                    error_text = str(error)
+                    capability = str(
+                        row.get("source_url")
+                        if row.get("transfer_source") == DIRECT_LINK_SOURCE
+                        else row.get("download_url")
+                        or ""
+                    ).strip()
+                    error_text = _safe_persisted_error(error, capability)
                     provider_code = str(getattr(error, "code", "") or "")
                     if (
                         provider_code == "LINK_HOST_NOT_SUPPORTED"
@@ -3483,7 +3493,7 @@ class TorrentManager:
                         logger.error(
                             "aria2 dispatch failed [%s]: %s",
                             row["filename"],
-                            error,
+                            error_text,
                         )
                         await self._update_file_state(
                             row["file_id"],

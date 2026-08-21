@@ -1,5 +1,4 @@
 import asyncio
-import base64
 import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
@@ -224,59 +223,43 @@ def _request(method: str, path: str, headers: dict[str, str]) -> Request:
 
 
 @pytest.mark.asyncio
-async def test_basic_auth_rejects_cross_origin_mutation(monkeypatch):
-    import core.config
-    import main
+async def test_browser_security_rejects_cross_origin_mutation():
+    from auth.middleware import enforce_general_web_security
 
-    monkeypatch.setattr(
-        core.config,
-        "get_settings",
-        lambda: SimpleNamespace(auth_username="user", auth_password="pass"),
-    )
-    token = base64.b64encode(b"user:pass").decode()
     request = _request(
         "POST",
         "/api/does-not-exist",
         {
-            "Authorization": f"Basic {token}",
             "Origin": "https://evil.invalid",
             "Host": "testserver",
+            "Sec-Fetch-Site": "cross-site",
         },
     )
     call_next = AsyncMock(return_value=Response(status_code=204))
-    response = await main.basic_auth_middleware(request, call_next)
+    response = await enforce_general_web_security(request, call_next)
     assert response.status_code == 403
     call_next.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_basic_auth_allows_same_origin_and_nonbrowser_clients(monkeypatch):
-    import core.config
-    import main
-
-    monkeypatch.setattr(
-        core.config,
-        "get_settings",
-        lambda: SimpleNamespace(auth_username="user", auth_password="pass"),
-    )
-    token = base64.b64encode(b"user:pass").decode()
-    auth = f"Basic {token}"
+async def test_browser_security_allows_same_origin_and_nonbrowser_clients():
+    from auth.middleware import enforce_general_web_security
 
     same_origin = _request(
         "POST",
         "/api/test",
-        {"Authorization": auth, "Origin": "http://testserver", "Host": "testserver"},
+        {"Origin": "http://testserver", "Host": "testserver"},
     )
     call_next = AsyncMock(return_value=Response(status_code=204))
-    assert (await main.basic_auth_middleware(same_origin, call_next)).status_code == 204
+    assert (await enforce_general_web_security(same_origin, call_next)).status_code == 204
 
     script_client = _request(
         "POST",
         "/api/test",
-        {"Authorization": auth, "Host": "testserver"},
+        {"Host": "testserver"},
     )
     call_next = AsyncMock(return_value=Response(status_code=204))
-    assert (await main.basic_auth_middleware(script_client, call_next)).status_code == 204
+    assert (await enforce_general_web_security(script_client, call_next)).status_code == 204
 
 
 def test_readme_describes_sqlite_only_runtime():

@@ -68,6 +68,14 @@ def _validate(cfg) -> List[Tuple[str, str, Any, Any]]:
         if val and not _is_valid_url(val):
             warn(field, "not a valid HTTP(S) URL — webhook will not fire", val)
 
+    if getattr(cfg, "auth_oidc_enabled", False):
+        issuer = getattr(cfg, "oidc_issuer_url", "")
+        if issuer and not _is_valid_url(issuer, require_https=True):
+            warn("oidc_issuer_url", "OIDC issuer must use HTTPS", issuer)
+        public_base = getattr(cfg, "public_base_url", "")
+        if public_base and not _is_valid_url(public_base, require_https=True):
+            warn("public_base_url", "OIDC public base URL must use HTTPS", public_base)
+
     # Discord avatar must be a real HTTP URL, not a data URI or SVG
     avatar = cfg.discord_avatar_url or ""
     if avatar.startswith("data:"):
@@ -139,7 +147,10 @@ def _validate(cfg) -> List[Tuple[str, str, Any, Any]]:
              cfg.aria2_mode, "external")
 
     # ── List fields ───────────────────────────────────────────────────────────
-    for field in ("blocked_extensions", "blocked_keywords", "torrent_labels"):
+    for field in (
+        "blocked_extensions", "blocked_keywords", "torrent_labels",
+        "oidc_scopes", "oidc_allowed_subjects", "oidc_allowed_emails", "oidc_allowed_groups",
+    ):
         val = getattr(cfg, field, None)
         if val is not None and not isinstance(val, list):
             warn(field, f"expected list, got {type(val).__name__} — reset to []", val, [])
@@ -161,7 +172,8 @@ def validate_and_sanitise(cfg) -> Any:
     sensitive = {
         "alldebrid_api_key", "aria2_secret", "discord_webhook_url",
         "discord_webhook_added", "stats_report_webhook_url",
-        "auth_password", "auth_password_hash", "extraction_password",
+        "auth_password", "auth_password_hash", "oidc_client_secret",
+        "extraction_password",
     }
     fixes: Dict[str, Any] = {}
     for field, msg, bad, fixed in issues:

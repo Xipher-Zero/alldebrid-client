@@ -181,6 +181,9 @@ class AppSettings(BaseModel):
     auth_username: str = ""
     auth_password_hash: str = Field(default="", exclude=True)
     auth_password: str = ""
+    # Transient destructive write intent. Excluded from serialization and never
+    # persisted; it exists so an empty password can mean clear rather than keep.
+    auth_password_hash_clear: bool = Field(default=False, exclude=True)
     # Browser application sessions use absolute expiration, not sliding expiry.
     auth_session_lifetime_hours: int = 12
 
@@ -311,7 +314,10 @@ def save_settings(s: AppSettings):
     """Atomically persist configuration with secret-safe filesystem permissions."""
     global _settings
     plaintext = str(getattr(s, "auth_password", "") or "")
-    if plaintext:
+    if bool(getattr(s, "auth_password_hash_clear", False)):
+        s.auth_password_hash = ""
+        s.auth_password = ""
+    elif plaintext:
         s.auth_password_hash = hash_password(plaintext)
         s.auth_password = ""
     elif not str(getattr(s, "auth_password_hash", "") or "").strip():
@@ -345,6 +351,12 @@ def save_settings(s: AppSettings):
         os.chmod(CONFIG_PATH, 0o600)
     except OSError:
         pass
+
+    # Transient secret-write intent is consumed by this persistence operation.
+    # Reset it on the object that callers normally install as live settings so a
+    # later unrelated save cannot repeat an old destructive action.
+    s.auth_password_hash_clear = False
+    s.oidc_client_secret_clear = False
 
 
 def apply_settings(s: AppSettings):

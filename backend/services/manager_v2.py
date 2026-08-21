@@ -3750,8 +3750,8 @@ class TorrentManager:
                     )
                 elif remote_path or url:
                     logger.info(
-                        "sync_aria2: aria2 entry not found for torrent %s file %s (path=%s, url=%s) -> scheduling reset",
-                        row["torrent_id"], row["file_id"], remote_path or "-", url or "-",
+                        "sync_aria2: aria2 entry not found for torrent %s file %s (path=%s) -> scheduling reset",
+                        row["torrent_id"], row["file_id"], remote_path or "-",
                     )
                     reset_on_sync.add(row["torrent_id"])
                     continue

@@ -17,21 +17,35 @@ annotated-doc==0.0.4
 annotated-types==0.7.0
     # via pydantic
 anyio==4.13.0
-    # via starlette
+    # via
+    #   httpx
+    #   starlette
 argon2-cffi==25.1.0
     # via -r requirements.in
 argon2-cffi-bindings==26.1.0
     # via argon2-cffi
 attrs==26.1.0
     # via aiohttp
+authlib==1.7.2
+    # via -r requirements.in
 bencode2==0.3.33
     # via -r requirements.in
+certifi==2026.7.22
+    # via
+    #   httpcore
+    #   httpx
 cffi==2.1.1
-    # via argon2-cffi-bindings
+    # via
+    #   argon2-cffi-bindings
+    #   cryptography
 click==8.3.3
     # via uvicorn
 coverage==7.14.0
     # via pytest-cov
+cryptography==50.0.0
+    # via
+    #   authlib
+    #   joserfc
 fastapi==0.141.1
     # via -r requirements.in
 frozenlist==1.8.0
@@ -39,15 +53,24 @@ frozenlist==1.8.0
     #   aiohttp
     #   aiosignal
 h11==0.16.0
-    # via uvicorn
+    # via
+    #   httpcore
+    #   uvicorn
+httpcore==1.0.9
+    # via httpx
 httptools==0.8.0
+    # via -r requirements.in
+httpx==0.28.1
     # via -r requirements.in
 idna==3.15
     # via
     #   anyio
+    #   httpx
     #   yarl
 iniconfig==2.3.0
     # via pytest
+joserfc==1.7.4
+    # via authlib
 multidict==6.7.1
     # via
     #   aiohttp

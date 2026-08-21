@@ -63,3 +63,12 @@ class Principal:
             subject=username,
             display_name=username,
         )
+
+    @classmethod
+    def api_token(cls) -> "Principal":
+        return cls(
+            authenticated=True,
+            mechanism=AuthMechanism.API_TOKEN,
+            subject="api-token",
+            display_name="API token",
+        )

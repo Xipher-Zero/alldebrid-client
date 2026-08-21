@@ -1,3 +1,4 @@
+import pytest
 from fastapi import Request
 
 from api import auth_routes
@@ -24,6 +25,7 @@ def _request():
     return request
 
 
-def test_session_status_response_is_never_cacheable():
-    response = auth_routes.auth_session_status(_request())
+@pytest.mark.asyncio
+async def test_session_status_response_is_never_cacheable():
+    response = await auth_routes.auth_session_status(_request())
     assert response.headers["Cache-Control"] == "no-store"

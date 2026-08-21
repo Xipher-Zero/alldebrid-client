@@ -133,7 +133,7 @@ def test_login_csrf_is_one_time_bounded_and_expires():
     assert store.consume(nonce, token) is False
 
     n1, _ = store.issue()
-    n2, _ = store.issue()
+    store.issue()
     n3, t3 = store.issue()
     assert store.size == 2
     assert store.consume(n1, "wrong") is False
@@ -231,6 +231,31 @@ async def test_password_change_invalidates_existing_browser_session(monkeypatch)
     assert response.status_code == 303
     assert response.headers["location"].startswith("/login?next=")
     assert session_store.resolve(token) is None
+
+
+@pytest.mark.asyncio
+async def test_login_page_clears_stale_password_session(monkeypatch):
+    new_cfg = _settings(password="new-secret")
+    old_cfg = _settings(password="old-secret")
+    monkeypatch.setattr(auth_routes, "get_settings", lambda: new_cfg)
+    session_store.clear()
+    login_csrf_store.clear()
+    token, _ = session_store.create(
+        Principal.password_session("operator"),
+        lifetime_seconds=3600,
+        credential_version=password_credential_version(old_cfg.auth_password_hash),
+    )
+    request = _request(
+        "GET",
+        path="/login",
+        headers={"Host": "debridpulse.local", "Cookie": f"{HTTP_SESSION_COOKIE}={token}"},
+    )
+    response = await auth_routes.login_page(request, next="/stats")
+    assert response.status_code == 200
+    assert session_store.resolve(token) is None
+    expired = _response_cookie(response, HTTP_SESSION_COOKIE)
+    assert expired is not None
+    assert expired["max-age"] == "0"
 
 
 @pytest.mark.asyncio

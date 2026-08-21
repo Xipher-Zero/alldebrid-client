@@ -183,11 +183,25 @@ def session_cookie_name(request: Request) -> str:
 
 
 def session_cookie_token(request: Request) -> str:
-    return str(request.cookies.get(session_cookie_name(request), "") or "")
+    # Prefer the secure cookie regardless of proxy-internal request scheme. OIDC
+    # always issues the __Host- cookie and callback/session admission must not
+    # depend on trusting forwarded headers to locate it.
+    return str(
+        request.cookies.get(HTTPS_SESSION_COOKIE)
+        or request.cookies.get(HTTP_SESSION_COOKIE)
+        or ""
+    )
 
 
-def set_session_cookie(response: Response, request: Request, token: str, *, max_age: int) -> None:
-    secure = request_is_secure(request)
+def set_session_cookie(
+    response: Response,
+    request: Request,
+    token: str,
+    *,
+    max_age: int,
+    force_secure: bool = False,
+) -> None:
+    secure = bool(force_secure or request_is_secure(request))
     response.set_cookie(
         key=HTTPS_SESSION_COOKIE if secure else HTTP_SESSION_COOKIE,
         value=str(token),
@@ -200,11 +214,19 @@ def set_session_cookie(response: Response, request: Request, token: str, *, max_
 
 
 def clear_session_cookie(response: Response, request: Request) -> None:
-    secure = request_is_secure(request)
+    # Clear both names. A secure OIDC session may arrive through a proxy whose
+    # internal hop is HTTP and must still be removable without scheme inference.
     response.delete_cookie(
-        key=HTTPS_SESSION_COOKIE if secure else HTTP_SESSION_COOKIE,
+        key=HTTPS_SESSION_COOKIE,
         path="/",
-        secure=secure,
+        secure=True,
+        httponly=True,
+        samesite="lax",
+    )
+    response.delete_cookie(
+        key=HTTP_SESSION_COOKIE,
+        path="/",
+        secure=False,
         httponly=True,
         samesite="lax",
     )

@@ -10,7 +10,6 @@ from fastapi import Request, Response
 from auth.models import Principal
 from auth.policy import (
     MUTATING_HTTP_METHODS,
-    configured_origin_hosts,
     is_public_path,
     normalized_origin_host,
     password_auth_configured,
@@ -60,8 +59,12 @@ async def enforce_general_web_security(
     origin = str(request.headers.get("Origin", "") or "").strip()
     origin_host = normalized_origin_host(origin) if origin else ""
     request_host = str(request.headers.get("Host", "") or "").strip().casefold()
-    configured = configured_origin_hosts(allowed_origins)
-    configured_cross_origin = bool(origin_host and origin_host in configured)
+    configured_origins = {
+        str(item or "").strip().rstrip("/")
+        for item in allowed_origins
+        if str(item or "").strip()
+    }
+    configured_cross_origin = bool(origin and origin.rstrip("/") in configured_origins)
 
     fetch_site = str(request.headers.get("Sec-Fetch-Site", "") or "").strip().casefold()
     if fetch_site == "cross-site" and not configured_cross_origin:

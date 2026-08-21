@@ -10,6 +10,7 @@ from auth.models import Principal
 from auth.transitions import settings_transition_rejection
 from core import config as config_module
 from core.config import AppSettings
+from core.config_validator import validate_and_sanitise
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -120,6 +121,24 @@ def test_auth_secret_clear_intents_are_transient_and_not_serialized():
     assert "oidc_client_secret_clear" not in dumped
     assert "auth_password_hash" not in dumped
     assert "oidc_client_secret" not in dumped
+
+
+def test_validation_rebuild_preserves_hidden_auth_secret_state():
+    cfg = AppSettings(
+        discord_avatar_url="data:image/png;base64,invalid",
+        auth_password_hash_clear=True,
+        oidc_client_secret_clear=True,
+    )
+    cfg.auth_password_hash = "stored-password-hash"
+    cfg.oidc_client_secret = "stored-oidc-secret"
+
+    validated = validate_and_sanitise(cfg)
+
+    assert validated.discord_avatar_url == ""
+    assert validated.auth_password_hash == "stored-password-hash"
+    assert validated.oidc_client_secret == "stored-oidc-secret"
+    assert validated.auth_password_hash_clear is True
+    assert validated.oidc_client_secret_clear is True
 
 
 def test_save_settings_explicitly_clears_password_hash_and_consumes_secret_intent(monkeypatch, tmp_path):

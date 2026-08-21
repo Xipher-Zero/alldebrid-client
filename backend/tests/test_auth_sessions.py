@@ -1,5 +1,6 @@
 import base64
 from http.cookies import SimpleCookie
+from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import urlencode
 
@@ -20,6 +21,9 @@ from auth.sessions import (
     set_session_cookie,
 )
 from auth.throttle import password_failure_throttle
+
+
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def _settings(*, enabled=True, username="operator", password="secret", lifetime=12):
@@ -91,6 +95,19 @@ def _response_cookie(response, name):
 
 async def _ok(_request):
     return Response(content="ok", status_code=200)
+
+
+def test_auth_bootstrap_loads_before_application_javascript():
+    index = (ROOT / "frontend/static/index.html").read_text()
+    auth_tag = '<script src="/auth.js?v=1" defer></script>'
+    app_tag = '<script src="/app.js?v=12" defer></script>'
+    assert auth_tag in index
+    assert app_tag in index
+    assert index.index(auth_tag) < index.index(app_tag)
+    auth_js = (ROOT / "frontend/static/auth.js").read_text()
+    assert "localStorage" not in auth_js
+    assert "sessionStorage" not in auth_js
+    assert "X-CSRF-Token" in auth_js
 
 
 def test_session_store_is_bounded_absolute_and_opaque():

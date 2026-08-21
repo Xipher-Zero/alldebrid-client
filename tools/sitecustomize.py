@@ -1,9 +1,9 @@
 """Temporary v1.0.6 patch-harness fixup.
 
-Python imports this module before executing scripts from this directory.  The
-first invocation rewrites two stale source-match blocks in the corrective
-patcher.  A later invocation removes this helper after those rewrites have
-landed in the runner worktree.
+The runner invokes this helper before the corrective patcher. It aligns stale
+source-match assumptions with the audited candidate while keeping ownership
+semantics conservative. A second invocation removes and stages this helper for
+deletion so it cannot survive in the validated product commit.
 """
 from __future__ import annotations
 
@@ -42,10 +42,24 @@ new_direct = '''replace_once(
 )
 '''
 
+old_import = '''# Imported/observed AllDebrid rows remain observation-only when revived.
+replace_once(
+    manager_path,
+    """                        SET name=?, alldebrid_id=?, status=?,\\n                            provider_status=?, provider_status_code=?,\\n""",
+    """                        SET name=?, alldebrid_id=?, status=?,\\n                            source='alldebrid_existing',\\n                            provider_status=?, provider_status_code=?,\\n""",
+)
+'''
+new_import = '''# Existing rows retain their original source provenance. New provider-only
+# observations are already inserted with source="alldebrid_existing" by
+# import_existing_magnets(); overwriting existing source here would incorrectly
+# revoke ownership from objects this instance actually created.
+'''
+
 changed = False
 for old, new, label in (
     (old_ready, new_ready, "ready-parent"),
     (old_direct, new_direct, "direct-link"),
+    (old_import, new_import, "import ownership provenance"),
 ):
     if old in text:
         text = text.replace(old, new, 1)
@@ -56,9 +70,6 @@ for old, new, label in (
 if changed:
     PATCHER.write_text(text, encoding="utf-8")
 else:
-    # The patcher is already fixed in this runner. Remove this temporary helper
-    # during the postpatch Python invocation and pre-stage its deletion so the
-    # validated product commit cannot retain it.
     try:
         Path(__file__).unlink()
         subprocess.run(

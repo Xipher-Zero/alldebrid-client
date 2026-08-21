@@ -102,7 +102,9 @@ jobs:
           fetch-depth: 0
 
       - name: Apply follow-up audit corrections
-        run: python tools/v106_followup_patch.py
+        run: |
+          python tools/v106_followup_prepatch.py
+          python tools/v106_followup_patch.py
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v6
@@ -140,11 +142,8 @@ jobs:
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-
-          # Remove the temporary execution harness and restore the normal CI file.
           git checkout a4642bd6979c9cbc73fbb5e3e2e9be83f9ab287b -- .github/workflows/tests.yml
-          rm -f tools/v106_followup_patch.py
-
+          rm -f tools/v106_followup_patch.py tools/v106_followup_prepatch.py
           git add \
             frontend/static/app.js \
             backend/db/database.py \
@@ -157,7 +156,7 @@ jobs:
             CHANGELOG.md \
             SECURITY.md \
             .github/workflows/tests.yml
-          git add -u -- tools/v106_followup_patch.py
+          git add -u -- tools/v106_followup_patch.py tools/v106_followup_prepatch.py
           git diff --cached --check
           git commit -m 'fix: close remaining v1.0.6 audit defects'
           git push origin HEAD:work/v1.0.6-audit-cleanup

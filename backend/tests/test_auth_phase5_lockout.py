@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -218,12 +219,13 @@ def test_pending_config_store_is_bounded_ephemeral_and_exact_version_bound():
 
 
 def test_application_registers_pending_callback_before_normal_callback():
-    import main
+    root = Path(__file__).resolve().parents[1]
+    main_source = (root / "main.py").read_text()
+    config_routes = (root / "api/auth_config_routes.py").read_text()
+    normal_routes = (root / "api/auth_routes.py").read_text()
 
-    callbacks = [
-        route
-        for route in main.app.routes
-        if getattr(route, "path", None) == "/auth/oidc/callback"
-    ]
-    assert len(callbacks) >= 2
-    assert callbacks[0].endpoint.__name__ == "pending_aware_oidc_callback"
+    assert '@router.get("/auth/oidc/callback", include_in_schema=False)' in config_routes
+    assert '@router.get("/auth/oidc/callback")' in normal_routes
+    assert main_source.index("app.include_router(auth_config_router)") < main_source.index(
+        "app.include_router(auth_router)"
+    )

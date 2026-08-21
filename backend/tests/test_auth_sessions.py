@@ -219,6 +219,22 @@ def test_login_route_remains_behind_general_cross_site_mutation_defense():
 
 
 @pytest.mark.asyncio
+async def test_open_mode_session_status_is_anonymous_and_login_is_bypassed(monkeypatch):
+    cfg = _settings(enabled=False)
+    monkeypatch.setattr(auth_routes, "get_settings", lambda: cfg)
+    request = _request("GET", path="/login", headers={"Host": "debridpulse.local"})
+    response = await auth_routes.login_page(request, next="/stats")
+    assert response.status_code == 303
+    assert response.headers["location"] == "/stats"
+
+    status_request = _request("GET", path="/api/auth/session", headers={"Host": "debridpulse.local"})
+    status_request.state.principal = Principal.anonymous()
+    data = await auth_routes.auth_session_status(status_request)
+    assert data["authenticated"] is False
+    assert data["csrf_token"] == ""
+
+
+@pytest.mark.asyncio
 async def test_session_mutation_requires_csrf_and_correct_token_passes(monkeypatch):
     import auth.middleware as middleware
 

@@ -256,6 +256,7 @@ def test_disk_guard_comment_matches_runtime_contract():
 def test_scheduler_stop_intent_is_marked_before_interruptible_await():
     root = Path(__file__).parents[2]
     source = (root / "backend" / "api" / "routes.py").read_text()
-    intent = source.index("scheduler_stopped = scheduler_was_running")
+    initial = source.index("scheduler_stopped = False")
+    intent = source.index("scheduler_stopped = True", initial)
     stop = source.index("await scheduler_runtime.stop_scheduler()", intent)
-    assert intent < stop
+    assert initial < intent < stop

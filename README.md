@@ -54,7 +54,7 @@ DebridPulse can manage its own built-in aria2 instance or safely use a shared ex
 | **Notifications** | Optional Discord notifications for download lifecycle events |
 | **Prometheus metrics** | Application and transfer metrics through `/api/metrics` |
 | **SQLite persistence** | SQLite/WAL is the authoritative application datastore |
-| **Access control** | Optional HTTP Basic Authentication |
+| **Native authentication** | Intentional no-auth mode, Username & Password browser sessions + HTTP Basic API access, provider-neutral OIDC, and optional bearer tokens for machine clients |
 
 ---
 
@@ -143,7 +143,7 @@ Open:
 http://your-server:8080
 ```
 
-Go to **Settings → General** and configure your AllDebrid API key.
+Go to **Settings → General** and configure your AllDebrid API key. If the installation is reachable by users or networks you do not fully trust, configure native access control under **Settings → Authentication** before exposing it beyond that trusted boundary.
 
 ### Docker image
 
@@ -187,7 +187,24 @@ Configure:
 
 - AllDebrid API key;
 - AllDebrid agent name;
-- optional HTTP Basic Authentication.
+- disk-space guard and provider retry/rate-limit behavior.
+
+### Authentication
+
+Authentication has its own Settings tab and is not configured in General.
+
+DebridPulse supports four effective interactive states:
+
+- **No authentication** — supported for trusted standalone/LAN deployments;
+- **Username & Password** — browser sign-in through the DebridPulse login page, with HTTP Basic available to REST clients using the same credentials;
+- **OIDC** — provider-neutral OpenID Connect Authorization Code + PKCE browser sign-in;
+- **Username & Password + OIDC** — OIDC-preferred browser UX with the known-working local password path retained.
+
+An independent `dp_...` bearer token can be generated for automation, Prometheus, scripts, and other machine clients. The raw token is shown only once and is never persisted.
+
+DebridPulse includes lockout protections: Password cannot be disabled in favor of OIDC until a real OIDC login succeeds, and critical OIDC changes in OIDC-only mode stay pending until the proposed configuration itself completes a successful sign-in. Deliberately disabling all interactive authentication requires explicit confirmation.
+
+See **[docs/authentication.md](docs/authentication.md)** for configuration examples, reverse-proxy/OIDC callback guidance, API authentication, credential lifecycle, and recovery behavior.
 
 ### Download
 
@@ -256,6 +273,8 @@ Transfers can be searched and filtered by state, with retry, reset, pause, resum
 
 DebridPulse exposes a REST API used by the web interface and available for external automation.
 
+When Username & Password authentication is enabled, REST clients may use standard HTTP Basic with the same credentials as the browser login. When an API token is enabled, clients may instead send `Authorization: Bearer dp_...`. In an intentional no-auth deployment the API remains open. See [docs/authentication.md](docs/authentication.md) for precedence and security details.
+
 ### Download submission and management
 
 | Method | Path | Description |
@@ -276,12 +295,24 @@ DebridPulse exposes a REST API used by the web interface and available for exter
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/api/stats` | Application and transfer statistics |
-| `GET` | `/api/settings` | Current application settings |
-| `PUT` | `/api/settings` | Update application settings |
+| `GET` | `/api/settings` | Current redacted application settings |
+| `PUT` | `/api/settings` | Update application settings; legacy auth-compatible path remains subject to the same lockout policy |
 | `GET` | `/api/events/stream` | Server-Sent Events status stream |
 | `GET` | `/api/metrics` | Prometheus-compatible metrics |
 | `GET` | `/api/version` | DebridPulse version |
 | `GET` | `/api/health` | Lightweight application health endpoint |
+
+### Authentication API
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/auth/status` | Minimal public login/bootstrap authentication state |
+| `GET` | `/api/auth/session` | Current application-session state |
+| `POST` | `/api/auth/logout` | Revoke the current browser application session |
+| `GET` | `/api/auth/config` | Redacted authentication configuration/status |
+| `PUT` | `/api/auth/config` | Update native authentication configuration through the lockout state machine |
+| `POST` | `/api/auth/oidc/verify-config` | Stage proposed OIDC settings and start full verification sign-in |
+| `GET/PUT/POST/DELETE` | `/api/auth/api-token` | Inspect, enable/disable, generate/rotate, or clear the machine bearer credential |
 
 ---
 
@@ -337,7 +368,18 @@ The primary implementation areas are:
 backend/
   api/
     routes.py
+    auth_routes.py
+    auth_config_routes.py
     serializers.py
+  auth/
+    manager.py
+    middleware.py
+    passwords.py
+    sessions.py
+    oidc.py
+    pending_oidc.py
+    api_tokens.py
+    transitions.py
   core/
     scheduler.py
   services/
@@ -358,8 +400,13 @@ backend/
 frontend/static/
   index.html
   app.js
+  auth.js
+  auth-settings.js
+  auth-help.js
   style.css
 ```
+
+Runtime dependencies are exactly pinned through `backend/requirements.in` → `backend/requirements.txt`. Python runtime license metadata is checked against `licenses/python-runtime.json`; published images also carry BuildKit provenance and SBOM attestations. See [`docs/DEPENDENCY_LICENSES.md`](docs/DEPENDENCY_LICENSES.md).
 
 ---
 

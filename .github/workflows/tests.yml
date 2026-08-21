@@ -33,6 +33,11 @@ jobs:
           else
             echo 'Corrective source already present'
           fi
+          if grep -q 'safe_error = sanitize_log_value(last_error' backend/services/aria2.py; then
+            python tools/v106_post_validation_hardening.py
+          else
+            echo 'Post-validation hardening already present'
+          fi
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v6
@@ -92,11 +97,12 @@ jobs:
             backend/services/transfer_service.py \
             backend/tests/test_license_policy.py \
             backend/tests/test_v1_scope.py \
+            backend/tests/test_v106_final_audit.py \
             frontend/static/app.js \
             NOTICE
           git diff --cached --check
           if ! git diff --cached --quiet; then
-            git commit -m "Fix final v1.0.6 audit findings"
+            git commit -m "Harden final v1.0.6 audit fixes"
             git push origin HEAD:work/v1.0.6-audit-cleanup
           fi
 

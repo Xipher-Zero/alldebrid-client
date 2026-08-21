@@ -263,7 +263,7 @@ class Aria2Service:
                     if dl.status in {"complete", "removed"}:
                         for dup in matches:
                             if dup.gid != dl.gid and dup.status not in {"complete", "removed"}:
-                                logger.warning("Removing stale duplicate aria2 entry %s for %s", dup.gid, normalized_uri)
+                                logger.warning("Removing stale duplicate aria2 entry %s for queued download", dup.gid)
                                 await self.remove(dup.gid)
                         return dl.gid
             else:
@@ -271,7 +271,7 @@ class Aria2Service:
 
             if len(matches) > 1:
                 for dup in matches[1:]:
-                    logger.warning("Removing duplicate aria2 entry %s for %s", dup.gid, normalized_uri)
+                    logger.warning("Removing duplicate aria2 entry %s for queued download", dup.gid)
                     await self.remove(dup.gid)
 
             if matches:
@@ -284,6 +284,12 @@ class Aria2Service:
             if start_paused:
                 rpc_options["pause"] = "true"
 
+            def safe_download_error(exc: BaseException) -> str:
+                # Strip the exact capability first; generic sanitization is then
+                # defense in depth rather than the capability boundary itself.
+                raw = str(exc).replace(normalized_uri, "<download-url>")
+                return sanitize_log_value(raw, max_length=200)
+
             last_error: Optional[Exception] = None
             for attempt in range(1, max_retries + 1):
                 try:
@@ -295,29 +301,33 @@ class Aria2Service:
                     if attempt >= max_retries:
                         break
                     delay = min(attempt * attempt, 10)
-                    logger.warning("aria2 unreachable (attempt %s/%s), retrying in %ss: %s", attempt, max_retries, delay, exc)
+                    logger.warning(
+                        "aria2 unreachable (attempt %s/%s), retrying in %ss: %s",
+                        attempt,
+                        max_retries,
+                        delay,
+                        safe_download_error(exc),
+                    )
                     await asyncio.sleep(delay)
-                except Aria2RPCError:
-                    raise
+                except Aria2RPCError as exc:
+                    logger.warning("aria2 rejected download request: %s", safe_download_error(exc))
+                    raise Aria2RPCError("aria2 rejected download request") from exc
                 except Exception as exc:
                     last_error = exc
                     if attempt >= max_retries:
                         break
                     delay = min(attempt * attempt, 10)
                     logger.warning(
-                        "Error queuing download (attempt %s/%s) for %s, retrying in %ss: %s",
+                        "Error queuing download (attempt %s/%s), retrying in %ss: %s",
                         attempt,
                         max_retries,
-                        sanitize_log_value(normalized_uri, max_length=120),
                         delay,
-                        sanitize_log_value(exc, max_length=200),
+                        safe_download_error(exc),
                     )
                     await asyncio.sleep(delay)
 
-        safe_error = sanitize_log_value(last_error, max_length=200)
-        raise Aria2RPCError(
-            f"Unable to queue aria2 download after retries: {safe_error or 'unknown aria2 error'}"
-        )
+        error_type = type(last_error).__name__ if last_error is not None else "unknown error"
+        raise Aria2RPCError(f"Unable to queue aria2 download after retries ({error_type})")
 
     def _find_all_matches(
         self,

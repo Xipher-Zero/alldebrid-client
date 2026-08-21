@@ -18,7 +18,7 @@ from pathlib import Path
 
 logger = logging.getLogger("alldebrid.backup")
 
-_BACKUP_DIR_RE = re.compile(r"^\d{8}_\d{6}(?:_[0-9a-f]{8})?$")
+_BACKUP_DIR_RE = re.compile(r"^\d{8}_\d{6}(?:_[0-9a-f]{8}|_[0-9a-f]{32})?$")
 _BACKUP_RUN_LOCK = asyncio.Lock()
 _MANIFEST_NAME = ".debridpulse-backup.json"
 _MANIFEST_KIND = "debridpulse-backup"
@@ -92,9 +92,9 @@ async def _run_backup_locked() -> dict:
 
     backup_folder.mkdir(parents=True, exist_ok=True)
     _chmod_private(backup_folder, 0o700)
-    ts = f"{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+    ts = f"{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex}"
     backup_dir = backup_folder / ts
-    backup_dir.mkdir(parents=True, exist_ok=True)
+    backup_dir.mkdir(parents=True, exist_ok=False)
     _chmod_private(backup_dir, 0o700)
 
     backed_up: list[str] = []

@@ -112,7 +112,7 @@ async def test_provider_quiescence_cancellation_reopens_admission():
 async def test_aria2_failure_never_exposes_capability_and_uri_lock_is_released(monkeypatch, caplog):
     import services.aria2 as aria2_module
 
-    capability = "https://locked.example.invalid/download/" + ("capability-" * 20)
+    capability = "https://locked.example.invalid/cap"
     service = Aria2Service("http://127.0.0.1:6800/jsonrpc")
     monkeypatch.setattr(aria2_module, "_is_builtin_mode", lambda: False)
 
@@ -222,7 +222,7 @@ def test_backup_ids_are_unique_and_backward_compatible():
     from services import backup, db_maintenance
 
     generated = {
-        f"20260820_200000_{__import__('uuid').uuid4().hex[:8]}"
+        f"20260820_200000_{__import__('uuid').uuid4().hex}"
         for _ in range(40)
     }
     assert len(generated) == 40

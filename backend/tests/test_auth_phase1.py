@@ -9,6 +9,7 @@ from auth.middleware import enforce_general_web_security, enforce_password_http_
 from auth.models import AuthMechanism, Principal
 from auth.passwords import hash_password
 from auth.policy import is_public_path, password_auth_configured
+from auth.throttle import password_failure_throttle
 
 
 def _request(method="GET", path="/api/stats", headers=None):
@@ -158,7 +159,7 @@ async def test_password_http_auth_rejects_bad_and_malformed_credentials(monkeypa
     import auth.middleware as middleware
 
     monkeypatch.setattr(middleware, "get_settings", lambda: _password_settings())
-    middleware.password_failure_throttle.clear()
+    password_failure_throttle.clear()
 
     wrong = _request("GET", headers={"Authorization": _basic("operator", "wrong")})
     wrong_response = await enforce_password_http_auth(wrong, _ok)
@@ -205,7 +206,7 @@ async def test_public_routes_and_open_mode_remain_admitted(monkeypatch):
 
 def test_main_only_installs_auth_boundary():
     main = (Path(__file__).resolve().parents[1] / "main.py").read_text()
-    assert "enforce_password_http_auth" in main
+    assert "enforce_authentication" in main
     assert "enforce_general_web_security" in main
     assert "base64.b64decode" not in main
     assert "WWW-Authenticate" not in main

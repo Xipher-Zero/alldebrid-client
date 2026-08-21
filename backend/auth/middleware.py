@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import secrets
 from collections.abc import Awaitable, Callable, Iterable
 
@@ -33,7 +34,7 @@ def _decode_basic_credentials(header: str) -> tuple[str, str] | None:
         return None
     try:
         decoded = base64.b64decode(token, validate=True).decode("utf-8", errors="replace")
-    except (ValueError, UnicodeError):
+    except (binascii.Error, ValueError, UnicodeError):
         return None
     username, separator, password = decoded.partition(":")
     if not separator:
@@ -50,23 +51,26 @@ async def enforce_general_web_security(
     """Reject explicit cross-site browser mutations independently of authentication.
 
     Machine clients normally send neither Origin nor Fetch Metadata headers and
-    therefore continue to work in open/no-auth deployments.
+    therefore continue to work in open/no-auth deployments. Explicitly allowed
+    CORS origins retain their configured mutation behavior.
     """
     if request.method.upper() not in MUTATING_HTTP_METHODS:
         return await call_next(request)
 
+    origin = str(request.headers.get("Origin", "") or "").strip()
+    origin_host = normalized_origin_host(origin) if origin else ""
+    request_host = str(request.headers.get("Host", "") or "").strip().casefold()
+    configured = configured_origin_hosts(allowed_origins)
+    configured_cross_origin = bool(origin_host and origin_host in configured)
+
     fetch_site = str(request.headers.get("Sec-Fetch-Site", "") or "").strip().casefold()
-    if fetch_site == "cross-site":
+    if fetch_site == "cross-site" and not configured_cross_origin:
         return Response(content="Forbidden request context", status_code=403)
 
-    origin = str(request.headers.get("Origin", "") or "").strip()
     if not origin:
         return await call_next(request)
 
-    origin_host = normalized_origin_host(origin)
-    request_host = str(request.headers.get("Host", "") or "").strip().casefold()
-    configured = configured_origin_hosts(allowed_origins)
-    if not origin_host or (origin_host != request_host and origin_host not in configured):
+    if not origin_host or (origin_host != request_host and not configured_cross_origin):
         return Response(content="Forbidden origin", status_code=403)
 
     return await call_next(request)

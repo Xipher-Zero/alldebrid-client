@@ -191,6 +191,8 @@ class AppSettings(BaseModel):
     oidc_issuer_url: str = ""
     oidc_client_id: str = ""
     oidc_client_secret: str = Field(default="", exclude=True)
+    # Transient write intent. Excluded from serialization and never persisted.
+    oidc_client_secret_clear: bool = Field(default=False, exclude=True)
     oidc_scopes: List[str] = ["openid", "profile", "email"]
     oidc_allow_all: bool = False
     oidc_allowed_subjects: List[str] = []
@@ -315,7 +317,9 @@ def save_settings(s: AppSettings):
     elif not str(getattr(s, "auth_password_hash", "") or "").strip():
         s.auth_password_hash = str(getattr(_settings, "auth_password_hash", "") or "")
 
-    if not str(getattr(s, "oidc_client_secret", "") or "").strip():
+    if bool(getattr(s, "oidc_client_secret_clear", False)):
+        s.oidc_client_secret = ""
+    elif not str(getattr(s, "oidc_client_secret", "") or "").strip():
         s.oidc_client_secret = str(getattr(_settings, "oidc_client_secret", "") or "")
 
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)

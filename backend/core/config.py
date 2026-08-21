@@ -42,7 +42,7 @@ class AppSettings(BaseModel):
     aria2_builtin_session_file: str = "/app/data/aria2/aria2.session"
     aria2_operation_timeout_seconds: int = 15
     aria2_start_paused: bool = False
-    aria2_poll_interval_seconds: int = 1  # fast polling for responsive dispatch
+    aria2_poll_interval_seconds: int = 2  # validated scheduler cadence
     aria2_max_active_downloads: int = 3
     aria2_purge_interval_minutes: int = 5  # purge completed results more often to free RAM
     aria2_max_download_result: int = 20  # lower = less RAM for completed download metadata
@@ -131,6 +131,9 @@ class AppSettings(BaseModel):
     extract_enabled: bool = False          # auto-extract archives after download
     extract_delete_archive: bool = True    # delete archive after successful extraction
     extract_max_concurrent: int = 1        # max parallel extractions
+    extract_max_files: int = 20000          # archive member ceiling
+    extract_max_expanded_gb: float = 250.0  # expanded bytes per archive
+    extract_max_compression_ratio: float = 1000.0  # expanded/archive size
     discord_notify_extract: bool = True    # Discord notification after extraction
 
     # AllDebrid upload retry (statusCode 5 = upload failed)
@@ -177,11 +180,11 @@ class AppSettings(BaseModel):
     # 0 = disabled.
     #
     # When free space drops below this threshold:
-    #   - New downloads are blocked (deferred, not errored)
-    #   - Active aria2 downloads are PAUSED automatically
+    #   - New aria2 dispatches are deferred (not errored)
+    #   - Transfers already active in aria2 are allowed to finish
     #
     # When free space rises back above threshold + 0.5 GB hysteresis:
-    #   - Paused-by-guard downloads are RESUMED automatically
+    #   - Deferred dispatch resumes automatically
     #
     # Checked every disk_guard_interval_seconds (default 60 s) — not on every
     # poll cycle — to avoid excessive stat() calls on FUSE/NFS mounts.

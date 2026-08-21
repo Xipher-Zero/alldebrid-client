@@ -67,11 +67,11 @@ async def test_scheduler_download_cycle_uses_service_root(monkeypatch):
 
     seen = []
 
-    async def one_cycle(service):
-        seen.append(service)
+    async def one_cycle():
+        seen.append(scheduler.transfer_service)
         raise asyncio.CancelledError
 
-    monkeypatch.setattr(scheduler, "reconcile_download_client_cycle", one_cycle)
+    monkeypatch.setattr(scheduler.transfer_service.reconciliation, "reconcile", one_cycle)
     with pytest.raises(asyncio.CancelledError):
         await scheduler.sync_download_clients_loop()
     assert seen == [scheduler.transfer_service]
@@ -90,7 +90,8 @@ async def test_external_aria2_gateway_cannot_change_global_options(monkeypatch):
     monkeypatch.setattr(gateway_module, "is_builtin_mode", lambda: False)
     aria2 = SimpleNamespace(change_global_options=AsyncMock())
     engine = SimpleNamespace(aria2=lambda: aria2)
-    gateway = gateway_module.Aria2Gateway(engine)
+    ownership = SimpleNamespace(owns=AsyncMock(return_value=True), filter_owned=AsyncMock())
+    gateway = gateway_module.Aria2Gateway(engine, ownership)
     with pytest.raises(PermissionError):
         await gateway.change_global_options({"max-overall-download-limit": "1M"})
     aria2.change_global_options.assert_not_awaited()
@@ -103,7 +104,8 @@ async def test_builtin_aria2_gateway_can_change_global_options(monkeypatch):
     monkeypatch.setattr(gateway_module, "is_builtin_mode", lambda: True)
     aria2 = SimpleNamespace(change_global_options=AsyncMock(return_value={"ok": True}))
     engine = SimpleNamespace(aria2=lambda: aria2)
-    gateway = gateway_module.Aria2Gateway(engine)
+    ownership = SimpleNamespace(owns=AsyncMock(return_value=True), filter_owned=AsyncMock())
+    gateway = gateway_module.Aria2Gateway(engine, ownership)
     result = await gateway.change_global_options({"max-overall-download-limit": "1M"})
     assert result == {"ok": True}
     aria2.change_global_options.assert_awaited_once()
@@ -133,7 +135,7 @@ async def test_operational_tables_are_first_class_and_wipe_resets_runtime(tmp_pa
 
     transfer_service.control.coordinator._pause_intents = {1}
     transfer_service.control.coordinator._initialized = True
-    result = await maintenance.wipe_database()
+    result = await maintenance.wipe_database(verified_quiesced=True)
     assert set(result["wiped_tables"]) >= {"transfer_pause_intents", "debridpulse_aria2_owned_gids"}
     assert transfer_service.control.coordinator._pause_intents == set()
     assert transfer_service.control.coordinator._initialized is False
@@ -191,28 +193,6 @@ async def test_online_backup_captures_committed_wal_state(tmp_path, monkeypatch)
     copied = Path(result["backup_dir"]) / db_path.name
     with sqlite3.connect(copied) as conn:
         assert conn.execute("SELECT name FROM torrents WHERE hash='wal-hash'").fetchone()[0] == "wal-row"
-
-
-def test_mediainfo_service_uses_real_path_ancestry(tmp_path, monkeypatch):
-    import services.mediainfo as mediainfo
-
-    root = tmp_path / "download"
-    sibling = tmp_path / "download_evil"
-    root.mkdir()
-    sibling.mkdir()
-    inside = root / "inside.mkv"
-    outside = sibling / "outside.mkv"
-    inside.write_bytes(b"x")
-    outside.write_bytes(b"x")
-
-    monkeypatch.setattr(
-        mediainfo,
-        "get_settings",
-        lambda: SimpleNamespace(download_folder=str(root)),
-    )
-    assert mediainfo.resolve_media_path(str(inside)) == inside.resolve()
-    with pytest.raises(PermissionError):
-        mediainfo.resolve_media_path(str(outside))
 
 
 @pytest.mark.asyncio

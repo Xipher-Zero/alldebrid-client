@@ -40,7 +40,7 @@ REMOVED_ROUTE_MARKERS = {
 def test_v1_identity_is_debridpulse_everywhere_it_is_centralized():
     assert APP_NAME == "DebridPulse"
     assert APP_SHORT_NAME == "DebridPulse"
-    assert APP_METADATA_TITLE == "DebridPulse — Multi-provider Debrid Download Manager"
+    assert APP_METADATA_TITLE == "DebridPulse — AllDebrid + aria2 Download Manager"
     assert REPOSITORY_URL == "https://github.com/Xipher-Zero/debridpulse"
 
 
@@ -136,19 +136,21 @@ def test_v1_runtime_database_scope_is_sqlite_only():
     assert "asyncpg" not in surfaces
 
 
-def test_direct_link_input_expands_to_five_lines_and_resets_after_submit():
+def test_unified_submission_input_expands_to_five_lines():
     frontend = (REPO_ROOT / "frontend/static/index.html").read_text()
     scripts = (REPO_ROOT / "frontend/static/app.js").read_text()
     styles = (REPO_ROOT / "frontend/static/style.css").read_text()
 
-    assert 'id="q-debrid-links" rows="1"' in frontend
+    assert 'id="q-transfer-input" rows="2"' in frontend
+    assert 'id="q-debrid-links"' not in frontend
+    assert 'id="q-magnet"' not in frontend
     assert 'oninput="resizeDebridLinkInput(this)"' in frontend
     assert "function resizeDebridLinkInput(input)" in scripts
+    assert "const minimum = Math.ceil((lineHeight * 2) + chrome);" in scripts
     assert "const maximum = Math.ceil((lineHeight * 5) + chrome);" in scripts
     assert "resizeDebridLinkInput(input);" in scripts
     assert ".direct-link-input" in styles
     assert "overflow-y: hidden" in styles
-
 
 def test_release_workflow_accepts_public_v1_tags():
     workflow = (REPO_ROOT / ".github/workflows/fork-image.yml").read_text()
@@ -383,17 +385,22 @@ def test_v102_minor_ui_cleanup_contract():
     assert '<span class="card-title">Download Status</span>' in index
     assert '<span class="card-title">Torrent Status</span>' not in index
 
-    assert '<textarea class="input direct-link-input" id="q-magnet" rows="1"' in index
+    assert '<textarea class="input direct-link-input" id="q-transfer-input" rows="2"' in index
     assert 'oninput="resizeDebridLinkInput(this)"' in index
     assert "(event.ctrlKey||event.metaKey)&&event.key==='Enter'" in index
-    quick_add = frontend.split("async function quickAdd()", 1)[1].split(
-        "function resizeDebridLinkInput", 1
+    assert "addDashboardEntries()" in index
+    unified_add = frontend.split("async function addDashboardEntries()", 1)[1].split(
+        "// ── Torrents", 1
     )[0]
-    assert "input.value = '';\n    resizeDebridLinkInput(input);" in quick_add
+    assert "document.getElementById('q-transfer-input')" in unified_add
+    assert "document.getElementById('btn-add-transfer')" in unified_add
+    assert "openTorrentFilePicker();" in unified_add
+    assert "resizeDebridLinkInput(input);" in unified_add
+    assert "async function quickAdd()" not in frontend
 
     assert '.aria2-queue { display: flex; flex-direction: column; gap: 10px; min-width: 0; width: 100%; }' in styles
     assert 'max-width: 100%' in styles.split('.aria2-job {', 1)[1].split('}', 1)[0]
     assert 'overflow-wrap: anywhere' in styles.split('.aria2-job-name {', 1)[1].split('}', 1)[0]
     assert 'overflow-wrap: anywhere' in styles.split('.aria2-job-meta {', 1)[1].split('}', 1)[0]
     assert '/style.css?v=13' in index
-    assert '/app.js?v=11' in index
+    assert '/app.js?v=12' in index

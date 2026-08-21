@@ -100,18 +100,13 @@ def test_settings_put_response_is_reused_without_followup_get():
     )
 
 
-def test_dashboard_magnet_button_has_its_own_pending_target():
+def test_dashboard_unified_add_button_has_its_own_pending_target():
     js = (REPO_ROOT / "frontend/static/app.js").read_text()
-    html = (
-        REPO_ROOT / "frontend/static/index.html"
-    ).read_text()
+    html = (REPO_ROOT / "frontend/static/index.html").read_text()
 
-    assert 'id="btn-add-magnet"' in html
-    assert (
-        "document.getElementById('btn-add-magnet')"
-        in js
-    )
-
+    assert 'id="btn-add-transfer"' in html
+    assert "document.getElementById('btn-add-transfer')" in js
+    assert "setButtonPending(button, true, 'Adding…')" in js
 
 def test_secondary_operator_controls_get_pending_feedback():
     js = (REPO_ROOT / "frontend/static/app.js").read_text()
@@ -345,11 +340,13 @@ def test_pass3_polling_noops_do_not_refresh_transfer_freshness():
     assert "stable provider polling" in provider.lower()
 
     aggregate = (REPO_ROOT / "backend/services/transfer_state_machine.py").read_text()
+    repository = (REPO_ROOT / "backend/services/transfer_repository.py").read_text()
 
     assert "if progress != current_progress or status != current_status:" in aggregate
     assert "if int(progress) != int(current_progress) or status != current_status:" in aggregate
-    assert "await db.executemany(" in aggregate
     assert "updates.append((progress, status, transfer_id))" in aggregate
+    assert "self.repository.persist_parent_progress(updates)" in aggregate
+    assert "await db.executemany(" in repository
 
     sync = manager.split(
         "async def sync_aria2_downloads", 1

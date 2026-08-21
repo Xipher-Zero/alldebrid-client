@@ -117,6 +117,9 @@ class ReconciliationService:
         finally:
             _cycle_active.reset(active_token)
 
+        async with async_timer("reconcile.deferred_provider"):
+            await self.engine.resume_deferred_provider_submissions()
+
         if is_builtin_mode():
             try:
                 async with async_timer("reconcile.cleanup"):

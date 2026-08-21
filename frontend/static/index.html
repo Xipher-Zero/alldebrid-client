@@ -7,9 +7,6 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/style.css?v=13">
-<style>
-#tab-database > .scard:first-child { display: none; }
-</style>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=4">
 <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png?v=4">
 <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=4">
@@ -232,32 +229,22 @@
         </div>
       </div>
 
-      <!-- ── Add Direct Debrid Links ──────────────────────────────────────── -->
+      <!-- ── Unified transfer submission ───────────────────────────────────── -->
       <div class="card" style="margin-bottom:14px">
         <div class="card-header">
-          <span class="card-title">⬇️ Add Links to Generate and Download Debrid Links</span>
-        </div>
-        <div style="padding:12px 16px">
-          <div class="direct-link-entry">
-            <textarea class="input direct-link-input" id="q-debrid-links" rows="1" placeholder="https://example-hoster.com/file/… or paste multiple links, one per line" oninput="resizeDebridLinkInput(this)" onkeydown="if((event.ctrlKey||event.metaKey)&&event.key==='Enter')addDebridLinks()"></textarea>
-            <button class="btn btn-primary" id="btn-add-debrid-links" onclick="addDebridLinks()" style="padding:9px 20px" title="Generate each link through AllDebrid and queue the resulting downloads in aria2">Add</button>
+          <div style="display:flex;align-items:baseline;column-gap:14px;row-gap:2px;flex-wrap:wrap;min-width:0">
+            <span class="card-title">⬇️ Add Links, Magnets, or Torrent File</span>
+            <span style="font-size:11px;font-weight:400;color:var(--text3)">One item per line · Empty + Add opens a .torrent file</span>
           </div>
-        </div>
-      </div>
-
-      <!-- ── Add Magnet or Torrent File ─────────────────────────────────────── -->
-      <div class="card" style="margin-bottom:14px">
-        <div class="card-header">
-          <span class="card-title">🧲 Add Magnet Links or a Torrent File</span>
-          <div style="display:flex;gap:6px">
+          <div style="display:flex;gap:6px;margin-left:auto">
             <button class="btn btn-ghost btn-sm" id="btn-import-existing" onclick="importExisting(this)" title="Import all AllDebrid magnets not yet in the local database">⬇ Import</button>
             <button class="btn btn-warn btn-sm" id="btn-recover-all" onclick="recoverAll(this)" title="Reset stuck or errored torrents — re-dispatches from AllDebrid">⟳ Recover All</button>
           </div>
         </div>
         <div style="padding:12px 16px">
           <div class="direct-link-entry">
-            <textarea class="input direct-link-input" id="q-magnet" rows="1" placeholder="magnet:?xt=urn:btih:… or paste multiple lines, one per line" oninput="resizeDebridLinkInput(this)" onkeydown="if((event.ctrlKey||event.metaKey)&&event.key==='Enter')quickAdd()"></textarea>
-            <button class="btn btn-primary" id="btn-add-magnet" onclick="quickAdd()" style="padding:9px 20px" title="Add entered magnet links, or choose a .torrent file when the field is empty">Add</button>
+            <textarea class="input direct-link-input" id="q-transfer-input" rows="2" placeholder="https://example-hoster.com/file/…&#10;magnet:?xt=urn:btih:…" oninput="resizeDebridLinkInput(this)" onkeydown="if((event.ctrlKey||event.metaKey)&&event.key==='Enter')addDashboardEntries()"></textarea>
+            <button class="btn btn-primary" id="btn-add-transfer" onclick="addDashboardEntries()" style="padding:9px 20px" title="Submit direct links and magnets through AllDebrid; when empty, choose a .torrent file">Add</button>
           </div>
         </div>
       </div>
@@ -701,7 +688,7 @@
               <details open style="margin-bottom:10px"><summary style="cursor:pointer;font-weight:600;color:var(--text1);font-size:13px">General</summary>
                 <div style="padding:6px 0 0 12px">
                   <b>AllDebrid API Key</b> — Required. Get at alldebrid.com/apikeys.<br>
-                  <b>Access Control</b> — Optional HTTP Basic Auth. Set both username and password to enable. Leave either empty to disable. Exempt paths: /api/stats, /api/version, /api/avatar (for health checks).<br>
+                  <b>Access Control</b> — Optional HTTP Basic Auth. Set both username and password to enable. Leave either empty to disable. Exempt paths: /api/health, /api/version, /api/avatar.<br>
                 </div>
               </details>
 
@@ -710,7 +697,7 @@
                   <b>Max Concurrent Downloads</b> — How many torrents are processed (unlocked + dispatched) simultaneously. Default: 3.<br>
                   <b>Built-in aria2 Download Folder</b> — Local path used by DebridPulse and built-in aria2.<br>
                   <b>External aria2 Download Path</b> — Path to that download location as seen by an external aria2 daemon.<br>
-                  <b>Min Free Disk Space (GB)</b> — If less than this is available, the download is aborted with an error (torrent row kept). 0 = disabled.<br>
+                  <b>Min Free Disk Space (GB)</b> — If less than this is available, active transfers are allowed to finish while new dispatches are deferred until space recovers. 0 = disabled.<br>
                   <b>Stalled download timeout (hours)</b> — Downloads left queued or downloading without an update longer than this are reset for retry. 0 = disabled.
                 </div>
               </details>
@@ -766,7 +753,7 @@
                   1. Check the <b>Built-in aria2 Download Folder</b> path — it must be accessible inside the container.<br>
                   2. In Unraid: ensure the path mapping in the Docker template is correct (host path → container path).<br>
                   3. If using an external aria2 instance, set the <b>External aria2 Download Path</b> to the path seen by that daemon (it may differ from the DebridPulse container path).<br>
-                  4. Check the <code>min_free_disk_gb</code> setting — if the disk is full, downloads abort with an error.
+                  4. Check the <code>min_free_disk_gb</code> setting — when the guard is active, new downloads are deferred until free space recovers.
                 </div>
               </details>
 
@@ -788,7 +775,7 @@
 
               <details><summary style="cursor:pointer;font-weight:600;color:var(--text1)">Auth is enabled but I'm locked out</summary>
                 <div style="color:var(--text2);padding:8px 0 0 12px;line-height:1.7">
-                  Edit <code>settings.json</code> in your data folder (default: <code>/app/data/settings.json</code>) and set <code>"auth_username": ""</code> and <code>"auth_password": ""</code>, then restart the container. Auth is disabled when either field is empty.
+                  Edit the configured settings file (documented container default: <code>/app/config/config.json</code>) and set <code>"auth_username": ""</code> and <code>"auth_password": ""</code>, then restart the container. Auth is disabled when either field is empty.
                 </div>
               </details>
 
@@ -873,8 +860,8 @@
 
 <input id="torrent-file-input" type="file" accept=".torrent,application/x-bittorrent" hidden onchange="uploadTorrentFile(this)">
 
-<script src="/app.js?v=11" defer></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="/app.js?v=12" defer></script>
+<script src="/vendor/chart.umd.min.js?v=4.4.1"></script>
 <div id="mobile-overlay" onclick="closeSidebar()"></div>
 </body>
 </html>

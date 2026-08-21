@@ -1,3 +1,4 @@
+# PR regression and security validation.
 name: Tests
 
 on:
@@ -38,7 +39,7 @@ jobs:
       - name: Check undefined Python names
         run: |
           cd backend
-          ruff check api core db services main.py --select F821
+          ruff check api core db services main.py --select F821,F822,F823
 
       - name: Run all tests
         run: |

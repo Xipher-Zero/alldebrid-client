@@ -1,4 +1,4 @@
-/* DebridPulse — Multi-provider Debrid Download Manager */
+/* DebridPulse — AllDebrid + aria2 download manager */
 
 const API = '/api';
 let currentFilter = '';
@@ -143,6 +143,19 @@ function esc(s) {
     .replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
+function escapeHtmlStrings(value) {
+  // Settings and other API payloads are plain data. Escape string leaves
+  // before interpolating those payloads into HTML templates; numbers and
+  // booleans retain their native types for control-flow and form logic.
+  if (Array.isArray(value)) return value.map(escapeHtmlStrings);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, escapeHtmlStrings(item)])
+    );
+  }
+  return typeof value === 'string' ? esc(value) : value;
+}
+
 function sourceLabel(source) {
   const labels = {
     direct_link: 'Direct link',
@@ -153,22 +166,23 @@ function sourceLabel(source) {
     api: 'API'
   };
   const key = String(source || '').trim();
-  return labels[key] || key || '—';
+  return labels[key] || esc(key) || '—';
 }
 
 function sanitizeErrorMsg(message) {
   const text = String(message || 'Request failed');
-  const limited = text.length > 500
-    ? text.slice(0, 497) + '...'
-    : text;
-  return esc(limited);
+  return text.length > 500 ? text.slice(0, 497) + '...' : text;
 }
 
 function toast(msg, type = 'info') {
   const icons = {success:'✅',error:'❌',warn:'⚠️',info:'ℹ️'};
   const el = document.createElement('div');
   el.className = `toast ${type}`;
-  el.innerHTML = `<span>${icons[type]||'·'}</span><span>${msg}</span>`;
+  const icon = document.createElement('span');
+  icon.textContent = icons[type] || '·';
+  const text = document.createElement('span');
+  text.textContent = String(msg ?? '');
+  el.append(icon, text);
   document.getElementById('toasts').appendChild(el);
   setTimeout(() => el.style.opacity = '0', 3000);
   setTimeout(() => el.remove(), 3400);
@@ -272,12 +286,30 @@ function fmtEta(secs) {
   var m = Math.floor((secs%3600)/60);
   return h + 'h ' + m + 'm';
 }
+function parseApiDate(d) {
+  if (!d) return null;
+  let value = d;
+  // SQLite CURRENT_TIMESTAMP is canonical UTC but historically serialized as a
+  // naive "YYYY-MM-DD HH:MM:SS" string. Treat that legacy form as UTC.
+  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(value.trim())) {
+    value = value.trim().replace(' ', 'T') + 'Z';
+  }
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
 function fmtDate(d) {
-  if (!d) return '—';
-  const x = new Date(d);
-  // Use en-GB for consistent DD.MM HH:MM format regardless of browser locale
-  const dateStr = x.toLocaleDateString('en-GB',{day:'2-digit',month:'2-digit'}).replace('/','.').replace('/','.');
-  const timeStr = x.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit',hour12:false});
+  const x = parseApiDate(d);
+  if (!x) return '—';
+  const timeZone = String((settingsData && settingsData.timezone) || '').trim() || undefined;
+  const dateOptions = {day:'2-digit',month:'2-digit'};
+  const timeOptions = {hour:'2-digit',minute:'2-digit',hour12:false};
+  if (timeZone) {
+    dateOptions.timeZone = timeZone;
+    timeOptions.timeZone = timeZone;
+  }
+  // Use en-GB for consistent DD.MM HH:MM format regardless of browser locale.
+  const dateStr = x.toLocaleDateString('en-GB',dateOptions).replace('/','.').replace('/','.');
+  const timeStr = x.toLocaleTimeString('en-GB',timeOptions);
   return dateStr + ' ' + timeStr;
 }
 function pct(part, total) {
@@ -293,12 +325,16 @@ function renderKvMap(arr, formatter) {
         return [key, item];
       })
     : Object.entries(arr);
-  return `<div class="kv-list">${entries.map(([key, value]) => `
+  return `<div class="kv-list">${entries.map(([key, value]) => {
+    const rendered = formatter
+      ? formatter(value, key)
+      : (value && typeof value === 'object' ? value.count ?? '—' : value);
+    return `
     <div class="kv-row">
-      <span>${key}</span>
-      <strong>${formatter ? formatter(value, key) : (value && typeof value === 'object' ? value.count ?? '—' : value)}</strong>
-    </div>
-  `).join('')}</div>`;
+      <span>${esc(key)}</span>
+      <strong>${esc(rendered)}</strong>
+    </div>`;
+  }).join('')}</div>`;
 }
 function badge(s) {
   const m = {pending:'⏳ Pending',uploading:'⬆ Uploading',processing:'⚙ Processing',
@@ -308,12 +344,14 @@ function badge(s) {
     error:'❌ Error',missing:'❌ Missing file',provider_failed:'❌ Provider download failed',
     provider_missing:'❌ Removed from provider',failed:'❌ Provider download failed',
     deleted:'🗑 Deleted',imported:'📋 Imported',partial:'⚠ Partial'};
-  const cls = s === 'missing' || s === 'provider_failed' || s === 'provider_missing' || s === 'failed'
+  const key = String(s || '');
+  const requestedCls = key === 'missing' || key === 'provider_failed' || key === 'provider_missing' || key === 'failed'
     ? 'error'
-    : s === 'completed_with_errors' || s === 'downloading_with_errors'
+    : key === 'completed_with_errors' || key === 'downloading_with_errors'
       ? 'partial'
-      : s;
-  return `<span class="badge badge-${cls}">${m[s]||s}</span>`;
+      : key;
+  const cls = /^[a-z0-9_-]+$/i.test(requestedCls) ? requestedCls : 'unknown';
+  return `<span class="badge badge-${cls}">${esc(m[key] || key || 'Unknown')}</span>`;
 }
 function transferDisplayStatus(t) {
   if (
@@ -480,7 +518,7 @@ async function checkConnections() {
 async function checkPremiumStatus() {
   try {
     const cfg = settingsData;
-    if (!cfg || !cfg.alldebrid_api_key) return;
+    if (!cfg || !cfg.alldebrid_api_key_configured) return;
     const r = await api('POST', '/settings/test-alldebrid');
     _updatePremiumLabel(r);
     setDot('api', 'ok', `AllDebrid: ${r.username||'online'}`);
@@ -807,9 +845,14 @@ function setStatsPeriod(el) {
   el.classList.add('active');
   loadDetailedStats(el.dataset.period);
 }
+function dashboardRecentLimit() {
+  return window.matchMedia('(max-width: 700px)').matches ? 4 : 6;
+}
+
 async function loadRecent() {
   try {
-    const {items} = await api('GET', '/torrents?limit=4');
+    const recentLimit = dashboardRecentLimit();
+    const {items} = await api('GET', `/torrents?limit=${recentLimit}`);
     const tb = document.getElementById('dash-tbody');
     if (!items.length) {
       tb.innerHTML = '<tr><td colspan="6"><div class="empty"><div class="empty-icon">⬇️</div>No transfers yet. Add a magnet, torrent file, or debrid link to start.</div></td></tr>';
@@ -877,6 +920,8 @@ async function uploadTorrentFile(input) {
       toast('Already in queue: ' + (res.name || res._duplicate.reason), 'warn');
     } else if (res && res._duplicate && res._duplicate.action === 'warn') {
       toast('Torrent file added (possible duplicate)', 'warn');
+    } else if (res && res._deferred) {
+      toast('Torrent file added · processing is paused', 'success');
     } else {
       toast('Torrent file added!', 'success');
     }
@@ -892,32 +937,6 @@ async function uploadTorrentFile(input) {
   }
 }
 
-async function quickAdd() {
-  const input = document.getElementById('q-magnet');
-  const v = input.value.trim();
-  if (!v) {
-    openTorrentFilePicker();
-    return;
-  }
-  const btn = document.getElementById('btn-add-magnet');
-  setButtonPending(btn, true, 'Adding…');
-  try {
-    const res = await api('POST', '/torrents/add-magnet', {magnet: v}, 30000);
-    if (res && res._duplicate && res._duplicate.action === 'skip') {
-      toast('Already in queue: ' + (res.name || res._duplicate.reason), 'warn');
-    } else if (res && res._duplicate && res._duplicate.action === 'warn') {
-      toast('Added (possible duplicate)', 'warn');
-    } else {
-      toast('Magnet added!', 'success');
-    }
-    input.value = '';
-    resizeDebridLinkInput(input);
-    input.focus();
-    loadStats(); loadRecent();
-  } catch(e) { toast(sanitizeErrorMsg(e.message), 'error'); }
-  finally { setButtonPending(btn, false); }
-}
-
 function resizeDebridLinkInput(input) {
   if (!input) return;
   const styles = window.getComputedStyle(input);
@@ -926,7 +945,7 @@ function resizeDebridLinkInput(input) {
     (parseFloat(styles.paddingBottom) || 0) +
     (parseFloat(styles.borderTopWidth) || 0) +
     (parseFloat(styles.borderBottomWidth) || 0);
-  const minimum = 38;
+  const minimum = Math.ceil((lineHeight * 2) + chrome);
   const maximum = Math.ceil((lineHeight * 5) + chrome);
   input.style.height = `${minimum}px`;
   const target = Math.max(minimum, Math.min(input.scrollHeight, maximum));
@@ -934,41 +953,126 @@ function resizeDebridLinkInput(input) {
   input.style.overflowY = input.scrollHeight > maximum ? 'auto' : 'hidden';
 }
 
-async function addDebridLinks() {
-  const input = document.getElementById('q-debrid-links');
-  const button = document.getElementById('btn-add-debrid-links');
-  const links = (input?.value || '')
-    .split(/\r?\n/)
-    .map(v => v.trim())
-    .filter(Boolean);
-  if (!links.length) {
-    toast('Enter at least one HTTP or HTTPS link', 'warn');
+function classifyDashboardEntries(raw) {
+  const seen = new Set();
+  const direct = [];
+  const magnets = [];
+  const invalid = [];
+  String(raw || '').split(/\r?\n/).forEach((rawValue, index) => {
+    const value = rawValue.trim();
+    if (!value || seen.has(value)) return;
+    seen.add(value);
+    const entry = {value, line: index + 1};
+    if (/^https?:\/\/\S+$/i.test(value)) direct.push(entry);
+    else if (/^magnet:\?/i.test(value)) magnets.push(entry);
+    else invalid.push(entry);
+  });
+  return {direct, magnets, invalid};
+}
+
+async function mapWithConcurrency(items, concurrency, worker) {
+  const results = new Array(items.length);
+  let cursor = 0;
+  async function run() {
+    while (cursor < items.length) {
+      const index = cursor++;
+      try {
+        results[index] = {ok: true, value: await worker(items[index])};
+      } catch (error) {
+        results[index] = {ok: false, error};
+      }
+    }
+  }
+  const workers = Array.from(
+    {length: Math.min(Math.max(1, concurrency), Math.max(1, items.length))},
+    () => run()
+  );
+  await Promise.all(workers);
+  return results;
+}
+
+async function addDashboardEntries() {
+  const input = document.getElementById('q-transfer-input');
+  const button = document.getElementById('btn-add-transfer');
+  const raw = input?.value || '';
+  if (!raw.trim()) {
+    openTorrentFilePicker();
+    return;
+  }
+
+  const {direct, magnets, invalid} = classifyDashboardEntries(raw);
+  if (invalid.length) {
+    const first = invalid[0];
+    toast(`Line ${first.line}: enter an HTTP(S) link or magnet URI`, 'error');
     input?.focus();
     return;
   }
-  if (button) {
-    button.disabled = true;
-    button.textContent = 'Adding…';
+  if (!direct.length && !magnets.length) {
+    toast('Enter at least one HTTP(S) link or magnet URI', 'warn');
+    input?.focus();
+    return;
   }
+
+  setButtonPending(button, true, 'Adding…');
+  const failed = [];
+  let handled = 0;
+  let deferred = 0;
   try {
-    const result = await api('POST', '/links/add', {links}, 30000);
-    const count = result.accepted_links || links.length;
-    toast(`${count} debrid link${count === 1 ? '' : 's'} submitted`, 'success');
-    input.value = '';
+    if (direct.length) {
+      try {
+        const result = await api('POST', '/links/add', {links: direct.map(entry => entry.value)}, 30000);
+        handled += direct.length;
+        if (result && result._deferred) deferred += direct.length;
+      } catch (error) {
+        direct.forEach(entry => failed.push({...entry, error}));
+      }
+    }
+
+    if (magnets.length) {
+      const results = await mapWithConcurrency(
+        magnets,
+        3,
+        entry => api('POST', '/torrents/add-magnet', {magnet: entry.value}, 30000)
+      );
+      results.forEach((result, index) => {
+        if (result.ok) {
+          handled += 1;
+          if (result.value && result.value._deferred) deferred += 1;
+        } else failed.push({...magnets[index], error: result.error});
+      });
+    }
+
+    failed.sort((a, b) => a.line - b.line);
+    input.value = failed.map(entry => entry.value).join('\n');
     resizeDebridLinkInput(input);
     input.focus();
-    loadStats();
-    loadRecent();
-    if (document.getElementById('view-torrents')?.classList.contains('active')) {
-      loadTorrents();
+
+    if (failed.length) {
+      const failureMessages = [...new Set(
+        failed.map(entry => String(entry.error?.message || 'Request failed'))
+      )];
+      if (!handled && failureMessages.length === 1) {
+        toast(sanitizeErrorMsg(failureMessages[0]), 'error');
+      } else {
+        toast(`${handled} handled · ${failed.length} failed`, handled ? 'warn' : 'error');
+      }
+    } else if (handled && deferred === handled) {
+      toast(`${handled} added · processing is paused`, 'success');
+    } else if (deferred) {
+      toast(`${handled} handled · ${deferred} waiting for Resume All`, 'success');
+    } else {
+      toast(`${handled} item${handled === 1 ? '' : 's'} submitted`, 'success');
     }
-  } catch(e) {
-    toast(sanitizeErrorMsg(e.message), 'error');
+
+    if (handled) {
+      loadStats();
+      loadRecent();
+      if (document.getElementById('view-torrents')?.classList.contains('active')) {
+        loadTorrents();
+      }
+    }
   } finally {
-    if (button) {
-      button.disabled = false;
-      button.textContent = 'Add';
-    }
+    setButtonPending(button, false);
   }
 }
 
@@ -1260,12 +1364,12 @@ async function showDetail(id) {
         <div><div class="dk">Progress</div><div class="dv">${(t.progress||0).toFixed(1)}%</div></div>
         <div><div class="dk">Size</div><div class="dv">${fmtSize(t.size_bytes)}</div></div>
         <div><div class="dk">Source</div><div class="dv">${sourceLabel(t.source)}</div></div>
-        <div><div class="dk">Downloader</div><div class="dv">${t.download_client||'aria2'}</div></div>
+        <div><div class="dk">Downloader</div><div class="dv">${esc(t.download_client||'aria2')}</div></div>
         <div><div class="dk">Added</div><div class="dv">${fmtDate(t.created_at)}</div></div>
         <div><div class="dk">Completed</div><div class="dv">${fmtDate(t.completed_at)}</div></div>
-        <div style="grid-column:1/-1"><div class="dk">AllDebrid ID</div><div class="dv">${t.alldebrid_id||'—'}</div></div>
-        <div style="grid-column:1/-1"><div class="dk">Hash</div><div class="dv" style="font-size:11px">${t.hash||'—'}</div></div>
-        ${t.local_path?`<div style="grid-column:1/-1"><div class="dk">Local Path</div><div class="dv" style="font-size:11px">${t.local_path}</div></div>`:''}
+        <div style="grid-column:1/-1"><div class="dk">AllDebrid ID</div><div class="dv">${esc(t.alldebrid_id||'—')}</div></div>
+        <div style="grid-column:1/-1"><div class="dk">Hash</div><div class="dv" style="font-size:11px">${esc(t.hash||'—')}</div></div>
+        ${t.local_path?`<div style="grid-column:1/-1"><div class="dk">Local Path</div><div class="dv" style="font-size:11px">${esc(t.local_path)}</div></div>`:''}
         ${t.error_message?`<div style="grid-column:1/-1"><div class="dk">Error</div><div class="dv" style="color:var(--red)">${esc(t.error_message)}</div></div>`:''}
       </div>
       ${t.files&&t.files.length?`
@@ -1289,7 +1393,7 @@ async function showDetail(id) {
         <div class="sec-label">Events</div>
         ${t.events.map(ev=>`
           <div class="event-item">
-            <div class="elevel ${ev.level}"></div>
+            <div class="elevel ${esc(ev.level)}"></div>
             <div class="emsg">${esc(ev.message)}</div>
             <div class="etime">${fmtDate(ev.created_at)}</div>
           </div>`).join('')}
@@ -1298,7 +1402,7 @@ async function showDetail(id) {
   } catch(e) {
     if (modalBody) {
       modalBody.innerHTML =
-        `<div class="empty" style="padding:24px">Failed to load details: ${sanitizeErrorMsg(e.message)}</div>`;
+        `<div class="empty" style="padding:24px">Failed to load details: ${esc(sanitizeErrorMsg(e.message))}</div>`;
     }
 
     toast(sanitizeErrorMsg(e.message),'error');
@@ -1481,8 +1585,8 @@ function filterEvents() {
   if (!evs.length) { el.innerHTML='<div class="empty">No events match the filter.</div>'; return; }
   el.innerHTML = evs.map(ev=>`
     <div class="event-item">
-      <div class="elevel ${ev.level}"></div>
-      <div><div class="emsg">${esc(ev.message)}</div>${ev.torrent_name?`<div class="ename">${ev.torrent_name}</div>`:''}</div>
+      <div class="elevel ${esc(ev.level)}"></div>
+      <div><div class="emsg">${esc(ev.message)}</div>${ev.torrent_name?`<div class="ename">${esc(ev.torrent_name)}</div>`:''}</div>
       <div class="etime">${fmtDate(ev.created_at)}</div>
     </div>`).join('');
 }
@@ -1497,7 +1601,7 @@ async function loadChangelog() {
     const md = data.content || 'No changelog content found.';
     el.innerHTML = renderMarkdown(md);
   } catch(e) {
-    el.innerHTML = `<p style="color:#f87171">Failed to load changelog: ${e.message}</p>`;
+    el.innerHTML = `<p style="color:#f87171">Failed to load changelog: ${esc(e.message)}</p>`;
     toast(e.message, 'error');
   }
 }
@@ -1565,7 +1669,7 @@ async function loadSettings() {
 
 function renderSettings() {
   const _settingsScrollTop = document.getElementById('settings-form')?.scrollTop || 0;
-  const s = settingsData;
+  const s = escapeHtmlStrings(settingsData || {});
   const aria2BuiltIn = (s.aria2_mode || 'builtin') === 'builtin';
 
   // Define tabs
@@ -1603,7 +1707,7 @@ function renderSettings() {
 
       <div class="scard">
       <div class="scard-header">🔐 Access Control</div>
-      <p class="form-hint" style="padding:4px 14px 6px;margin:0;font-size:11px;color:var(--text3)">Optional HTTP Basic Auth. Set both fields to enable; leave either empty to disable. The browser will prompt for credentials on next load.</p>
+      <p class="form-hint" style="padding:4px 14px 6px;margin:0;font-size:11px;color:var(--text3)">Optional HTTP Basic Auth. Username remains visible; the saved password is never returned. Enter a password to set or replace it, or explicitly clear it in Stored Secrets below.</p>
       <div class="scard-body">
         <div class="form-group">
           <label class="form-label">Username</label>
@@ -1611,16 +1715,36 @@ function renderSettings() {
         </div>
         <div class="form-group">
           <label class="form-label">Password</label>
-          <input class="input" type="password" id="s-auth_password" value="${s.auth_password||''}" placeholder="Leave empty to disable auth"/>
-          <span class="form-hint">⚠️ Save settings and reload the page to activate. Keep both fields empty to disable.</span>
+          <input class="input" type="password" id="s-auth_password" value="" placeholder="${s.auth_password_configured?'Stored password configured — leave blank to keep':'Enter password to enable auth'}"/>
+          <span class="form-hint">Save settings and reload the page after changing credentials. Use Stored Secrets below to explicitly clear the saved password.</span>
         </div>
       </div>
     </div>
 
       <div class="scard">
+        <div class="scard-header">🧹 Stored Secrets</div>
+        <p class="form-hint" style="padding:4px 14px 6px;margin:0;font-size:11px;color:var(--text3)">Redacted secrets are preserved when their input is left blank. Check a configured item here to explicitly erase it on Save.</p>
+        <div class="scard-body">
+          ${[
+            ['alldebrid_api_key','AllDebrid API key'],
+            ['aria2_secret','aria2 RPC secret'],
+            ['discord_webhook_url','Discord webhook'],
+            ['discord_webhook_added','Torrent-added webhook'],
+            ['stats_report_webhook_url','Reporting webhook'],
+            ['auth_password','Basic Auth password'],
+            ['extraction_password','Extraction password']
+          ].filter(([field])=>s[field+'_configured']).map(([field,label])=>`
+            <label class="toggle-row" style="cursor:pointer">
+              <div class="toggle-info"><div class="tl">${label}</div><div class="ts">Erase the stored value on Save</div></div>
+              <input type="checkbox" id="s-clear-${field}">
+            </label>`).join('') || '<div class="form-hint">No stored secrets are currently configured.</div>'}
+        </div>
+      </div>
+
+      <div class="scard">
         <div class="scard-header">💾 Disk Space Guard</div>
         <p class="form-hint" style="padding:4px 14px 6px;margin:0;font-size:11px;color:var(--text3)">
-          Automatically <b>pauses</b> active downloads and blocks new ones when free space drops below
+          Allows active downloads to finish and <b>defers new dispatches</b> when free space drops below
           the threshold. Resumes automatically when space recovers (with hysteresis to prevent flapping).
           Works on all filesystems: ext4, XFS, ZFS, Btrfs, <b>Unraid (FUSE/shfs)</b>, NFS.
         </p>
@@ -1628,7 +1752,7 @@ function renderSettings() {
           <div class="form-group">
             <label class="form-label">Minimum Free Disk Space (GB, 0 = disabled)</label>
             <input class="input" type="number" id="s-min_free_disk_gb" value="${s.min_free_disk_gb??0}" min="0" step="0.5"/>
-            <span class="form-hint">Downloads are <b>paused</b> (not errored) when free space drops below this. They resume automatically when space recovers.</span>
+            <span class="form-hint">New dispatches are deferred when free space drops below this; active transfers continue. Deferred work starts automatically when space recovers.</span>
           </div>
           <div class="form-group">
             <label class="form-label">Resume Hysteresis (GB above threshold)</label>
@@ -1982,7 +2106,7 @@ function renderSettings() {
             <label class="form-label toggle-label"><span>Enable Auto-Extraction</span>
               <label class="tswitch"><input type="checkbox" id="s-extract_enabled" ${s.extract_enabled?'checked':''}/><span class="tslider"></span></label>
             </label>
-            <span class="form-hint">Automatically extract archives (.zip .rar .7z .tar.gz .tar.bz2 .tar.xz and more) after download completes. p7zip-full and unrar-free are included in the Docker image.</span>
+            <span class="form-hint">Automatically extract archives (.zip .rar .7z .tar.gz .tar.bz2 .tar.xz and more) after download completes. p7zip-full (7-Zip) is included in the Docker image; RAR extraction uses the same preflight-capable 7z path.</span>
           </div>
           <div class="form-group">
             <label class="form-label toggle-label"><span>Delete Archive After Extraction</span>
@@ -2243,17 +2367,6 @@ function renderSettings() {
     </div>
 
     <div class="stab-panel" id="tab-database">
-      <div class="scard">
-      <div class="scard-header">🗄️ Database</div>
-      <div class="scard-body">
-        <div class="form-group">
-          <label class="form-label">Runtime Database</label>
-          <input class="input" value="SQLite (internal, WAL)" disabled/>
-          <span class="form-hint">SQLite is the authoritative and only runtime database in DebridPulse 1.0.5.</span>
-        </div>
-      </div>
-    </div>
-
     <div class="scard">
       <div class="scard-header">🛠️ Database Maintenance</div>
       <div class="scard-body">
@@ -2317,9 +2430,20 @@ function getFormSettings() {
     'aria2_max_active_downloads',
     Number(settingsData.max_concurrent_downloads ?? 3),
   );
+  const secretFields = [
+    'alldebrid_api_key', 'aria2_secret', 'discord_webhook_url',
+    'discord_webhook_added', 'stats_report_webhook_url',
+    'auth_password', 'extraction_password'
+  ];
+  const clearSecrets = secretFields.filter(field =>
+    document.getElementById(`s-clear-${field}`)?.checked
+  );
   return {
     ...settingsData,
+    clear_secrets: clearSecrets,
     alldebrid_api_key: t('alldebrid_api_key'),
+    auth_username: t('auth_username'),
+    auth_password: t('auth_password'),
     alldebrid_agent:   t('alldebrid_agent')||'DebridPulse',
     download_folder: t('download_folder'), max_concurrent_downloads: maxConcurrentDownloads,
     max_speed_mbps: (settingsData && settingsData.max_speed_mbps != null)
@@ -2703,7 +2827,7 @@ function renderAria2Diagnostics(diag) {
   el.innerHTML =
     `<b>aria2 memory diagnostics</b><br>` +
     `Active: ${diag.active_count ?? 0} · Waiting: ${diag.waiting_count ?? 0} · Stopped: ${diag.stopped_count ?? 0}<br>` +
-    `max-download-result: ${opts['max-download-result'] || 'n/a'} · keep-unfinished-download-result: ${opts['keep-unfinished-download-result'] || 'n/a'}<br>` +
+    `max-download-result: ${esc(opts['max-download-result'] || 'n/a')} · keep-unfinished-download-result: ${esc(opts['keep-unfinished-download-result'] || 'n/a')}<br>` +
     `query window — waiting: ${limits.waiting ?? 'n/a'} · stopped: ${limits.stopped ?? 'n/a'}`;
 }
 
@@ -2735,7 +2859,7 @@ function renderAria2Runtime(data) {
 function aria2StatusLabel(status) {
   const map = {active:'Downloading', waiting:'Waiting', paused:'Paused', complete:'Complete', error:'Error', removed:'Removed'};
   const cls = status === 'active' ? 'downloading' : status === 'complete' ? 'completed' : status === 'error' ? 'error' : status === 'paused' ? 'paused' : 'queued';
-  return `<span class="badge badge-${cls}">${map[status] || status || 'Unknown'}</span>`;
+  return `<span class="badge badge-${cls}">${esc(map[status] || status || 'Unknown')}</span>`;
 }
 
 function renderAria2Downloads(data) {
@@ -3078,8 +3202,8 @@ async function loadBackupList() {
     if (!r.backups.length) { el.textContent = 'No backups found.'; return; }
     el.innerHTML = r.backups.map(b =>
       `<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border)">
-        <span>${b.name}</span>
-        <span style="color:var(--text3)">${b.files.join(', ')} — ${Math.round(b.size_bytes/1024)} KB</span>
+        <span>${esc(b.name)}</span>
+        <span style="color:var(--text3)">${esc((b.files||[]).join(', '))} — ${Math.round(Number(b.size_bytes||0)/1024)} KB</span>
       </div>`
     ).join('');
   } catch(e) { toast(e.message, 'error'); }
@@ -3103,8 +3227,8 @@ async function loadDatabaseBackupList() {
     if (!r.backups.length) { el.textContent = 'No database backups found.'; return; }
     el.innerHTML = r.backups.map(b =>
       `<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border)">
-        <span>${b.name}</span>
-        <span style="color:var(--text3)">${b.files.join(', ')} — ${Math.round(b.size_bytes/1024)} KB</span>
+        <span>${esc(b.name)}</span>
+        <span style="color:var(--text3)">${esc((b.files||[]).join(', '))} — ${Math.round(Number(b.size_bytes||0)/1024)} KB</span>
       </div>`
     ).join('');
   } catch(e) { toast(e.message, 'error'); }
@@ -3253,11 +3377,11 @@ async function loadComprehensiveStats() {
           <div style="font-size:20px;font-weight:800;color:${c||'var(--text)'}">${v}</div>
         </div>`).join('')}
       </div>
-      ${r.daily_trend?.length ? `<div style="font-size:11px;color:var(--text2);margin-top:8px"><b>Daily completions (last ${Math.min(14, hours/24|0)} days):</b><br>${r.daily_trend.map(d=>`${d.date}: ${d.cnt}`).join(' · ')}</div>` : ''}
-      ${Object.keys(t.sources||{}).length ? `<div style="font-size:11px;color:var(--text2);margin-top:6px"><b>Sources:</b> ${Object.entries(t.sources).map(([k,v])=>`${k}: ${v}`).join(', ')}</div>` : ''}
+      ${r.daily_trend?.length ? `<div style="font-size:11px;color:var(--text2);margin-top:8px"><b>Daily completions (last ${Math.min(14, hours/24|0)} days):</b><br>${r.daily_trend.map(d=>`${esc(d.date)}: ${Number(d.cnt)||0}`).join(' · ')}</div>` : ''}
+      ${Object.keys(t.sources||{}).length ? `<div style="font-size:11px;color:var(--text2);margin-top:6px"><b>Sources:</b> ${Object.entries(t.sources||{}).map(([k,v])=>`${esc(k)}: ${Number(v)||0}`).join(', ')}</div>` : ''}
     `;
   } catch(e) {
-    el.innerHTML = `<span style="color:var(--red)">✗ ${e.message}</span>`;
+    el.innerHTML = `<span style="color:var(--red)">✗ ${esc(e.message)}</span>`;
   }
 }
 
@@ -3299,7 +3423,9 @@ async function triggerStatsSnapshot(button) {
     const el = document.getElementById('debug-status');
     if (!el) return;
     el.style.display = 'block';
-    el.innerHTML += '<div>' + new Date().toLocaleTimeString() + ' — ' + msg + '</div>';
+    const row = document.createElement('div');
+    row.textContent = new Date().toLocaleTimeString() + ' — ' + String(msg ?? '');
+    el.appendChild(row);
   }
 
   dbg('Script gestartet');
@@ -3887,7 +4013,7 @@ function renderHourlyChart(hourlyData) {
     var barH = Math.max(2, Math.round((item.count / maxCount) * (h - pad)));
     var x = pad + i * Math.floor((w - pad * 2) / hourlyData.length);
     var y = h - pad - barH;
-    var hour = item.hour ? item.hour.substring(11, 16) : '';
+    var hour = esc(item.hour ? item.hour.substring(11, 16) : '');
     return '<rect x="' + x + '" y="' + y + '" width="' + barW + '" height="' + barH +
            '" fill="var(--accent)" rx="2" opacity="0.85">' +
            '<title>' + hour + ': ' + item.count + ' completed</title></rect>' +
@@ -4359,7 +4485,7 @@ async function dropPageCache() {
     var d = await api('POST', '/admin/drop-page-cache');
     toast('Page cache released for ' + d.cache_released + '/' + d.files_processed + ' files', 'success');
     if (el) el.innerHTML =
-      '<b style="color:var(--green)">&#10003; ' + d.message + '</b><br>' +
+      '<b style="color:var(--green)">&#10003; ' + esc(d.message) + '</b><br>' +
       '<span style="font-size:11px;color:var(--text2)">Run Memory Info again to see updated RAM usage.</span>';
     // refresh memory info after 1s
     setTimeout(showMemoryInfo, 1200);

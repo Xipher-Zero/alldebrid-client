@@ -4,9 +4,9 @@ WORKDIR /app
 
 ARG APP_VERSION=unknown
 ARG VCS_REF=unknown
-LABEL org.opencontainers.image.title="DebridPulse — Multi-provider Debrid Download Manager"
+LABEL org.opencontainers.image.title="DebridPulse — AllDebrid + aria2 Download Manager"
 LABEL org.opencontainers.image.version="${APP_VERSION}"
-LABEL org.opencontainers.image.description="Multi-provider debrid download manager for direct links, magnets, and torrent files"
+LABEL org.opencontainers.image.description="AllDebrid-backed download manager for direct links, magnets, and torrent files via aria2"
 LABEL org.opencontainers.image.source="https://github.com/Xipher-Zero/debridpulse"
 LABEL org.opencontainers.image.revision="${VCS_REF}"
 LABEL org.opencontainers.image.licenses="GPL-2.0-or-later"
@@ -16,8 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     aria2 \
     curl \
     gosu \
-    p7zip-full \
-    unrar-free && rm -rf /var/lib/apt/lists/*
+    p7zip-full && rm -rf /var/lib/apt/lists/*
 
 # Python deps
 COPY backend/requirements.txt .

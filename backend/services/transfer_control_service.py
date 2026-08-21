@@ -55,7 +55,9 @@ class TransferControlService:
         transfer_id = int(transfer_id)
         await self.ensure_initialized()
         if not bool(get_settings().paused):
-            return await self.coordinator.resume_torrent(transfer_id)
+            result = await self.coordinator.resume_torrent(transfer_id)
+            await self.engine.resume_deferred_provider_submissions()
+            return result
 
         released_while_waiting = False
         sibling_ids: list[int] = []
@@ -98,6 +100,7 @@ class TransferControlService:
             "Global Pause All converted to selective pause; resumed this transfer while "
             f"{len(sibling_ids)} other paused transfer(s) remain parked",
         )
+        await self.engine.resume_deferred_provider_submissions()
         self.coordinator._schedule_queue()
         return result
 
@@ -108,6 +111,7 @@ class TransferControlService:
     async def resume_all(self):
         result = await self.coordinator.resume_all_downloads()
         self._set_global_paused(False)
+        await self.engine.resume_deferred_provider_submissions()
         self.coordinator._schedule_queue()
         return result
 

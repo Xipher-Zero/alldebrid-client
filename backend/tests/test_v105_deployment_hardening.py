@@ -12,7 +12,7 @@ def _mode(path: Path) -> int:
 def test_compose_tracks_release_and_public_health_endpoint():
     root = Path(__file__).resolve().parents[2]
     compose = (root / "docker-compose.yml").read_text()
-    assert "ghcr.io/xipher-zero/debridpulse:v1.0.5" in compose
+    assert "ghcr.io/xipher-zero/debridpulse:v1.0.6" in compose
     assert "http://localhost:8080/api/health" in compose
     assert "http://localhost:8080/api/stats" not in compose
 

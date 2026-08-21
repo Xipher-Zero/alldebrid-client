@@ -215,8 +215,11 @@ class BuiltinAria2Runtime:
                 self._last_error = ""
                 await self._wait_until_healthy()
                 logger.info("Built-in aria2 started on %s", builtin_rpc_url(cfg))
-            except Exception as exc:
-                self._last_error = str(exc)
+            except BaseException as exc:
+                self._last_error = str(exc).strip() or exc.__class__.__name__
+                await self._cleanup_failed_start()
+                if isinstance(exc, asyncio.CancelledError):
+                    raise
                 logger.warning("Built-in aria2 start failed: %s", exc)
             return await self.status()
 
@@ -341,6 +344,26 @@ class BuiltinAria2Runtime:
             await asyncio.gather(*tasks, return_exceptions=True)
         self._stdout_task = None
         self._stderr_task = None
+
+    async def _cleanup_failed_start(self) -> None:
+        """Roll back every resource allocated by an unsuccessful start attempt."""
+        process = self._process
+        if process is not None and process.returncode is None:
+            try:
+                process.terminate()
+            except ProcessLookupError:
+                pass
+            try:
+                await asyncio.wait_for(process.wait(), timeout=5)
+            except asyncio.TimeoutError:
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    pass
+                await process.wait()
+        await self._cancel_drain_tasks()
+        self._process = None
+        self._started_at = 0.0
 
     def _startup_error(self, message: str) -> str:
         log_file, _ = self._runtime_paths()

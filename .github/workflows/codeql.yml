@@ -1,5 +1,5 @@
 # CodeQL static analysis — runs on push/PR to main and weekly.
-# Scans Python backend and GitHub Actions workflow files.
+# Scans Python backend, browser JavaScript, and GitHub Actions workflow files.
 name: CodeQL
 
 on:
@@ -28,6 +28,8 @@ jobs:
       matrix:
         include:
           - language: python
+            build-mode: none
+          - language: javascript-typescript
             build-mode: none
           - language: actions
             build-mode: none

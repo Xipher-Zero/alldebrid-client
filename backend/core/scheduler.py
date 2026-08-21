@@ -8,7 +8,6 @@ from core.logging_utils import sanitize_exception
 from core.performance import async_timer
 from core.version import normalize_version_tag
 from services.transfer_service import transfer_service
-from services.reconcile_cycle import reconcile_download_client_cycle
 
 logger = logging.getLogger("alldebrid.scheduler")
 _tasks = []
@@ -57,19 +56,19 @@ async def sync_status_loop():
             async with async_timer("scheduler.provider_poll"):
                 await transfer_service.sync_alldebrid_status()
         except Exception as e:
-            logger.error(f"Status sync error: {e}")
+            logger.error("Status sync error: %s", sanitize_exception(e))
         try:
             await transfer_service.cleanup_no_peer_errors()
         except Exception as e:
-            logger.error(f"No-peer cleanup error: {e}")
+            logger.error("No-peer cleanup error: %s", sanitize_exception(e))
         try:
             await transfer_service.cleanup_alldebrid_orphans()
         except Exception as e:
-            logger.debug(f"AllDebrid orphan cleanup error: {e}")
+            logger.debug("AllDebrid orphan cleanup error: %s", sanitize_exception(e))
         try:
             await transfer_service.cleanup_stuck_downloads()
         except Exception as e:
-            logger.error(f"Stuck download cleanup error: {e}")
+            logger.error("Stuck download cleanup error: %s", sanitize_exception(e))
         await asyncio.sleep(get_settings().poll_interval_seconds)
 
 
@@ -109,9 +108,9 @@ async def sync_download_clients_loop():
     while True:
         try:
             async with async_timer("scheduler.download_client_sync"):
-                await reconcile_download_client_cycle(transfer_service)
+                await transfer_service.reconciliation.reconcile()
         except Exception as e:
-            logger.error(f"Download client sync error: {e}")
+            logger.error("Download client sync error: %s", sanitize_exception(e))
         await asyncio.sleep(max(2, get_settings().aria2_poll_interval_seconds))
 
 
@@ -132,7 +131,7 @@ async def deep_sync_loop():
         try:
             await transfer_service.deep_sync_aria2_finished()
         except Exception as e:
-            logger.error(f"Deep aria2 sync error: {e}")
+            logger.error("Deep aria2 sync error: %s", sanitize_exception(e))
 
 
 async def backup_loop():
@@ -143,7 +142,7 @@ async def backup_loop():
             from services.backup import run_backup
             await run_backup()
         except Exception as e:
-            logger.error(f"Backup error: {e}")
+            logger.error("Backup error: %s", sanitize_exception(e))
         cfg = get_settings()
         interval_h = max(1, getattr(cfg, "backup_interval_hours", 24))
         await asyncio.sleep(interval_h * 3600)
@@ -162,7 +161,7 @@ async def aria2_housekeeping_loop():
         try:
             await transfer_service.run_aria2_housekeeping()
         except Exception as e:
-            logger.error(f"aria2 housekeeping error: {e}")
+            logger.error("aria2 housekeeping error: %s", sanitize_exception(e))
 
 
 async def aria2_log_rotation_loop():
@@ -178,7 +177,7 @@ async def aria2_log_rotation_loop():
                 if result.get("rotated"):
                     logger.info("aria2 log rotation completed")
         except Exception as e:
-            logger.error("aria2 log rotation error: %s", e)
+            logger.error("aria2 log rotation error: %s", sanitize_exception(e))
         await asyncio.sleep(900)
 
 
@@ -192,7 +191,7 @@ async def aria2_restart_loop():
 
     The restart is deferred until aria2 has no active downloads to avoid
     interrupting in-progress transfers. After restart, _dispatch re-queues
-    all pending files from the DB within one poll cycle (≤1 second).
+    all pending files from the DB within one poll cycle (normally ≤2 seconds).
 
     Controlled by aria2_restart_interval_hours (0 = disabled).
     """
@@ -236,7 +235,7 @@ async def aria2_restart_loop():
             await runtime.restart()
             logger.info("aria2 restarted successfully")
         except Exception as e:
-            logger.error("aria2_restart_loop error: %s", e)
+            logger.error("aria2_restart_loop error: %s", sanitize_exception(e))
 
 
 async def update_check_loop() -> None:
@@ -244,6 +243,8 @@ async def update_check_loop() -> None:
     await asyncio.sleep(300)  # 5 min initial delay
     _last_notified: str = ""
     while True:
+        # Keep a valid backoff even if settings retrieval itself fails.
+        interval_h = 12
         try:
             cfg = get_settings()
             interval_h = max(0, _coerce_int_setting(
@@ -288,7 +289,7 @@ async def update_check_loop() -> None:
         except asyncio.CancelledError:
             return
         except Exception as exc:
-            logger.warning("update_check_loop error: %s", exc)
+            logger.warning("update_check_loop error: %s", sanitize_exception(exc))
 
         await asyncio.sleep(max(3600, interval_h * 3600))
 
@@ -316,19 +317,9 @@ async def events_ttl_loop() -> None:
         except asyncio.CancelledError:
             return
         except Exception as exc:
-            logger.warning("events_ttl_loop error: %s", exc)
+            logger.warning("events_ttl_loop error: %s", sanitize_exception(exc))
         await asyncio.sleep(86400)  # run once every 24 hours
 
-
-async def recovery_loop():
-    """Low-frequency integrity pass through the same reconciliation authority."""
-    await asyncio.sleep(120)
-    while True:
-        try:
-            await transfer_service.reconciliation.recover()
-        except Exception as exc:
-            logger.debug("recovery_loop error: %s", exc)
-        await asyncio.sleep(300)
 
 
 async def disk_guard_loop():
@@ -350,11 +341,19 @@ async def disk_guard_loop():
             try:
                 await transfer_service.check_disk_space_guard()
             except Exception as e:
-                logger.debug(f"disk_guard check error: {e}")
+                logger.debug("disk_guard check error: %s", sanitize_exception(e))
         await asyncio.sleep(interval)
 
 
+def scheduler_running() -> bool:
+    return any(not task.done() for task in _tasks)
+
+
 async def start_scheduler():
+    if scheduler_running():
+        logger.debug("Scheduler already running")
+        return
+    _tasks.clear()
     _tasks.append(asyncio.create_task(sync_status_loop()))
     _tasks.append(asyncio.create_task(full_sync_loop()))
     _tasks.append(asyncio.create_task(sync_download_clients_loop()))
@@ -367,15 +366,24 @@ async def start_scheduler():
     _tasks.append(asyncio.create_task(aria2_restart_loop()))
     _tasks.append(asyncio.create_task(update_check_loop()))
     _tasks.append(asyncio.create_task(events_ttl_loop()))
-    _tasks.append(asyncio.create_task(recovery_loop()))
     _tasks.append(asyncio.create_task(disk_guard_loop()))
     logger.info("Scheduler started")
 
 
 async def stop_scheduler():
-    for t in _tasks:
-        t.cancel()
+    tasks = list(_tasks)
     _tasks.clear()
+    for task in tasks:
+        task.cancel()
+    if tasks:
+        waiter = asyncio.gather(*tasks, return_exceptions=True)
+        try:
+            await asyncio.shield(waiter)
+        except asyncio.CancelledError:
+            # Finish draining cancelled scheduler tasks before propagating caller
+            # cancellation; the wipe route can then safely restart the scheduler.
+            await waiter
+            raise
 
 
 async def stats_snapshot_loop():
@@ -392,7 +400,7 @@ async def stats_snapshot_loop():
             from services.stats import take_stats_snapshot
             await take_stats_snapshot()
         except Exception as e:
-            logger.error(f"Stats snapshot error: {e}")
+            logger.error("Stats snapshot error: %s", sanitize_exception(e))
 
 
 async def stats_report_loop():
@@ -410,4 +418,4 @@ async def stats_report_loop():
             from services.stats import send_stats_report
             await send_stats_report(hours=window_h, triggered_by="schedule")
         except Exception as e:
-            logger.error(f"Stats report error: {e}")
+            logger.error("Stats report error: %s", sanitize_exception(e))

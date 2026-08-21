@@ -34,10 +34,11 @@ DebridPulse can manage its own built-in aria2 instance or safely use a shared ex
 
 | Feature | Description |
 |---|---|
-| **Direct debrid links** | Submit ordinary HTTP/HTTPS links from AllDebrid-supported hosts directly from the Dashboard |
+| **Unified Dashboard submission** | Paste HTTP/HTTPS direct links and magnet URIs into one mixed-input control, or use the same Add action with an empty field to choose a `.torrent` file |
 | **Batch link submission** | Submit up to 100 unique direct links in one tracked transaction |
 | **Magnet links** | Submit one or more magnets through AllDebrid |
 | **Torrent files** | Upload `.torrent` files directly to AllDebrid |
+| **Pause-safe intake** | Pause All stops processing, not intake: new links, magnets, and `.torrent` files are recorded locally and begin provider work after Resume All |
 | **Delayed link generation** | Automatically handles AllDebrid links that require asynchronous generation |
 | **Built-in aria2** | Run DebridPulse with its bundled aria2 instance for a self-contained deployment |
 | **External aria2** | Connect to an existing aria2 JSON-RPC daemon |
@@ -61,7 +62,7 @@ DebridPulse can manage its own built-in aria2 instance or safely use a shared ex
 
 Direct hoster links are first-class DebridPulse transfers rather than untracked aria2 jobs.
 
-Paste one or more HTTP/HTTPS links into the direct-link field on the Dashboard. DebridPulse then:
+Paste one or more HTTP/HTTPS links into the unified Dashboard submission field (direct links and magnets may be mixed, one item per line). DebridPulse then:
 
 1. validates and records the original URL;
 2. asks AllDebrid to unlock the link;
@@ -128,7 +129,7 @@ git clone https://github.com/Xipher-Zero/debridpulse.git
 cd debridpulse
 ```
 
-Review `docker-compose.yml` before starting it. Adapt host paths, UID/GID, timezone, networking, and persistent storage to your environment.
+Review `docker-compose.yml` before starting it. Adapt host paths, UID/GID, timezone, networking, and persistent storage to your environment. The generic example uses bridge networking and an explicit `8080:8080` port mapping; use host networking only when your platform specifically requires it.
 
 Then start DebridPulse:
 
@@ -151,7 +152,7 @@ Fork-owned images are published to GHCR.
 Versioned V1 images use the release tag:
 
 ```text
-ghcr.io/xipher-zero/debridpulse:v1.0.0
+ghcr.io/xipher-zero/debridpulse:v1.0.6
 ```
 
 Example:
@@ -169,7 +170,7 @@ docker run -d \
   -v /path/to/debridpulse/config:/app/config \
   -v /path/to/debridpulse/data:/app/data \
   -v /path/to/downloads:/download \
-  ghcr.io/xipher-zero/debridpulse:v1.0.0
+  ghcr.io/xipher-zero/debridpulse:v1.0.6
 ```
 
 Adjust the paths and UID/GID for your system.
@@ -200,7 +201,7 @@ Configure:
 
 ### Extract
 
-Configure optional archive extraction.
+Configure optional archive extraction. DebridPulse enforces per-archive file-count, expanded-size, and compression-ratio limits. External 7z/RAR extraction is performed in an isolated staging directory and validated before files are merged into the download tree.
 
 ### Notifications
 
@@ -222,14 +223,16 @@ The Dashboard is intended for current activity and common download submission.
 
 It provides:
 
-- direct-link submission;
-- magnet and `.torrent` submission;
+- one unified direct-link/magnet submission field;
+- `.torrent` file selection from the same Add control when the field is empty;
 - import and recovery controls;
 - current queue state;
 - completion and error counts;
 - recent download activity.
 
 The Dashboard intentionally shows only a small Recent Activity window. Use **Downloads** for full transfer history and management.
+
+**Pause All stops processing, not intake.** Submissions made while globally paused are durably recorded with a paused state; no new AllDebrid or aria2 work is started until Resume All (or an explicit per-transfer resume) releases them.
 
 ---
 
@@ -334,11 +337,21 @@ The primary implementation areas are:
 backend/
   api/
     routes.py
+    serializers.py
+  core/
+    scheduler.py
   services/
-    alldebrid.py
-    aria2.py
-    aria2_runtime.py
-    manager_v2.py
+    transfer_service.py
+    transfer_repository.py
+    transfer_state_machine.py
+    transfer_control_service.py
+    dispatch_coordinator.py
+    reconciliation_service.py
+    provider_gateway.py
+    aria2_gateway.py
+    ownership_ledger.py
+    extraction_safety.py
+    manager_v2.py        # V1 provider/materialization implementation
   db/
     database.py
 

@@ -100,7 +100,7 @@ def test_current_project_surfaces_state_the_debridpulse_gpl_identity():
     assert "GPL-2.0-or-later" in readme
     assert "DebridPulse · GPL-2.0-or-later" in landing_page
     assert "MIT License" not in landing_page
-    assert notice.startswith("DebridPulse — Multi-provider Debrid Download Manager")
+    assert notice.startswith("DebridPulse — AllDebrid + aria2 Download Manager")
     assert "issues/new?template=source_request.yml" in source_offer
 
 

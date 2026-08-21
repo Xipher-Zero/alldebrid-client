@@ -66,6 +66,29 @@ def _response_cookie(response, name):
     return None
 
 
+def test_pending_builder_preserves_replace_and_explicit_clear_secret_intent(monkeypatch):
+    current = _settings(oidc_client_secret="stored-secret")
+    monkeypatch.setattr(auth_config_routes, "get_settings", lambda: current)
+
+    preserved = auth_config_routes._build_proposed_settings(
+        auth_config_routes.OidcVerificationRequest()
+    )
+    assert preserved.oidc_client_secret == "stored-secret"
+    assert preserved.oidc_client_secret_clear is False
+
+    replaced = auth_config_routes._build_proposed_settings(
+        auth_config_routes.OidcVerificationRequest(oidc_client_secret="new-secret")
+    )
+    assert replaced.oidc_client_secret == "new-secret"
+    assert replaced.oidc_client_secret_clear is False
+
+    cleared = auth_config_routes._build_proposed_settings(
+        auth_config_routes.OidcVerificationRequest(clear_oidc_client_secret=True)
+    )
+    assert cleared.oidc_client_secret == ""
+    assert cleared.oidc_client_secret_clear is True
+
+
 @pytest.mark.asyncio
 async def test_verify_config_stages_only_and_sets_secure_browser_correlation(monkeypatch):
     current = _settings()

@@ -14,8 +14,11 @@ the lock file and `licenses/python-runtime.json`.
 | annotated-doc | 0.0.4 | MIT |
 | annotated-types | 0.7.0 | MIT |
 | anyio | 4.13.0 | MIT |
+| argon2-cffi | 25.1.0 | MIT |
+| argon2-cffi-bindings | 26.1.0 | MIT; vendored Argon2/BLAKE2 components are CC0-1.0 |
 | attrs | 26.1.0 | MIT |
 | bencode2 | 0.3.33 | MIT ([bundled notice](../licenses/bencode2-MIT.txt)) |
+| cffi | 2.1.1 | MIT-0 |
 | click | 8.3.3 | BSD-3-Clause |
 | fastapi | 0.141.1 | MIT |
 | frozenlist | 1.8.0 | Apache-2.0 |
@@ -25,6 +28,7 @@ the lock file and `licenses/python-runtime.json`.
 | multidict | 6.7.1 | Apache-2.0 |
 | prometheus-client | 0.26.0 | Apache-2.0 AND BSD-2-Clause |
 | propcache | 0.5.2 | Apache-2.0 |
+| pycparser | 3.0 | BSD-3-Clause |
 | pydantic | 2.13.4 | MIT |
 | pydantic-core | 2.46.4 | MIT |
 | python-multipart | 0.0.32 | Apache-2.0 |
@@ -66,6 +70,11 @@ Python packages retain their installed `.dist-info` license and notice files.
 `bencode2` 0.3.33 is the exception: its wheel omits the upstream MIT text, so
 DebridPulse explicitly packages that tagged notice at
 `licenses/bencode2-MIT.txt`.
+
+`argon2-cffi-bindings` includes the upstream Argon2 implementation and BLAKE2
+code in its distribution. Those vendored components are published under CC0;
+the Python binding package itself is MIT-licensed. Their installed package
+metadata/license files remain in the image.
 
 ## Vendored browser resources
 

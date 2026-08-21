@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import os
+import secrets
 import time
 from pathlib import Path
 from urllib.parse import quote
@@ -41,6 +42,7 @@ from auth.sessions import (
     session_store,
     set_session_cookie,
 )
+from auth.transitions import authentication_configuration_lock
 from core.config import get_settings
 
 
@@ -337,10 +339,11 @@ async def password_login(request: Request):
 
     configured_username = str(getattr(cfg, "auth_username", "") or "").strip()
     lifetime = _session_lifetime_seconds(cfg)
+    version = password_credential_version(getattr(cfg, "auth_password_hash", ""))
     token, _record = session_store.create(
-        Principal.password_session(configured_username),
+        Principal.password_session(configured_username, credential_version=version),
         lifetime_seconds=lifetime,
-        credential_version=password_credential_version(getattr(cfg, "auth_password_hash", "")),
+        credential_version=version,
     )
     response = RedirectResponse(url=return_to, status_code=303)
     set_session_cookie(response, request, token, max_age=lifetime)
@@ -410,15 +413,36 @@ async def oidc_callback(
         _clear_oidc_correlation_cookie(response)
         return response
 
-    old_token = session_cookie_token(request)
-    if old_token:
-        session_store.revoke(old_token)
-    cfg = get_settings()
-    lifetime = _session_lifetime_seconds(cfg)
-    token, _record = session_store.create(
-        principal,
-        lifetime_seconds=lifetime,
-    )
+    # A transaction is authorized against the exact OIDC snapshot captured at
+    # login start. Serialize the final check with auth-config writes and refuse
+    # to relabel an old proof as valid under newer issuer/client/policy state.
+    async with authentication_configuration_lock:
+        cfg = get_settings()
+        current_version = oidc_configuration_version(cfg)
+        proof_version = str(principal.credential_version or "")
+        if not proof_version or not current_version or not secrets.compare_digest(
+            proof_version,
+            current_version,
+        ):
+            response = _issue_login_page(
+                request,
+                return_to="/",
+                error="Authentication configuration changed while sign-in was in progress. Start a new sign-in.",
+                status_code=409,
+            )
+            _clear_oidc_correlation_cookie(response)
+            return response
+
+        old_token = session_cookie_token(request)
+        if old_token:
+            session_store.revoke(old_token)
+        lifetime = _session_lifetime_seconds(cfg)
+        token, _record = session_store.create(
+            principal,
+            lifetime_seconds=lifetime,
+            credential_version=proof_version,
+        )
+
     response = RedirectResponse(url=safe_return_path(return_to), status_code=303)
     set_session_cookie(
         response,

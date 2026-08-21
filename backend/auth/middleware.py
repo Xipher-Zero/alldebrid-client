@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import secrets
@@ -8,12 +9,15 @@ from collections.abc import Awaitable, Callable, Iterable
 from fastapi import Request, Response
 
 from auth.models import Principal
+from auth.passwords import basic_verification_cache, verify_password
 from auth.policy import (
     MUTATING_HTTP_METHODS,
     is_public_path,
     normalized_origin_host,
-    password_auth_configured,
+    password_auth_enabled,
+    password_auth_ready,
 )
+from auth.throttle import password_failure_throttle
 from core.branding import APP_SHORT_NAME
 from core.config import get_settings
 
@@ -39,6 +43,19 @@ def _decode_basic_credentials(header: str) -> tuple[str, str] | None:
     if not separator:
         return None
     return username, password
+
+
+def _peer_key(request: Request) -> str:
+    client = request.client
+    return str(client.host if client else "unknown")
+
+
+def _unauthorized() -> Response:
+    return Response(
+        content="Unauthorized",
+        status_code=401,
+        headers={"WWW-Authenticate": f'Basic realm="{APP_SHORT_NAME}"'},
+    )
 
 
 async def enforce_general_web_security(
@@ -79,34 +96,56 @@ async def enforce_general_web_security(
     return await call_next(request)
 
 
-async def enforce_legacy_basic_auth(request: Request, call_next: CallNext) -> Response:
-    """Phase-1 adapter for inherited Basic auth using the common Principal model.
+async def enforce_password_http_auth(request: Request, call_next: CallNext) -> Response:
+    """Admit open requests or authenticate explicit HTTP Basic credentials.
 
-    Password hashing, application sessions and explicit auth enable state replace
-    this legacy verifier in later phases. Keeping it isolated here lets phase 1
-    preserve current behavior while removing auth responsibility from main.py.
+    Browser form sessions replace the native Basic challenge in phase 3. Phase 2
+    keeps the existing interactive behavior while switching persistence and
+    verification to the final Argon2id credential model.
     """
     _attach_principal(request, Principal.anonymous())
     cfg = get_settings()
-    if not password_auth_configured(cfg):
+
+    if not password_auth_enabled(cfg):
         return await call_next(request)
 
     if is_public_path(request.url.path):
         return await call_next(request)
 
-    credentials = _decode_basic_credentials(request.headers.get("Authorization", ""))
-    if credentials is not None:
-        provided_user, provided_pass = credentials
-        username = str(getattr(cfg, "auth_username", "") or "").strip()
-        password = str(getattr(cfg, "auth_password", "") or "").strip()
-        user_ok = secrets.compare_digest(provided_user.encode(), username.encode())
-        pass_ok = secrets.compare_digest(provided_pass.encode(), password.encode())
-        if user_ok and pass_ok:
-            _attach_principal(request, Principal.http_basic(username))
-            return await call_next(request)
+    if not password_auth_ready(cfg):
+        return Response(content="Password authentication unavailable", status_code=503)
 
-    return Response(
-        content="Unauthorized",
-        status_code=401,
-        headers={"WWW-Authenticate": f'Basic realm="{APP_SHORT_NAME}"'},
-    )
+    auth_header = str(request.headers.get("Authorization", "") or "")
+    if not auth_header.startswith("Basic "):
+        return _unauthorized()
+
+    peer = _peer_key(request)
+    delay = password_failure_throttle.delay_for(peer)
+    if delay:
+        await asyncio.sleep(delay)
+
+    credentials = _decode_basic_credentials(auth_header)
+    if credentials is None:
+        password_failure_throttle.record_failure(peer)
+        return _unauthorized()
+
+    provided_user, provided_pass = credentials
+    username = str(getattr(cfg, "auth_username", "") or "").strip()
+    password_hash = str(getattr(cfg, "auth_password_hash", "") or "").strip()
+    user_ok = secrets.compare_digest(provided_user.encode(), username.encode())
+
+    verified = False
+    if user_ok:
+        verified = basic_verification_cache.contains(username, provided_pass, password_hash)
+        if not verified:
+            verified = verify_password(password_hash, provided_pass)
+            if verified:
+                basic_verification_cache.remember(username, provided_pass, password_hash)
+
+    if verified:
+        password_failure_throttle.record_success(peer)
+        _attach_principal(request, Principal.http_basic(username))
+        return await call_next(request)
+
+    password_failure_throttle.record_failure(peer)
+    return _unauthorized()

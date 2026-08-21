@@ -64,6 +64,7 @@ class OidcDiscovery:
     jwks_uri: str
     token_endpoint_auth_methods: tuple[str, ...]
     signing_algorithms: tuple[str, ...]
+    userinfo_endpoint: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -299,6 +300,13 @@ def _parse_discovery(config: OidcConfiguration, data: Mapping[str, Any]) -> Oidc
     if pkce is not None and "S256" not in pkce:
         raise OidcProtocolError("OIDC provider does not advertise PKCE S256 support")
 
+    raw_userinfo = str(data.get("userinfo_endpoint") or "").strip()
+    userinfo_endpoint = (
+        _https_endpoint(raw_userinfo, field="UserInfo endpoint")
+        if raw_userinfo
+        else ""
+    )
+
     return OidcDiscovery(
         issuer=config.issuer,
         authorization_endpoint=_https_endpoint(
@@ -312,6 +320,7 @@ def _parse_discovery(config: OidcConfiguration, data: Mapping[str, Any]) -> Oidc
         jwks_uri=_https_endpoint(str(data.get("jwks_uri") or ""), field="JWKS URI"),
         token_endpoint_auth_methods=methods,
         signing_algorithms=algorithms,
+        userinfo_endpoint=userinfo_endpoint,
     )
 
 
@@ -403,6 +412,65 @@ async def _fetch_json(url: str) -> Mapping[str, Any]:
     if not isinstance(data, dict):
         raise OidcProtocolError("OIDC key set did not return a JSON object")
     return data
+
+
+def _claims_need_userinfo(
+    config: OidcConfiguration,
+    claims: Mapping[str, Any],
+) -> bool:
+    if config.allow_all:
+        return False
+    if config.allowed_emails and not str(claims.get("email") or "").strip():
+        return True
+    if config.allowed_groups and config.group_claim not in claims:
+        return True
+    return False
+
+
+async def _fetch_userinfo(
+    endpoint: str,
+    access_token: str,
+    expected_subject: str,
+) -> Mapping[str, Any]:
+    if not endpoint or not access_token:
+        raise OidcProtocolError("OIDC UserInfo is required but unavailable")
+    try:
+        async with httpx.AsyncClient(timeout=8.0, follow_redirects=False) as client:
+            response = await client.get(
+                endpoint,
+                headers={
+                    "Accept": "application/json",
+                    "Authorization": f"Bearer {access_token}",
+                },
+            )
+            response.raise_for_status()
+            data = response.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        raise OidcProtocolError("OIDC UserInfo is unavailable") from exc
+    if not isinstance(data, dict):
+        raise OidcProtocolError("OIDC UserInfo did not return a JSON object")
+    subject = str(data.get("sub") or "").strip()
+    if not subject or not secrets.compare_digest(subject, str(expected_subject)):
+        raise OidcProtocolError("OIDC UserInfo subject does not match the ID token")
+    return data
+
+
+def _merge_userinfo_claims(
+    config: OidcConfiguration,
+    id_claims: Mapping[str, Any],
+    userinfo: Mapping[str, Any],
+) -> dict[str, Any]:
+    merged = dict(id_claims)
+    for key in (
+        "email",
+        "email_verified",
+        "name",
+        "preferred_username",
+        config.group_claim,
+    ):
+        if key not in merged and key in userinfo:
+            merged[key] = userinfo[key]
+    return merged
 
 
 def _validate_authorized_party(claims: Mapping[str, Any], client_id: str) -> None:
@@ -560,6 +628,13 @@ async def complete_oidc_login(
     finally:
         await client.aclose()
     claims = await validate_id_token(token_response, transaction)
+    if _claims_need_userinfo(transaction.config, claims):
+        userinfo = await _fetch_userinfo(
+            transaction.discovery.userinfo_endpoint,
+            str(token_response.get("access_token") or ""),
+            str(claims.get("sub") or ""),
+        )
+        claims = _merge_userinfo_claims(transaction.config, claims, userinfo)
     principal = authorize_oidc_claims(transaction.config, claims)
     return principal, transaction.return_to
 

@@ -1,12 +1,20 @@
 from __future__ import annotations
 
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit
 
 from auth.passwords import is_usable_password_hash
 
 
 MUTATING_HTTP_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
-PUBLIC_PATHS = frozenset({"/api/health", "/api/version", "/api/avatar"})
+PUBLIC_PATHS = frozenset(
+    {
+        "/api/health",
+        "/api/version",
+        "/api/avatar",
+        "/api/auth/status",
+        "/login",
+    }
+)
 
 
 def is_public_path(path: str) -> bool:
@@ -28,6 +36,26 @@ def password_auth_ready(settings) -> bool:
 def password_auth_configured(settings) -> bool:
     """Compatibility name for callers asking whether password auth is usable."""
     return password_auth_ready(settings)
+
+
+def safe_return_path(value: str, *, default: str = "/") -> str:
+    """Accept only local relative return destinations; never create an open redirect."""
+    candidate = str(value or "").strip()
+    if not candidate or len(candidate) > 2048:
+        return default
+    if any(ch in candidate for ch in ("\\", "\r", "\n", "\x00")):
+        return default
+    try:
+        parsed = urlsplit(candidate)
+    except ValueError:
+        return default
+    if parsed.scheme or parsed.netloc:
+        return default
+    if not parsed.path.startswith("/") or parsed.path.startswith("//"):
+        return default
+    if parsed.path == "/login":
+        return default
+    return candidate
 
 
 def normalized_origin_host(origin: str) -> str:

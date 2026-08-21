@@ -87,3 +87,69 @@ jobs:
         run: |
           cd backend
           bandit -r . --exclude ./tests --severity-level high --confidence-level high -f txt
+
+  v106-maintenance-fix:
+    if: github.event_name == 'pull_request' && github.head_ref == 'work/v1.0.6-audit-cleanup'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+    steps:
+      - name: Checkout corrective branch
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+
+      - name: Apply corrective patch
+        run: python tools/v106_final_maintenance_patch.py
+
+      - name: Install validation dependencies
+        run: |
+          cd backend
+          pip install -r requirements-dev.txt
+          pip install ruff pip-audit bandit
+
+      - name: Validate corrected tree
+        run: |
+          set -euo pipefail
+          cd backend
+          ruff check api core db services main.py --select F821,F822,F823
+          python -m pytest tests/ -v --tb=short
+          python -m compileall -q .
+          cd ..
+          node --check frontend/static/app.js
+          cd backend
+          pip-audit -r requirements.txt --progress-spinner off
+          bandit -r . --exclude ./tests --severity-level high --confidence-level high -f txt
+          cd ..
+          git diff --check
+
+      - name: Commit corrected source tree
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- \
+            backend/services/maintenance_gate.py \
+            backend/services/transfer_service.py \
+            backend/api/routes.py \
+            backend/main.py \
+            backend/services/manager_v2.py \
+            backend/tests/test_v106_corrective_regressions.py \
+            SECURITY.md \
+            CHANGELOG.md
+          git diff --cached --check
+          git commit -m "fix: serialize destructive maintenance admission"
+          git push origin HEAD:${{ github.head_ref }}

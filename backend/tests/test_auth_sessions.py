@@ -97,17 +97,19 @@ async def _ok(_request):
     return Response(content="ok", status_code=200)
 
 
-def test_auth_bootstrap_loads_before_application_javascript():
-    index = (ROOT / "frontend/static/index.html").read_text()
-    auth_tag = '<script src="/auth.js?v=1" defer></script>'
-    app_tag = '<script src="/app.js?v=12" defer></script>'
-    assert auth_tag in index
-    assert app_tag in index
-    assert index.index(auth_tag) < index.index(app_tag)
-    auth_js = (ROOT / "frontend/static/auth.js").read_text()
-    assert "localStorage" not in auth_js
-    assert "sessionStorage" not in auth_js
-    assert "X-CSRF-Token" in auth_js
+@pytest.mark.asyncio
+async def test_auth_bootstrap_loads_before_application_javascript():
+    bundle_response = await auth_routes.application_javascript_bundle()
+    bundle = bundle_response.body.decode("utf-8")
+    auth_marker = "DebridPulse application-session bootstrap"
+    app_marker = "DebridPulse — AllDebrid + aria2 download manager"
+    assert auth_marker in bundle
+    assert app_marker in bundle
+    assert bundle.index(auth_marker) < bundle.index(app_marker)
+    assert "localStorage" not in bundle.split(app_marker, 1)[0]
+    assert "sessionStorage" not in bundle.split(app_marker, 1)[0]
+    assert "X-CSRF-Token" in bundle.split(app_marker, 1)[0]
+    assert bundle_response.headers["cache-control"] == "no-cache"
 
 
 def test_login_request_body_limit_is_narrower_than_general_application_limit():

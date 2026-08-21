@@ -162,6 +162,8 @@ async def enforce_authentication(request: Request, call_next: CallNext) -> Respo
     auth_header = str(request.headers.get("Authorization", "") or "")
     if _has_basic_scheme(auth_header):
         if not password_auth_enabled(cfg):
+            if not interactive_auth_enabled(cfg):
+                return await call_next(request)
             return _unauthorized(basic_challenge=True)
         if not password_auth_ready(cfg):
             return JSONResponse(

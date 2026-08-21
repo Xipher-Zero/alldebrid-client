@@ -1,3 +1,4 @@
+# Temporary corrective workflow; removed after the source pass is validated.
 name: v1.0.6 Final Audit Corrective Pass
 
 on:

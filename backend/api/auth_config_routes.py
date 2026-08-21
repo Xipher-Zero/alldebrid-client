@@ -142,6 +142,7 @@ async def verify_pending_oidc_configuration(
         state,
         candidate,
         configuration_version=version,
+        apply_password_enabled=proposed.auth_password_enabled is not None,
     )
     response = JSONResponse(
         {

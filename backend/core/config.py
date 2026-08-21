@@ -3,7 +3,7 @@ import logging
 import os
 from pathlib import Path
 from typing import List, Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from auth.passwords import hash_password
 from core.branding import APP_SHORT_NAME
@@ -175,10 +175,11 @@ class AppSettings(BaseModel):
     # ── Authentication ────────────────────────────────────────────────────────
     # Username & Password is an explicit mechanism. auth_password is retained
     # only as transient legacy/settings input and is never persisted after
-    # migration; auth_password_hash is the authoritative stored verifier.
+    # migration; auth_password_hash is the authoritative stored verifier and is
+    # excluded from normal model serialization.
     auth_password_enabled: bool = False
     auth_username: str = ""
-    auth_password_hash: str = ""
+    auth_password_hash: str = Field(default="", exclude=True)
     auth_password: str = ""
 
     # ── Disk space guard ─────────────────────────────────────────────────────
@@ -287,6 +288,14 @@ def load_settings() -> AppSettings:
 
 def save_settings(s: AppSettings):
     """Atomically persist configuration with secret-safe filesystem permissions."""
+    global _settings
+    plaintext = str(getattr(s, "auth_password", "") or "")
+    if plaintext:
+        s.auth_password_hash = hash_password(plaintext)
+        s.auth_password = ""
+    elif not str(getattr(s, "auth_password_hash", "") or "").strip():
+        s.auth_password_hash = str(getattr(_settings, "auth_password_hash", "") or "")
+
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     try:
         os.chmod(CONFIG_PATH.parent, 0o700)
@@ -294,6 +303,7 @@ def save_settings(s: AppSettings):
         pass
     data = s.model_dump()
     data.pop("auth_password", None)
+    data["auth_password_hash"] = str(getattr(s, "auth_password_hash", "") or "")
     tmp = CONFIG_PATH.with_name(CONFIG_PATH.name + ".tmp")
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)

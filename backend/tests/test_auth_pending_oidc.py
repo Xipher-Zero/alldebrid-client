@@ -1,0 +1,195 @@
+from http.cookies import SimpleCookie
+
+import pytest
+from fastapi import Request
+
+from api import auth_config_routes
+from auth.models import Principal
+from auth.oidc import OIDC_CORRELATION_COOKIE, OidcProtocolError
+from auth.oidc_version import oidc_configuration_version
+from auth.pending_oidc import pending_oidc_store
+from core.config import AppSettings
+
+
+def _settings(**updates):
+    values = {
+        "auth_password_enabled": True,
+        "auth_username": "operator",
+        "auth_oidc_enabled": True,
+        "oidc_provider_name": "OpenID Connect",
+        "oidc_issuer_url": "https://id.example/application/o/debridpulse",
+        "oidc_client_id": "debridpulse-client",
+        "oidc_client_secret": "secret",
+        "oidc_scopes": ["openid", "profile", "email"],
+        "oidc_allow_all": True,
+        "oidc_allowed_subjects": [],
+        "oidc_allowed_emails": [],
+        "oidc_allowed_groups": [],
+        "oidc_group_claim": "groups",
+        "public_base_url": "https://pulse.example",
+    }
+    values.update(updates)
+    return AppSettings(**values)
+
+
+def _request(path="/api/auth/oidc/verify-config", cookie=""):
+    headers = [(b"host", b"pulse.example")]
+    if cookie:
+        headers.append((b"cookie", cookie.encode("latin-1")))
+    request = Request(
+        {
+            "type": "http",
+            "asgi": {"version": "3.0"},
+            "http_version": "1.1",
+            "method": "POST" if path.startswith("/api/") else "GET",
+            "scheme": "https",
+            "path": path,
+            "raw_path": path.encode(),
+            "query_string": b"",
+            "headers": headers,
+            "client": ("127.0.0.1", 12345),
+            "server": ("pulse.example", 443),
+        }
+    )
+    request.state.principal = Principal.password_session("operator")
+    return request
+
+
+def _response_cookie(response, name):
+    for key, value in response.raw_headers:
+        if key.lower() != b"set-cookie":
+            continue
+        parsed = SimpleCookie()
+        parsed.load(value.decode("latin-1"))
+        if name in parsed:
+            return parsed[name]
+    return None
+
+
+@pytest.mark.asyncio
+async def test_verify_config_stages_only_and_sets_secure_browser_correlation(monkeypatch):
+    current = _settings()
+    pending_oidc_store.clear()
+    monkeypatch.setattr(auth_config_routes, "get_settings", lambda: current)
+
+    async def fake_begin(candidate, *, return_to):
+        assert candidate.oidc_client_id == "replacement-client"
+        assert return_to == "/settings"
+        return "https://id.example/authorize?state=pending-state", "browser-correlation"
+
+    monkeypatch.setattr(auth_config_routes, "begin_oidc_login", fake_begin)
+    monkeypatch.setattr(auth_config_routes, "oidc_configuration_version", lambda _candidate: "version-1")
+    monkeypatch.setattr(
+        auth_config_routes,
+        "oidc_callback_url",
+        lambda _candidate: "https://pulse.example/auth/oidc/callback",
+    )
+
+    proposed = auth_config_routes.OidcVerificationRequest(
+        oidc_client_id="replacement-client",
+        return_to="/settings",
+    )
+    response = await auth_config_routes.verify_pending_oidc_configuration(
+        _request(),
+        proposed,
+    )
+    assert response.status_code == 200
+    assert pending_oidc_store.has("pending-state") is True
+    assert current.oidc_client_id == "debridpulse-client"
+
+    cookie = _response_cookie(response, OIDC_CORRELATION_COOKIE)
+    assert cookie is not None
+    assert cookie["secure"] is True
+    assert cookie["httponly"] is True
+    assert cookie["samesite"].lower() == "lax"
+
+
+@pytest.mark.asyncio
+async def test_failed_pending_callback_never_commits_proposed_config(monkeypatch):
+    candidate = _settings(oidc_client_id="replacement-client")
+    pending_oidc_store.clear()
+    pending_oidc_store.stage(
+        "pending-state",
+        candidate,
+        configuration_version=oidc_configuration_version(candidate),
+    )
+    calls = []
+
+    async def failed_complete(**_kwargs):
+        raise OidcProtocolError("bad token")
+
+    monkeypatch.setattr(auth_config_routes, "complete_oidc_login", failed_complete)
+    monkeypatch.setattr(
+        auth_config_routes,
+        "commit_verified_pending_oidc",
+        lambda _state: calls.append("commit") or True,
+    )
+
+    response = await auth_config_routes.pending_aware_oidc_callback(
+        _request(
+            path="/auth/oidc/callback",
+            cookie=f"{OIDC_CORRELATION_COOKIE}=browser-correlation",
+        ),
+        state="pending-state",
+        code="code",
+    )
+    assert response.status_code == 401
+    assert calls == []
+    assert pending_oidc_store.has("pending-state") is False
+
+
+@pytest.mark.asyncio
+async def test_successful_pending_callback_commits_before_new_session(monkeypatch):
+    candidate = _settings(oidc_client_id="replacement-client")
+    pending_oidc_store.clear()
+    pending_oidc_store.stage(
+        "pending-state",
+        candidate,
+        configuration_version=oidc_configuration_version(candidate),
+    )
+    events = []
+    principal = Principal.oidc_session("https://id.example|user-1")
+
+    async def successful_complete(**_kwargs):
+        events.append("verified")
+        return principal, "/settings"
+
+    def fake_commit(state):
+        assert state == "pending-state"
+        events.append("committed")
+        pending_oidc_store.discard(state)
+        return True
+
+    class FakeSessionStore:
+        def revoke(self, _token):
+            events.append("revoked-old")
+            return True
+
+        def create(self, created_principal, *, lifetime_seconds):
+            assert created_principal is principal
+            assert lifetime_seconds > 0
+            events.append("new-session")
+            return "new-token", object()
+
+    monkeypatch.setattr(auth_config_routes, "complete_oidc_login", successful_complete)
+    monkeypatch.setattr(auth_config_routes, "commit_verified_pending_oidc", fake_commit)
+    monkeypatch.setattr(auth_config_routes, "session_store", FakeSessionStore())
+    monkeypatch.setattr(auth_config_routes, "get_settings", lambda: candidate)
+
+    response = await auth_config_routes.pending_aware_oidc_callback(
+        _request(
+            path="/auth/oidc/callback",
+            cookie=(
+                f"{OIDC_CORRELATION_COOKIE}=browser-correlation; "
+                "__Host-debridpulse-session=old-token"
+            ),
+        ),
+        state="pending-state",
+        code="code",
+    )
+    assert response.status_code == 303
+    assert response.headers["location"] == "/settings"
+    assert events.index("verified") < events.index("committed") < events.index("new-session")
+    issued = _response_cookie(response, "__Host-debridpulse-session")
+    assert issued is not None
+    assert issued.value == "new-token"

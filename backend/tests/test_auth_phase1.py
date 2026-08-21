@@ -107,6 +107,24 @@ async def test_general_browser_security_preserves_explicit_cors_origin():
 
 
 @pytest.mark.asyncio
+async def test_general_browser_security_requires_exact_configured_cors_origin():
+    request = _request(
+        "POST",
+        headers={
+            "Host": "debridpulse.local",
+            "Origin": "http://automation.example",
+            "Sec-Fetch-Site": "cross-site",
+        },
+    )
+    response = await enforce_general_web_security(
+        request,
+        _ok,
+        allowed_origins=["https://automation.example"],
+    )
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
 async def test_legacy_basic_auth_sets_common_principal(monkeypatch):
     import auth.middleware as middleware
 

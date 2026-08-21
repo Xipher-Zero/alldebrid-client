@@ -168,7 +168,7 @@ async def public_auth_status():
 
 @router.get("/app.js", include_in_schema=False)
 async def application_javascript_bundle():
-    """Load the session/CSRF bootstrap before the existing application script."""
+    """Serve the protected browser bootstrap before the existing app script."""
     auth_js = _static_asset("auth.js").read_text(encoding="utf-8")
     app_js = _static_asset("app.js").read_text(encoding="utf-8")
     response = Response(

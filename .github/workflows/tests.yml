@@ -118,7 +118,9 @@ jobs:
           set +e
           (
             set -euo pipefail
+            python tools/sitecustomize.py
             python tools/v106_corrective_patch.py
+            python tools/sitecustomize.py
             python tools/v106_corrective_postpatch.py
 
             mkdir -p frontend/static/vendor
@@ -159,7 +161,7 @@ jobs:
           if [ '${{ steps.corrective.outputs.status }}' != '0' ]; then
             git reset --hard HEAD
             cp /tmp/v106-corrective.log v106-corrective-failure.log
-            git add -- v106-corrective-failure.log
+            git add -f -- v106-corrective-failure.log
             git commit -m 'chore: capture v1.0.6 corrective failure'
             git push origin HEAD:work/v1.0.6-audit-cleanup
             exit 0

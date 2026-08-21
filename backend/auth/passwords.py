@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import os
@@ -20,6 +21,10 @@ _DUMMY_PASSWORD_HASH = (
     "$argon2id$v=19$m=65536,t=3,p=4$LXpi21Jmn0Nsy9XXdJ5h2Q$"
     "tfoUhl3T7DNb5V/ogeM/1EEljjAfw61Bvtwn26tLbZI"
 )
+# The default Argon2id parameters use substantial memory by design. Bound
+# simultaneous unauthenticated verification work rather than letting the default
+# worker pool multiply that memory cost under attack.
+_PASSWORD_VERIFY_SLOTS = asyncio.Semaphore(2)
 
 
 def hash_password(password: str) -> str:
@@ -49,6 +54,28 @@ def verify_password_candidate(
     target = str(password_hash or "").strip() if use_configured_hash else _DUMMY_PASSWORD_HASH
     verified = verify_password(target, password)
     return bool(use_configured_hash and verified)
+
+
+async def verify_password_candidate_async(
+    password_hash: str,
+    password: str,
+    *,
+    use_configured_hash: bool,
+) -> bool:
+    """Run one real-or-dummy Argon2 verification off the request event loop."""
+    async with _PASSWORD_VERIFY_SLOTS:
+        return await asyncio.to_thread(
+            verify_password_candidate,
+            password_hash,
+            password,
+            use_configured_hash=use_configured_hash,
+        )
+
+
+def password_credential_version(password_hash: str) -> str:
+    """Stable non-secret version marker used to invalidate password sessions."""
+    encoded = str(password_hash or "").strip().encode("utf-8", errors="surrogatepass")
+    return hashlib.sha256(encoded).hexdigest() if encoded else ""
 
 
 def is_usable_password_hash(password_hash: str) -> bool:

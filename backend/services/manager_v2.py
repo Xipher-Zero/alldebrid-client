@@ -324,7 +324,6 @@ class TorrentManager:
         self._aria2_owned_gid_cache: Set[str] = set()
         # Disk-space guard state
         self._disk_guard_active: bool = False          # True = guard triggered, new dispatches deferred
-        self._disk_guard_paused: set[str] = set()     # aria2 GIDs paused by the guard
 
     def is_paused(self) -> bool:
         return bool(get_settings().paused)
@@ -4893,39 +4892,6 @@ class TorrentManager:
             "folder": folder,
         }
 
-    async def _disk_guard_pause_all(self) -> None:
-        """Pause all active aria2 GIDs and record them for later resume.
-
-        Only pauses aria2 — does not change DB statuses.  The sync loop will
-        detect the paused state from aria2 on the next cycle.  Torrents that
-        are in 'ready' state but not yet dispatched stay in 'ready' and will
-        be picked up by _disk_guard_resume_all → sync_download_clients.
-        """
-        try:
-            active = await self.aria2().tell_active()
-        except Exception as exc:
-            logger.debug("disk_guard: could not list active downloads: %s", exc)
-            return
-        owned_gids = (
-            {str(item.get("gid") or "") for item in active or []}
-            if is_builtin_mode()
-            else await self._aria2_owned_gids()
-        )
-        paused_count = 0
-        for item in active or []:
-            gid = str(item.get("gid") or "")
-            if not gid or gid not in owned_gids:
-                continue
-            try:
-                await self.aria2().pause(gid)
-                self._disk_guard_paused.add(gid)
-                paused_count += 1
-                logger.debug("disk_guard: paused aria2 GID %s", gid)
-            except Exception as exc:
-                logger.debug("disk_guard: could not pause GID %s: %s", gid, exc)
-        if paused_count:
-            logger.info("disk_guard: paused %d active aria2 download(s)", paused_count)
-
     async def _disk_guard_resume_all(self) -> None:
         """Trigger an immediate dispatch cycle when the disk guard deactivates.
 
@@ -4934,7 +4900,6 @@ class TorrentManager:
         'ready' torrents that were deferred by the guard start without waiting
         for the next sync cycle.
         """
-        self._disk_guard_paused.clear()  # defensive — should already be empty
         try:
             await self.sync_download_clients()
         except Exception as exc:

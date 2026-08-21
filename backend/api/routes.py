@@ -1412,36 +1412,47 @@ async def wipe_database_admin(body: dict | None = None):
         scheduler_was_running = scheduler_runtime.scheduler_running()
         quiesced = False
         try:
-            if scheduler_was_running:
-                await scheduler_runtime.stop_scheduler()
+            async with transfer_service.database_wipe_admission():
+                # A Resume could have been admitted immediately before maintenance
+                # closed admission. The gate drains it first; re-check the durable
+                # Pause All invariant only after that drain completes.
+                if not getattr(get_settings(), "paused", False):
+                    raise HTTPException(409, "Pause processing before wiping the database")
 
-            try:
-                quiesce_result = await transfer_service.quiesce_for_database_wipe()
-                quiesced = True
-            except Exception as exc:
-                raise HTTPException(409, _sanitize_error(exc))
+                if scheduler_was_running:
+                    await scheduler_runtime.stop_scheduler()
 
-            # Provider/materialization work is drained and scheduler admission is
-            # stopped before this point. The DB gate now drains request-side
-            # sessions already open and rejects new non-owner sessions. Stale
-            # work therefore cannot wait through the wipe and repopulate it.
-            async with database_maintenance():
-                backup_result = None
-                if getattr(cfg, "db_backup_before_wipe", True):
-                    from services.db_maintenance import run_database_backup
-                    backup_result = await run_database_backup()
-                    if backup_result.get("skipped"):
-                        raise HTTPException(409, "Pre-wipe database backup is required but disabled")
-                    if backup_result.get("errors"):
-                        raise HTTPException(500, "Pre-wipe database backup failed; wipe aborted")
+                try:
+                    quiesce_result = await transfer_service.quiesce_for_database_wipe()
+                    quiesced = True
+                except Exception as exc:
+                    raise HTTPException(409, _sanitize_error(exc))
 
-                from services.db_maintenance import wipe_database
-                result = await wipe_database(verified_quiesced=True)
+                try:
+                    # Application execution admission, scheduler activity, provider
+                    # work, materialization work and owned aria2 execution are all
+                    # closed/drained before this database writer gate is acquired.
+                    async with database_maintenance():
+                        backup_result = None
+                        if getattr(cfg, "db_backup_before_wipe", True):
+                            from services.db_maintenance import run_database_backup
+                            backup_result = await run_database_backup()
+                            if backup_result.get("skipped"):
+                                raise HTTPException(409, "Pre-wipe database backup is required but disabled")
+                            if backup_result.get("errors"):
+                                raise HTTPException(500, "Pre-wipe database backup failed; wipe aborted")
 
-            return {**result, "backup": backup_result, "quiesced": quiesce_result}
+                        from services.db_maintenance import wipe_database
+                        result = await wipe_database(verified_quiesced=True)
+
+                    return {**result, "backup": backup_result, "quiesced": quiesce_result}
+                finally:
+                    if quiesced:
+                        await transfer_service.release_database_wipe_quiescence()
+                        quiesced = False
         finally:
-            if quiesced:
-                await transfer_service.release_database_wipe_quiescence()
+            # Restart only after application admission has reopened so new
+            # scheduler tasks cannot immediately bounce off the maintenance gate.
             if scheduler_was_running:
                 await scheduler_runtime.start_scheduler()
 

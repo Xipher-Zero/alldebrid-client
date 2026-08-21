@@ -17,6 +17,7 @@ from services.dispatch_coordinator import DispatchCoordinator
 from services.reconciliation_service import ReconciliationService
 from services.extraction_service import ExtractionService
 from services.notification_service import NotificationService
+from services.maintenance_gate import ApplicationMaintenanceGate
 
 
 class TransferService:
@@ -35,24 +36,30 @@ class TransferService:
         )
         self.extraction = ExtractionService()
         self.notifications = NotificationService()
+        self._application_maintenance = ApplicationMaintenanceGate()
         materialization_engine.bind_architecture(self)
 
     # ----- operator control -----
 
     async def pause_torrent(self, transfer_id: int):
-        return await self.control.pause_transfer(transfer_id)
+        async with self._application_maintenance.operation():
+            return await self.control.pause_transfer(transfer_id)
 
     async def resume_torrent(self, transfer_id: int):
-        return await self.control.resume_transfer(transfer_id)
+        async with self._application_maintenance.operation():
+            return await self.control.resume_transfer(transfer_id)
 
     async def pause_all_downloads(self):
-        return await self.control.pause_all()
+        async with self._application_maintenance.operation():
+            return await self.control.pause_all()
 
     async def resume_all_downloads(self):
-        return await self.control.resume_all()
+        async with self._application_maintenance.operation():
+            return await self.control.resume_all()
 
     async def control_aria2_gid(self, *args, **kwargs):
-        return await self.control.control_gid(*args, **kwargs)
+        async with self._application_maintenance.operation():
+            return await self.control.control_gid(*args, **kwargs)
 
     async def owned_aria2_downloads(self, downloads):
         return await self.ownership.filter_owned(downloads)
@@ -64,45 +71,58 @@ class TransferService:
         return self.provider.client()
 
     async def sync_alldebrid_status(self):
-        return await self.provider.sync_status()
+        async with self._application_maintenance.operation():
+            return await self.provider.sync_status()
 
     async def reconcile_provider_inventory(self):
-        return await self.provider.reconcile_inventory()
+        async with self._application_maintenance.operation():
+            return await self.provider.reconcile_inventory()
 
     async def import_existing_magnets(self):
-        return await self.provider.import_existing()
+        async with self._application_maintenance.operation():
+            return await self.provider.import_existing()
 
     async def full_alldebrid_sync(self):
-        return await self.provider.full_sync()
+        async with self._application_maintenance.operation():
+            return await self.provider.full_sync()
 
     async def add_magnet_direct(self, magnet: str, source: str = "manual"):
-        return await self.provider.add_magnet(magnet, source=source)
+        async with self._application_maintenance.operation():
+            return await self.provider.add_magnet(magnet, source=source)
 
     async def add_torrent_file_direct(self, *args, **kwargs):
-        return await self.provider.add_torrent_file(*args, **kwargs)
+        async with self._application_maintenance.operation():
+            return await self.provider.add_torrent_file(*args, **kwargs)
 
     async def add_direct_links(self, links):
-        return await self.provider.add_direct_links(links)
+        async with self._application_maintenance.operation():
+            return await self.provider.add_direct_links(links)
 
     async def retry_direct_link_collection(self, transfer_id: int):
-        return await self.provider.retry_direct_link_collection(transfer_id)
+        async with self._application_maintenance.operation():
+            return await self.provider.retry_direct_link_collection(transfer_id)
 
     async def cleanup_no_peer_errors(self):
-        return await self.provider.cleanup_no_peer_errors()
+        async with self._application_maintenance.operation():
+            return await self.provider.cleanup_no_peer_errors()
 
     async def cleanup_alldebrid_orphans(self):
-        return await self.provider.cleanup_orphans()
+        async with self._application_maintenance.operation():
+            return await self.provider.cleanup_orphans()
 
     async def cleanup_stuck_downloads(self):
-        return await self.provider.cleanup_stuck()
+        async with self._application_maintenance.operation():
+            return await self.provider.cleanup_stuck()
 
     # ----- aria2 observation/maintenance -----
 
     async def advance_aria2_queue(self):
-        return await self.aria2.advance_queue()
+        async with self._application_maintenance.operation():
+            return await self.aria2.advance_queue()
 
     async def apply_aria2_memory_tuning(self):
-        return await self.aria2.apply_memory_tuning()
+        async with self._application_maintenance.operation():
+            return await self.aria2.apply_memory_tuning()
 
     async def test_aria2(self):
         return await self.aria2.test()
@@ -112,23 +132,32 @@ class TransferService:
         return await self.aria2.memory_diagnostics()
 
     async def run_aria2_housekeeping(self):
-        return await self.aria2.housekeeping()
+        async with self._application_maintenance.operation():
+            return await self.aria2.housekeeping()
 
     async def deep_sync_aria2_finished(self):
-        return await self.aria2.deep_sync()
+        async with self._application_maintenance.operation():
+            return await self.aria2.deep_sync()
 
     async def check_disk_space_guard(self):
-        return await self.aria2.disk_guard()
+        async with self._application_maintenance.operation():
+            return await self.aria2.disk_guard()
 
     # ----- explicit materialization/lifecycle compatibility -----
 
     async def _start_download(self, *args, **kwargs):
         """Existing startup recovery entrypoint routed through control authority."""
-        return await self.control.start_download(*args, **kwargs)
+        async with self._application_maintenance.operation():
+            return await self.control.start_download(*args, **kwargs)
 
     async def delete_torrent(self, *args, **kwargs):
         """Delete remains a materialization-engine operation in V1, explicitly exposed."""
-        return await self._engine.delete_torrent(*args, **kwargs)
+        async with self._application_maintenance.operation():
+            return await self._engine.delete_torrent(*args, **kwargs)
+
+    def database_wipe_admission(self):
+        """Close application mutation/execution admission for destructive maintenance."""
+        return self._application_maintenance.maintenance()
 
     async def quiesce_for_database_wipe(self):
         """Quiesce provider, materialization and owned aria2 work before DB wipe."""

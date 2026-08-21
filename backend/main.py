@@ -19,6 +19,7 @@ from core.version import read_version
 from db.database import DatabaseMaintenanceActive, init_db, DB_PATH
 from services.aria2_runtime import runtime as aria2_runtime
 from services.transfer_service import transfer_service
+from services.maintenance_gate import ApplicationMaintenanceActive
 
 _log_cfg = _get_log_settings()
 configure_logging(
@@ -193,6 +194,16 @@ async def database_maintenance_handler(_request: Request, _exc: DatabaseMaintena
     """Fail closed rather than queue stale request work behind a destructive wipe."""
     return Response(
         content="Database maintenance in progress",
+        status_code=503,
+        headers={"Retry-After": "2"},
+    )
+
+
+@app.exception_handler(ApplicationMaintenanceActive)
+async def application_maintenance_handler(_request: Request, _exc: ApplicationMaintenanceActive):
+    """Reject new mutation/execution work while destructive maintenance owns admission."""
+    return Response(
+        content="Application maintenance in progress",
         status_code=503,
         headers={"Retry-After": "2"},
     )

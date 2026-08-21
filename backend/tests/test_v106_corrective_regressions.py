@@ -307,3 +307,136 @@ def test_sqlite_default_source_is_not_legacy_watch_authority():
     database = (Path(__file__).resolve().parents[1] / "db" / "database.py").read_text()
     assert "source TEXT DEFAULT 'watch'" not in database
     assert "source TEXT DEFAULT ''" in database
+
+
+@pytest.mark.asyncio
+async def test_application_maintenance_gate_drains_admitted_work_and_rejects_new_work():
+    from services.maintenance_gate import ApplicationMaintenanceActive, ApplicationMaintenanceGate
+
+    gate = ApplicationMaintenanceGate()
+    started = asyncio.Event()
+    release = asyncio.Event()
+    entered = asyncio.Event()
+    release_maintenance = asyncio.Event()
+
+    async def admitted_operation():
+        async with gate.operation():
+            started.set()
+            # Reentrant work in the already-admitted task must be allowed to finish.
+            async with gate.operation():
+                await release.wait()
+
+    async def maintainer():
+        async with gate.maintenance():
+            entered.set()
+            await release_maintenance.wait()
+
+    operation_task = asyncio.create_task(admitted_operation())
+    await started.wait()
+    maintenance_task = asyncio.create_task(maintainer())
+    await asyncio.sleep(0)
+    assert not entered.is_set()
+
+    release.set()
+    await operation_task
+    await entered.wait()
+
+    with pytest.raises(ApplicationMaintenanceActive, match="maintenance"):
+        async with gate.operation():
+            pass
+
+    release_maintenance.set()
+    await maintenance_task
+
+
+@pytest.mark.asyncio
+async def test_transfer_service_gate_blocks_resume_and_intake_during_wipe_admission():
+    from services.maintenance_gate import ApplicationMaintenanceActive, ApplicationMaintenanceGate
+    from services.transfer_service import TransferService
+
+    service = object.__new__(TransferService)
+    service._application_maintenance = ApplicationMaintenanceGate()
+    service.control = SimpleNamespace(resume_all=AsyncMock(return_value={"ok": True}))
+    service.provider = SimpleNamespace(add_magnet=AsyncMock(return_value={"ok": True}))
+
+    async def expect_resume_rejected():
+        with pytest.raises(ApplicationMaintenanceActive):
+            await service.resume_all_downloads()
+
+    async def expect_intake_rejected():
+        with pytest.raises(ApplicationMaintenanceActive):
+            await service.add_magnet_direct("magnet:?xt=urn:btih:test")
+
+    async with service.database_wipe_admission():
+        # The maintenance owner is intentionally reentrant. The race is work
+        # arriving from other request/tasks after admission has closed.
+        await asyncio.gather(
+            asyncio.create_task(expect_resume_rejected()),
+            asyncio.create_task(expect_intake_rejected()),
+        )
+
+    service.control.resume_all.assert_not_awaited()
+    service.provider.add_magnet.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_database_wipe_rechecks_pause_after_application_admission_drain(monkeypatch):
+    import api.routes as routes
+
+    calls = []
+    state = SimpleNamespace(paused=True)
+    monkeypatch.setattr(
+        routes,
+        "get_settings",
+        lambda: SimpleNamespace(
+            db_wipe_enabled=True,
+            paused=state.paused,
+            db_backup_before_wipe=False,
+        ),
+    )
+    monkeypatch.setattr(routes.scheduler_runtime, "scheduler_running", lambda: True)
+
+    @asynccontextmanager
+    async def application_gate():
+        calls.append("app-gate-enter")
+        # Simulate a Resume that was admitted just before maintenance closed.
+        state.paused = False
+        try:
+            yield
+        finally:
+            calls.append("app-gate-exit")
+
+    monkeypatch.setattr(routes.transfer_service, "database_wipe_admission", application_gate)
+    monkeypatch.setattr(routes.scheduler_runtime, "stop_scheduler", AsyncMock())
+    monkeypatch.setattr(routes.scheduler_runtime, "start_scheduler", AsyncMock())
+
+    with pytest.raises(Exception) as exc:
+        await routes.wipe_database_admin({"confirm": True})
+    assert getattr(exc.value, "status_code", None) == 409
+    routes.scheduler_runtime.stop_scheduler.assert_not_awaited()
+    routes.scheduler_runtime.start_scheduler.assert_awaited_once()
+    assert calls == ["app-gate-enter", "app-gate-exit"]
+
+
+def test_database_wipe_application_gate_covers_execution_opening_boundaries():
+    service = (Path(__file__).resolve().parents[1] / "services" / "transfer_service.py").read_text()
+    for method in (
+        "resume_torrent",
+        "resume_all_downloads",
+        "control_aria2_gid",
+        "add_magnet_direct",
+        "add_torrent_file_direct",
+        "add_direct_links",
+        "retry_direct_link_collection",
+        "delete_torrent",
+        "advance_aria2_queue",
+        "deep_sync_aria2_finished",
+    ):
+        block = service.split(f"async def {method}", 1)[1].split("\n    async def ", 1)[0]
+        assert "self._application_maintenance.operation()" in block
+
+
+def test_dead_disk_guard_pause_path_removed():
+    manager = (Path(__file__).resolve().parents[1] / "services" / "manager_v2.py").read_text()
+    assert "_disk_guard_pause_all" not in manager
+    assert "_disk_guard_paused" not in manager

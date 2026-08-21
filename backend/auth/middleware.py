@@ -13,8 +13,10 @@ from auth.models import AuthMechanism, Principal
 from auth.passwords import password_credential_version
 from auth.policy import (
     MUTATING_HTTP_METHODS,
+    interactive_auth_enabled,
     is_public_path,
     normalized_origin_host,
+    oidc_auth_enabled,
     password_auth_enabled,
     password_auth_ready,
     safe_return_path,
@@ -86,6 +88,15 @@ def _password_session_still_valid(record, cfg) -> bool:
     return bool(current_version and record.credential_version == current_version)
 
 
+def _oidc_ready(cfg) -> bool:
+    if not oidc_auth_enabled(cfg):
+        return False
+    # Lazy import keeps the general policy layer independent of protocol code.
+    from auth.oidc import oidc_auth_ready
+
+    return oidc_auth_ready(cfg)
+
+
 async def enforce_general_web_security(
     request: Request,
     call_next: CallNext,
@@ -151,7 +162,7 @@ async def enforce_authentication(request: Request, call_next: CallNext) -> Respo
     auth_header = str(request.headers.get("Authorization", "") or "")
     if _has_basic_scheme(auth_header):
         if not password_auth_enabled(cfg):
-            return await call_next(request)
+            return _unauthorized(basic_challenge=True)
         if not password_auth_ready(cfg):
             return JSONResponse(
                 content={"detail": "Password authentication unavailable"},
@@ -175,12 +186,12 @@ async def enforce_authentication(request: Request, call_next: CallNext) -> Respo
             return await call_next(request)
         return _unauthorized(basic_challenge=True)
 
-    if not password_auth_enabled(cfg):
+    if not interactive_auth_enabled(cfg):
         return await call_next(request)
 
-    if not password_auth_ready(cfg):
+    if not (password_auth_ready(cfg) or _oidc_ready(cfg)):
         return JSONResponse(
-            content={"detail": "Password authentication unavailable"},
+            content={"detail": "Configured authentication is unavailable"},
             status_code=503,
         )
 

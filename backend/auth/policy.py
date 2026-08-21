@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
 from urllib.parse import urlparse
 
 
@@ -12,11 +11,21 @@ def is_public_path(path: str) -> bool:
     return str(path or "") in PUBLIC_PATHS
 
 
-def password_auth_configured(settings) -> bool:
-    """Legacy phase-1 compatibility check; replaced by explicit enable state in phase 2."""
+def password_auth_enabled(settings) -> bool:
+    return bool(getattr(settings, "auth_password_enabled", False))
+
+
+def password_auth_ready(settings) -> bool:
+    if not password_auth_enabled(settings):
+        return False
     username = str(getattr(settings, "auth_username", "") or "").strip()
-    password = str(getattr(settings, "auth_password", "") or "").strip()
-    return bool(username and password)
+    password_hash = str(getattr(settings, "auth_password_hash", "") or "").strip()
+    return bool(username and password_hash)
+
+
+def password_auth_configured(settings) -> bool:
+    """Compatibility name for callers asking whether password auth is usable."""
+    return password_auth_ready(settings)
 
 
 def normalized_origin_host(origin: str) -> str:
@@ -25,11 +34,3 @@ def normalized_origin_host(origin: str) -> str:
         return (urlparse(str(origin or "").strip()).netloc or "").casefold()
     except ValueError:
         return ""
-
-
-def configured_origin_hosts(origins: Iterable[str]) -> frozenset[str]:
-    return frozenset(
-        host
-        for host in (normalized_origin_host(origin) for origin in origins)
-        if host
-    )

@@ -54,11 +54,12 @@ def _sql_now_minus(interval: str) -> str:
 
 
 def _sql_strftime(fmt: str, field: str) -> str:
-    return f"strftime('{fmt}', {field})"
+    # SQLite stores canonical UTC clock values; calendar buckets are operator-local.
+    return f"strftime('{fmt}', {field}, 'localtime')"
 
 
 def _sql_date(field: str) -> str:
-    return f"DATE({field})"
+    return f"DATE({field}, 'localtime')"
 
 from services.transfer_service import transfer_service
 from services.aria2_runtime import runtime as aria2_runtime
@@ -144,6 +145,7 @@ def _public_settings(settings: AppSettings) -> dict:
             data[f"{field}_configured"] = bool(str(data.get(field) or "").strip())
             data[field] = ""
     data["database_backend"] = "sqlite"
+    data["timezone"] = (os.getenv("TZ", "UTC") or "UTC").strip() or "UTC"
     return data
 
 
@@ -1424,8 +1426,9 @@ async def wipe_database_admin(body: dict | None = None):
                     raise HTTPException(409, "Pause processing before wiping the database")
 
                 if scheduler_was_running:
-                    await scheduler_runtime.stop_scheduler()
+                    # Claim restart responsibility before the interruptible stop.
                     scheduler_stopped = True
+                    await scheduler_runtime.stop_scheduler()
 
                 try:
                     quiesce_result = await transfer_service.quiesce_for_database_wipe()

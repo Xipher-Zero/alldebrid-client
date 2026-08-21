@@ -180,11 +180,11 @@ class AppSettings(BaseModel):
     # 0 = disabled.
     #
     # When free space drops below this threshold:
-    #   - New downloads are blocked (deferred, not errored)
-    #   - Active aria2 downloads are PAUSED automatically
+    #   - New aria2 dispatches are deferred (not errored)
+    #   - Transfers already active in aria2 are allowed to finish
     #
     # When free space rises back above threshold + 0.5 GB hysteresis:
-    #   - Paused-by-guard downloads are RESUMED automatically
+    #   - Deferred dispatch resumes automatically
     #
     # Checked every disk_guard_interval_seconds (default 60 s) — not on every
     # poll cycle — to avoid excessive stat() calls on FUSE/NFS mounts.

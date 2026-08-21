@@ -1,4 +1,4 @@
-/* DebridPulse — Multi-provider Debrid Download Manager */
+/* DebridPulse — AllDebrid + aria2 download manager */
 
 const API = '/api';
 let currentFilter = '';
@@ -286,12 +286,30 @@ function fmtEta(secs) {
   var m = Math.floor((secs%3600)/60);
   return h + 'h ' + m + 'm';
 }
+function parseApiDate(d) {
+  if (!d) return null;
+  let value = d;
+  // SQLite CURRENT_TIMESTAMP is canonical UTC but historically serialized as a
+  // naive "YYYY-MM-DD HH:MM:SS" string. Treat that legacy form as UTC.
+  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(value.trim())) {
+    value = value.trim().replace(' ', 'T') + 'Z';
+  }
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
 function fmtDate(d) {
-  if (!d) return '—';
-  const x = new Date(d);
-  // Use en-GB for consistent DD.MM HH:MM format regardless of browser locale
-  const dateStr = x.toLocaleDateString('en-GB',{day:'2-digit',month:'2-digit'}).replace('/','.').replace('/','.');
-  const timeStr = x.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit',hour12:false});
+  const x = parseApiDate(d);
+  if (!x) return '—';
+  const timeZone = String((settingsData && settingsData.timezone) || '').trim() || undefined;
+  const dateOptions = {day:'2-digit',month:'2-digit'};
+  const timeOptions = {hour:'2-digit',minute:'2-digit',hour12:false};
+  if (timeZone) {
+    dateOptions.timeZone = timeZone;
+    timeOptions.timeZone = timeZone;
+  }
+  // Use en-GB for consistent DD.MM HH:MM format regardless of browser locale.
+  const dateStr = x.toLocaleDateString('en-GB',dateOptions).replace('/','.').replace('/','.');
+  const timeStr = x.toLocaleTimeString('en-GB',timeOptions);
   return dateStr + ' ' + timeStr;
 }
 function pct(part, total) {

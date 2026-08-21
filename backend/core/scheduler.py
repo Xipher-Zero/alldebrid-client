@@ -376,7 +376,14 @@ async def stop_scheduler():
     for task in tasks:
         task.cancel()
     if tasks:
-        await asyncio.gather(*tasks, return_exceptions=True)
+        waiter = asyncio.gather(*tasks, return_exceptions=True)
+        try:
+            await asyncio.shield(waiter)
+        except asyncio.CancelledError:
+            # Finish draining cancelled scheduler tasks before propagating caller
+            # cancellation; the wipe route can then safely restart the scheduler.
+            await waiter
+            raise
 
 
 async def stats_snapshot_loop():

@@ -15,6 +15,7 @@ Improvements over the original:
 import asyncio
 import logging
 import time
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -65,6 +66,12 @@ class Aria2DownloadStatus:
     error_code: str = ""
     error_message: str = ""
     files: Optional[List[Dict[str, Any]]] = None
+
+
+@dataclass
+class _UriLockEntry:
+    lock: asyncio.Lock
+    users: int = 0
 
 
 def aria2_download_to_dict(download: Aria2DownloadStatus) -> Dict[str, Any]:
@@ -120,7 +127,7 @@ class Aria2Service:
         self.secret = secret.strip()
         self.timeout = aiohttp.ClientTimeout(total=max(5, int(timeout_seconds or 15)))
         self._request_id = 0
-        self._uri_locks: Dict[str, asyncio.Lock] = {}
+        self._uri_locks: Dict[str, _UriLockEntry] = {}
         self._rpc_pace_lock = asyncio.Lock()
         self._last_call_time: float = 0.0
         self._rpc_http_requests = 0
@@ -242,7 +249,7 @@ class Aria2Service:
     ) -> str:
         normalized_uri = uri.strip()
         target_path = self._target_path_from_options(options)
-        async with self._lock_for_uri(normalized_uri):
+        async with self._uri_lock(normalized_uri):
             if cached_downloads is not None:
                 all_downloads = cached_downloads
             elif _is_builtin_mode():
@@ -297,10 +304,20 @@ class Aria2Service:
                     if attempt >= max_retries:
                         break
                     delay = min(attempt * attempt, 10)
-                    logger.warning("Error queuing download (attempt %s/%s) for %s, retrying in %ss: %s", attempt, max_retries, normalized_uri, delay, exc)
+                    logger.warning(
+                        "Error queuing download (attempt %s/%s) for %s, retrying in %ss: %s",
+                        attempt,
+                        max_retries,
+                        sanitize_log_value(normalized_uri, max_length=120),
+                        delay,
+                        sanitize_log_value(exc, max_length=200),
+                    )
                     await asyncio.sleep(delay)
 
-        raise Aria2RPCError(f"Unable to queue aria2 download for {normalized_uri}: {last_error}")
+        safe_error = sanitize_log_value(last_error, max_length=200)
+        raise Aria2RPCError(
+            f"Unable to queue aria2 download after retries: {safe_error or 'unknown aria2 error'}"
+        )
 
     def _find_all_matches(
         self,
@@ -334,12 +351,21 @@ class Aria2Service:
                 return dl
         return None
 
-    def _lock_for_uri(self, uri: str) -> asyncio.Lock:
-        lock = self._uri_locks.get(uri)
-        if lock is None:
-            lock = asyncio.Lock()
-            self._uri_locks[uri] = lock
-        return lock
+    @asynccontextmanager
+    async def _uri_lock(self, uri: str):
+        """Serialize one URI while dropping the high-cardinality key after use."""
+        entry = self._uri_locks.get(uri)
+        if entry is None:
+            entry = _UriLockEntry(lock=asyncio.Lock())
+            self._uri_locks[uri] = entry
+        entry.users += 1
+        try:
+            async with entry.lock:
+                yield
+        finally:
+            entry.users = max(0, entry.users - 1)
+            if entry.users == 0 and not entry.lock.locked() and self._uri_locks.get(uri) is entry:
+                self._uri_locks.pop(uri, None)
 
     def _bounded_window(self, value: int) -> int:
         try:

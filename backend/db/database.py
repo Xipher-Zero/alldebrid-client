@@ -80,20 +80,24 @@ class DatabaseMaintenanceGate:
     @asynccontextmanager
     async def maintenance(self):
         current = asyncio.current_task()
-        async with self._condition:
-            if self._maintenance_active:
-                raise DatabaseMaintenanceActive("Database maintenance is already in progress")
-            self._maintenance_active = True
-            self._owner = current
-            while self._active_sessions:
-                await self._condition.wait()
+        claimed = False
         try:
+            async with self._condition:
+                if self._maintenance_active:
+                    raise DatabaseMaintenanceActive("Database maintenance is already in progress")
+                self._maintenance_active = True
+                self._owner = current
+                claimed = True
+                while self._active_sessions:
+                    await self._condition.wait()
             yield
         finally:
-            async with self._condition:
-                self._owner = None
-                self._maintenance_active = False
-                self._condition.notify_all()
+            if claimed:
+                async with self._condition:
+                    if self._owner is current:
+                        self._owner = None
+                        self._maintenance_active = False
+                        self._condition.notify_all()
 
 
 database_maintenance_gate = DatabaseMaintenanceGate()

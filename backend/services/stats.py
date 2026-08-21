@@ -190,12 +190,12 @@ async def collect_all_metrics(
 
         # ── Daily completion trend (no per-window filter needed) ──────────────
         daily = await db.fetchall(
-            f"""SELECT DATE(completed_at) AS date, COUNT(*) AS cnt,
+            f"""SELECT DATE(completed_at, 'localtime') AS date, COUNT(*) AS cnt,
                 COALESCE(SUM(size_bytes), 0) AS bytes
                FROM torrents
                WHERE completed_at IS NOT NULL
                  AND completed_at >= datetime('now', '-{trend_days} days')
-               GROUP BY DATE(completed_at)
+               GROUP BY DATE(completed_at, 'localtime')
                ORDER BY date ASC""",
         )
 

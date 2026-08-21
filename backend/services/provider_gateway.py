@@ -33,10 +33,21 @@ class ProviderGateway:
 
     async def begin_quiescence(self) -> None:
         """Block new provider operations and wait for existing operations to drain."""
-        async with self._activity:
-            self._quiescing = True
-            while self._active_operations:
-                await self._activity.wait()
+        claimed = False
+        try:
+            async with self._activity:
+                if self._quiescing:
+                    raise RuntimeError("Provider quiescence is already active")
+                self._quiescing = True
+                claimed = True
+                while self._active_operations:
+                    await self._activity.wait()
+        except BaseException:
+            if claimed:
+                async with self._activity:
+                    self._quiescing = False
+                    self._activity.notify_all()
+            raise
 
     async def end_quiescence(self) -> None:
         async with self._activity:

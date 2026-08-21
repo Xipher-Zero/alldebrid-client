@@ -7,12 +7,14 @@ ownership manifest so a shared backup root cannot delete unrelated data.
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import logging
 import os
 import re
 import shutil
+import uuid
 from datetime import date, datetime, time, timezone
 from pathlib import Path
 
@@ -41,7 +43,8 @@ _TABLE_ORDER = {
     "debridpulse_aria2_owned_gids": "gid",
 }
 
-_BACKUP_DIR_RE = re.compile(r"^\d{8}_\d{6}$")
+_BACKUP_DIR_RE = re.compile(r"^\d{8}_\d{6}(?:_[0-9a-f]{8})?$")
+_BACKUP_RUN_LOCK = asyncio.Lock()
 _MANIFEST_NAME = ".debridpulse-db-backup.json"
 _MANIFEST_KIND = "debridpulse-database-backup"
 
@@ -103,6 +106,11 @@ def _managed_backup_dir(path: Path) -> bool:
 
 
 async def run_database_backup() -> dict:
+    async with _BACKUP_RUN_LOCK:
+        return await _run_database_backup_locked()
+
+
+async def _run_database_backup_locked() -> dict:
     cfg = get_settings()
     if not getattr(cfg, "db_backup_enabled", True):
         return {"skipped": True, "reason": "database backup disabled"}
@@ -110,7 +118,7 @@ async def run_database_backup() -> dict:
     backup_folder = _folder()
     backup_folder.mkdir(parents=True, exist_ok=True)
     _chmod_private(backup_folder, 0o700)
-    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    ts = f"{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
     backup_dir = backup_folder / ts
     backup_dir.mkdir(parents=True, exist_ok=True)
     _chmod_private(backup_dir, 0o700)

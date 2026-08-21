@@ -188,7 +188,7 @@ class TransferService:
                 "provider_operations_drained": True,
                 "materialization_drained": True,
             }
-        except Exception:
+        except BaseException:
             if provider_quiesced:
                 await self.provider.end_quiescence()
             self._engine.set_materialization_quiescing(False)

@@ -230,6 +230,11 @@ def _terminal_torrent_status(status: str) -> bool:
     return status in {"completed", "deleted", "error"}
 
 
+def _safe_persisted_error(exc: BaseException) -> str:
+    """Never persist provider/download capability material from an exception."""
+    return sanitize_exception(exc, max_length=300)
+
+
 def _aria2_status_rank(status: str) -> int:
     order = {
         "complete": 0,
@@ -3540,8 +3545,11 @@ class TorrentManager:
                             0.0,
                         )
                 except Exception as exc:
-                    logger.error("aria2 dispatch failed [%s]: %s", row["filename"], exc)
-                    await self._update_file_state(row["file_id"], "error", row["local_path"], reason=str(exc))
+                    safe_error = _safe_persisted_error(exc)
+                    logger.error("aria2 dispatch failed [%s]: %s", row["filename"], safe_error)
+                    await self._update_file_state(
+                        row["file_id"], "error", row["local_path"], reason=safe_error
+                    )
                     await self._finalize_aria2_torrent(row["torrent_id"])
 
     async def _schedule_ready_aria2_parents(self) -> int:

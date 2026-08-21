@@ -12,12 +12,14 @@ import os
 import re
 import shutil
 import sqlite3
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
 logger = logging.getLogger("alldebrid.backup")
 
-_BACKUP_DIR_RE = re.compile(r"^\d{8}_\d{6}$")
+_BACKUP_DIR_RE = re.compile(r"^\d{8}_\d{6}(?:_[0-9a-f]{8})?$")
+_BACKUP_RUN_LOCK = asyncio.Lock()
 _MANIFEST_NAME = ".debridpulse-backup.json"
 _MANIFEST_KIND = "debridpulse-backup"
 
@@ -72,6 +74,11 @@ def _managed_backup_dir(path: Path) -> bool:
 
 
 async def run_backup() -> dict:
+    async with _BACKUP_RUN_LOCK:
+        return await _run_backup_locked()
+
+
+async def _run_backup_locked() -> dict:
     """
     Performs a single backup run. Returns a summary dict.
     Backup folder default: /app/data/backups
@@ -85,7 +92,7 @@ async def run_backup() -> dict:
 
     backup_folder.mkdir(parents=True, exist_ok=True)
     _chmod_private(backup_folder, 0o700)
-    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    ts = f"{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
     backup_dir = backup_folder / ts
     backup_dir.mkdir(parents=True, exist_ok=True)
     _chmod_private(backup_dir, 0o700)

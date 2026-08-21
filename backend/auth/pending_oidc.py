@@ -8,7 +8,10 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from auth.oidc_version import oidc_configuration_version
+from auth.oidc_version import (
+    authentication_configuration_baseline_version,
+    oidc_configuration_version,
+)
 
 
 _OIDC_COMMIT_FIELDS = (
@@ -32,6 +35,7 @@ _OIDC_COMMIT_FIELDS = (
 class PendingOidcConfiguration:
     settings: Any
     configuration_version: str
+    baseline_configuration_version: str
     created_at: float
     expires_at: float
     apply_password_enabled: bool = False
@@ -66,6 +70,7 @@ class PendingOidcConfigurationStore:
         settings: Any,
         *,
         configuration_version: str,
+        baseline_configuration_version: str,
         apply_password_enabled: bool = False,
     ) -> None:
         now = self._clock()
@@ -74,6 +79,7 @@ class PendingOidcConfigurationStore:
         self._entries[key] = PendingOidcConfiguration(
             settings=settings,
             configuration_version=str(configuration_version),
+            baseline_configuration_version=str(baseline_configuration_version),
             created_at=now,
             expires_at=now + self.ttl_seconds,
             apply_password_enabled=bool(apply_password_enabled),
@@ -97,8 +103,6 @@ class PendingOidcConfigurationStore:
             return None
         if item.expires_at <= self._clock():
             return None
-        # The proposed settings object must still represent the exact config that
-        # was staged before the browser left for the IdP.
         actual = oidc_configuration_version(item.settings)
         if not actual or not secrets.compare_digest(item.configuration_version, actual):
             return None
@@ -139,7 +143,7 @@ def _merge_verified_oidc_settings(current: Any, item: PendingOidcConfiguration):
 
 
 def commit_verified_pending_oidc(state: str) -> bool:
-    """Commit a staged config only after the matching full OIDC login succeeds."""
+    """Commit a staged config only after matching proof and unchanged baseline."""
     item = pending_oidc_store.consume_verified(state)
     if item is None:
         return False
@@ -148,20 +152,20 @@ def commit_verified_pending_oidc(state: str) -> bool:
     from auth.sessions import session_store
     from core.config import apply_settings, get_settings, save_settings
 
-    # The IdP round-trip can overlap unrelated settings/password changes. Merge
-    # only the exact OIDC snapshot that was proven onto the current live config;
-    # never restore a stale whole-application snapshot from before the login.
-    merged = _merge_verified_oidc_settings(get_settings(), item)
+    current = get_settings()
+    current_baseline = authentication_configuration_baseline_version(current)
+    if not item.baseline_configuration_version or not secrets.compare_digest(
+        item.baseline_configuration_version,
+        current_baseline,
+    ):
+        # Another authentication mutation won while the browser was at the IdP.
+        # Never overwrite that newer authoritative state with a stale proposal.
+        return False
 
-    # Persist first; if persistence fails, the current in-memory configuration
-    # remains authoritative and no successful pending transition is reported.
+    merged = _merge_verified_oidc_settings(current, item)
     save_settings(merged)
-    # Clear transient write intent after persistence so it cannot affect a later
-    # unrelated save of the authoritative in-memory settings object.
     authoritative = merged.model_copy(update={"oidc_client_secret_clear": False}, deep=True)
     apply_settings(authoritative)
-    # Critical OIDC policy/config changed. Existing OIDC sessions were proven
-    # under the previous policy and must not remain usable indefinitely.
     session_store.revoke_mechanism(AuthMechanism.OIDC_SESSION)
     return True
 

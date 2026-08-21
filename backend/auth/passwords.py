@@ -13,9 +13,13 @@ from argon2.low_level import Type
 
 
 _PASSWORD_HASHER = PasswordHasher()
-# A process-local, valid Argon2id verifier used only to equalize work when the
-# supplied username is wrong. The source value is random and never persisted.
-_DUMMY_PASSWORD_HASH = _PASSWORD_HASHER.hash(os.urandom(32).hex())
+# Valid Argon2id verifier used only to equalize verification work when the
+# supplied username is wrong. The source text is deliberately non-secret; the
+# result of this verification is never accepted for authentication.
+_DUMMY_PASSWORD_HASH = (
+    "$argon2id$v=19$m=65536,t=3,p=4$LXpi21Jmn0Nsy9XXdJ5h2Q$"
+    "tfoUhl3T7DNb5V/ogeM/1EEljjAfw61Bvtwn26tLbZI"
+)
 
 
 def hash_password(password: str) -> str:

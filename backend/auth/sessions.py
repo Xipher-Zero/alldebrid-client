@@ -3,15 +3,17 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import os
 import secrets
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Callable
+from urllib.parse import urlsplit
 
 from fastapi import Request, Response
 
-from auth.models import AuthMechanism, Principal
+from auth.models import Principal
 
 
 HTTP_SESSION_COOKIE = "debridpulse-session"
@@ -69,18 +71,10 @@ class SessionStore:
         now = self._clock()
         self.cleanup(force=True)
         lifetime = max(60.0, float(lifetime_seconds))
-        resolved_version = str(credential_version or "")
-        if not resolved_version and principal.mechanism is AuthMechanism.OIDC_SESSION:
-            # OIDC sessions are bound to the effective security-critical OIDC
-            # configuration. A committed issuer/client/policy/callback change
-            # therefore invalidates old sessions immediately at admission.
-            try:
-                from auth.oidc_version import oidc_configuration_version
-                from core.config import get_settings
-
-                resolved_version = oidc_configuration_version(get_settings())
-            except Exception:  # noqa: BLE001 - invalid config must not break session-store mechanics
-                resolved_version = ""
+        # Prefer the version attached to the actual authentication proof. Never
+        # infer an OIDC proof from whatever configuration happens to be current
+        # at session-creation time; doing so creates a policy-change race.
+        resolved_version = str(credential_version or principal.credential_version or "")
         while True:
             token = secrets.token_urlsafe(32)
             fingerprint = self._fingerprint(token)
@@ -132,7 +126,7 @@ class SessionStore:
             return False
         return self._entries.pop(self._fingerprint(token), None) is not None
 
-    def revoke_mechanism(self, mechanism: AuthMechanism) -> int:
+    def revoke_mechanism(self, mechanism) -> int:
         targets = [
             key
             for key, record in self._entries.items()
@@ -193,11 +187,53 @@ class SessionStore:
         return len(self._entries)
 
 
+def _authority(value: str, *, default_scheme: str) -> tuple[str, int] | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = urlsplit(raw if "://" in raw else f"{default_scheme}://{raw}")
+        if not parsed.hostname:
+            return None
+        if parsed.port is not None:
+            port = parsed.port
+        else:
+            port = 443 if parsed.scheme.casefold() == "https" else 80
+        return parsed.hostname.casefold(), port
+    except ValueError:
+        return None
+
+
+def _configured_https_origin_matches(request: Request) -> bool:
+    """Use only operator-owned canonical origin state, never raw proxy headers."""
+    configured = (os.getenv("PUBLIC_BASE_URL", "") or "").strip()
+    if not configured:
+        try:
+            from core.config import get_settings
+
+            configured = str(getattr(get_settings(), "public_base_url", "") or "").strip()
+        except Exception:  # noqa: BLE001 - cookie classification must remain conservative
+            return False
+    try:
+        parsed = urlsplit(configured)
+    except ValueError:
+        return False
+    if parsed.scheme.casefold() != "https":
+        return False
+    configured_authority = _authority(configured, default_scheme="https")
+    request_authority = _authority(
+        str(request.headers.get("Host", "") or ""),
+        default_scheme="https",
+    )
+    return bool(configured_authority and configured_authority == request_authority)
+
+
 def request_is_secure(request: Request) -> bool:
     if str(request.url.scheme or "").casefold() == "https":
         return True
-    forwarded = str(request.headers.get("X-Forwarded-Proto", "") or "")
-    return forwarded.split(",", 1)[0].strip().casefold() == "https"
+    # Uvicorn may already translate trusted proxy headers into scope['scheme'].
+    # Do not separately trust arbitrary X-Forwarded-Proto supplied by a client.
+    return _configured_https_origin_matches(request)
 
 
 def session_cookie_name(request: Request) -> str:

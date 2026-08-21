@@ -3,19 +3,23 @@ from __future__ import annotations
 from urllib.parse import parse_qs, urlsplit
 
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
+from api import auth_routes as interactive_routes
+from auth.csrf import clear_login_csrf_cookie
 from auth.oidc import (
     OIDC_CORRELATION_COOKIE,
     OIDC_TRANSACTION_TTL_SECONDS,
     OidcError,
     begin_oidc_login,
+    complete_oidc_login,
     oidc_callback_url,
 )
 from auth.oidc_version import oidc_configuration_version
-from auth.pending_oidc import pending_oidc_store
+from auth.pending_oidc import commit_verified_pending_oidc, pending_oidc_store
 from auth.policy import safe_return_path
+from auth.sessions import session_cookie_token, session_store, set_session_cookie
 from core.config import get_settings
 
 
@@ -86,6 +90,16 @@ def _set_pending_correlation_cookie(response: JSONResponse, correlation: str) ->
     )
 
 
+def _clear_pending_correlation_cookie(response) -> None:
+    response.delete_cookie(
+        key=OIDC_CORRELATION_COOKIE,
+        path="/",
+        secure=True,
+        httponly=True,
+        samesite="lax",
+    )
+
+
 @router.post("/api/auth/oidc/verify-config")
 async def verify_pending_oidc_configuration(
     request: Request,
@@ -136,4 +150,86 @@ async def verify_pending_oidc_configuration(
     )
     response.headers["Cache-Control"] = "no-store"
     _set_pending_correlation_cookie(response, correlation)
+    return response
+
+
+@router.get("/auth/oidc/callback", include_in_schema=False)
+async def pending_aware_oidc_callback(
+    request: Request,
+    state: str = "",
+    code: str = "",
+    error: str = "",
+):
+    """Commit pending settings only after the matching complete OIDC flow passes."""
+    if not pending_oidc_store.has(state):
+        return await interactive_routes.oidc_callback(
+            request,
+            state=state,
+            code=code,
+            error=error,
+        )
+
+    correlation = str(request.cookies.get(OIDC_CORRELATION_COOKIE, "") or "")
+    if error:
+        pending_oidc_store.discard(state)
+        return await interactive_routes.oidc_callback(
+            request,
+            state=state,
+            code=code,
+            error=error,
+        )
+
+    try:
+        principal, return_to = await complete_oidc_login(
+            state=state,
+            code=code,
+            correlation=correlation,
+        )
+    except OidcError:
+        pending_oidc_store.discard(state)
+        response = interactive_routes._issue_login_page(
+            request,
+            return_to="/settings",
+            error="The proposed OpenID Connect configuration did not authenticate and authorize successfully. The current configuration was not changed.",
+            status_code=401,
+        )
+        _clear_pending_correlation_cookie(response)
+        return response
+
+    try:
+        committed = commit_verified_pending_oidc(state)
+    except Exception:  # noqa: BLE001 - never expose persistence/config details at the callback boundary
+        committed = False
+    if not committed:
+        response = interactive_routes._issue_login_page(
+            request,
+            return_to="/settings",
+            error="OpenID Connect verification succeeded, but the pending configuration could not be committed. The current configuration remains authoritative.",
+            status_code=500,
+        )
+        _clear_pending_correlation_cookie(response)
+        return response
+
+    # Commit happened before issuing the replacement application session, so
+    # its credential version is derived from the newly authoritative OIDC config.
+    old_token = session_cookie_token(request)
+    if old_token:
+        session_store.revoke(old_token)
+    cfg = get_settings()
+    lifetime = interactive_routes._session_lifetime_seconds(cfg)
+    token, _record = session_store.create(
+        principal,
+        lifetime_seconds=lifetime,
+    )
+    response = RedirectResponse(url=safe_return_path(return_to), status_code=303)
+    set_session_cookie(
+        response,
+        request,
+        token,
+        max_age=lifetime,
+        force_secure=True,
+    )
+    clear_login_csrf_cookie(response, request)
+    _clear_pending_correlation_cookie(response)
+    response.headers["Cache-Control"] = "no-store"
     return response

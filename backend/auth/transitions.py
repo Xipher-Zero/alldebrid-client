@@ -24,6 +24,7 @@ CRITICAL_OIDC_FIELDS = frozenset(
         "oidc_group_claim",
     }
 )
+_AUTH_SETTINGS_PATHS = frozenset({"/api/settings", "/api/auth/config"})
 
 
 def _normalized_list(value: Any, *, casefold: bool = False) -> tuple[str, ...]:
@@ -57,7 +58,7 @@ def _normalized_critical(field: str, value: Any) -> Any:
 
 def oidc_critical_change(payload: Mapping[str, Any], current) -> bool:
     clears = {str(item) for item in payload.get("clear_secrets", []) if str(item)}
-    if "oidc_client_secret" in clears:
+    if "oidc_client_secret" in clears or payload.get("clear_oidc_client_secret") is True:
         return True
     for field in CRITICAL_OIDC_FIELDS:
         if field not in payload:
@@ -82,7 +83,7 @@ def _prospective_password_ready(payload: Mapping[str, Any], current) -> bool:
     plaintext = str(payload.get("auth_password", "") or "")
     stored_hash = str(getattr(current, "auth_password_hash", "") or "").strip()
     clears = {str(item) for item in payload.get("clear_secrets", []) if str(item)}
-    if "auth_password" in clears:
+    if "auth_password" in clears or payload.get("clear_password") is True:
         stored_hash = ""
     return bool(username and (plaintext or stored_hash))
 
@@ -94,11 +95,11 @@ async def settings_transition_rejection(
 ) -> Response | None:
     """Reject authentication transitions that can strand the appliance owner.
 
-    This is intentionally enforced at the authentication boundary so the broad
-    inherited Settings endpoint cannot accidentally bypass the security state
-    machine while its UI is being migrated in later phases.
+    Both the inherited broad Settings endpoint and the dedicated Authentication
+    endpoint pass through this single state machine so UI/API compatibility
+    cannot create a policy bypass.
     """
-    if request.method.upper() != "PUT" or request.url.path != "/api/settings":
+    if request.method.upper() != "PUT" or request.url.path not in _AUTH_SETTINGS_PATHS:
         return None
 
     try:
@@ -130,8 +131,8 @@ async def settings_transition_rejection(
 
     # Leaving OIDC as the sole interactive mechanism is permitted only when
     # this exact request is made from a real OIDC application session. A local
-    # password session, HTTP Basic, discovery check, or configuration test is
-    # insufficient proof of end-to-end OIDC access.
+    # password session, HTTP Basic, API token, discovery check, or configuration
+    # test is insufficient proof of end-to-end OIDC browser access.
     disabling_password_to_oidc_only = current_password and not proposed_password and proposed_oidc
     if disabling_password_to_oidc_only:
         if critical_oidc_change:

@@ -9,7 +9,7 @@ from collections.abc import Awaitable, Callable, Iterable
 from fastapi import Request, Response
 
 from auth.models import Principal
-from auth.passwords import basic_verification_cache, verify_password
+from auth.passwords import basic_verification_cache, verify_password_candidate
 from auth.policy import (
     MUTATING_HTTP_METHODS,
     is_public_path,
@@ -23,24 +23,34 @@ from core.config import get_settings
 
 
 CallNext = Callable[[Request], Awaitable[Response]]
+# The default Argon2id parameters use substantial memory by design. Bound
+# simultaneous unauthenticated verification work rather than letting the default
+# thread pool multiply that memory cost under attack.
+_PASSWORD_VERIFY_SLOTS = asyncio.Semaphore(2)
 
 
 def _attach_principal(request: Request, principal: Principal) -> None:
     request.state.principal = principal
 
 
+def _has_basic_scheme(header: str) -> bool:
+    scheme, separator, _token = str(header or "").strip().partition(" ")
+    return bool(separator and scheme.casefold() == "basic")
+
+
 def _decode_basic_credentials(header: str) -> tuple[str, str] | None:
-    if not str(header or "").startswith("Basic "):
+    scheme, separator, token = str(header or "").strip().partition(" ")
+    if not separator or scheme.casefold() != "basic":
         return None
-    token = str(header)[6:].strip()
+    token = token.strip()
     if not token:
         return None
     try:
         decoded = base64.b64decode(token, validate=True).decode("utf-8", errors="replace")
     except (binascii.Error, ValueError, UnicodeError):
         return None
-    username, separator, password = decoded.partition(":")
-    if not separator:
+    username, credential_separator, password = decoded.partition(":")
+    if not credential_separator:
         return None
     return username, password
 
@@ -116,7 +126,7 @@ async def enforce_password_http_auth(request: Request, call_next: CallNext) -> R
         return Response(content="Password authentication unavailable", status_code=503)
 
     auth_header = str(request.headers.get("Authorization", "") or "")
-    if not auth_header.startswith("Basic "):
+    if not _has_basic_scheme(auth_header):
         return _unauthorized()
 
     peer = _peer_key(request)
@@ -137,10 +147,17 @@ async def enforce_password_http_auth(request: Request, call_next: CallNext) -> R
     verified = False
     if user_ok:
         verified = basic_verification_cache.contains(username, provided_pass, password_hash)
-        if not verified:
-            verified = verify_password(password_hash, provided_pass)
-            if verified:
-                basic_verification_cache.remember(username, provided_pass, password_hash)
+
+    if not verified:
+        async with _PASSWORD_VERIFY_SLOTS:
+            verified = await asyncio.to_thread(
+                verify_password_candidate,
+                password_hash,
+                provided_pass,
+                use_configured_hash=user_ok,
+            )
+        if verified:
+            basic_verification_cache.remember(username, provided_pass, password_hash)
 
     if verified:
         password_failure_throttle.record_success(peer)

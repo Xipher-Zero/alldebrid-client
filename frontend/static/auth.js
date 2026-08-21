@@ -95,12 +95,13 @@
   refreshSession().catch(() => {});
   window.setInterval(() => refreshSession({force: true}).catch(() => {}), 60000);
 
-  // Phase-7 Authentication settings are isolated from the inherited settings
-  // renderer. Dynamic loading here keeps the 1.0.6 auth pass additive and avoids
-  // churning the large application script; the current combined script finishes
-  // defining app.js before this external script can execute.
-  const authSettingsScript = document.createElement('script');
-  authSettingsScript.src = '/auth-settings.js?v=1';
-  authSettingsScript.async = false;
-  document.head.appendChild(authSettingsScript);
+  // Authentication UI/help augmentations remain isolated from the inherited
+  // settings/index renderers. Dynamic loading keeps the 1.0.6 auth pass additive
+  // while the combined app.js bundle finishes defining the legacy application.
+  for (const source of ['/auth-settings.js?v=1', '/auth-help.js?v=1']) {
+    const script = document.createElement('script');
+    script.src = source;
+    script.async = false;
+    document.head.appendChild(script);
+  }
 })();

@@ -160,7 +160,16 @@ class TransferControlCoordinator:
                 await asyncio.sleep(delay * attempt)
         return None
 
+    async def _require_owned_mutation(self, gid: str) -> str:
+        normalized = str(gid or "").strip()
+        if not normalized:
+            raise ValueError("aria2 GID is required")
+        if not is_builtin_mode() and normalized not in await self.manager._aria2_owned_gids():
+            raise PermissionError(f"aria2 GID {normalized} is not owned by DebridPulse")
+        return normalized
+
     async def _strict_pause_gid(self, gid: str):
+        gid = await self._require_owned_mutation(gid)
         state = await self.confirm_gid(gid)
         if state is None:
             return None
@@ -184,6 +193,7 @@ class TransferControlCoordinator:
         return state
 
     async def _strict_resume_gid(self, gid: str):
+        gid = await self._require_owned_mutation(gid)
         state = await self.confirm_gid(gid)
         if state is None:
             return None

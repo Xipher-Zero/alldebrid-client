@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from urllib.parse import urlparse
 
+from auth.passwords import is_usable_password_hash
+
 
 MUTATING_HTTP_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 PUBLIC_PATHS = frozenset({"/api/health", "/api/version", "/api/avatar"})
@@ -20,7 +22,7 @@ def password_auth_ready(settings) -> bool:
         return False
     username = str(getattr(settings, "auth_username", "") or "").strip()
     password_hash = str(getattr(settings, "auth_password_hash", "") or "").strip()
-    return bool(username and password_hash)
+    return bool(username and is_usable_password_hash(password_hash))
 
 
 def password_auth_configured(settings) -> bool:

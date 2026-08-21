@@ -50,7 +50,7 @@ class SessionStore:
         self._entries: OrderedDict[bytes, SessionRecord] = OrderedDict()
         self._last_cleanup = self._clock()
         self._cleanup_task: asyncio.Task | None = None
-        self._stop_cleanup = asyncio.Event()
+        self._stop_cleanup: asyncio.Event | None = None
 
     def _fingerprint(self, token: str) -> bytes:
         return hmac.new(
@@ -133,13 +133,12 @@ class SessionStore:
             self._entries.pop(key, None)
         return len(expired)
 
-    async def _cleanup_loop(self) -> None:
-        self._stop_cleanup.clear()
+    async def _cleanup_loop(self, stop_event: asyncio.Event) -> None:
         try:
-            while not self._stop_cleanup.is_set():
+            while not stop_event.is_set():
                 try:
                     await asyncio.wait_for(
-                        self._stop_cleanup.wait(),
+                        stop_event.wait(),
                         timeout=self.cleanup_interval_seconds,
                     )
                 except TimeoutError:
@@ -149,17 +148,22 @@ class SessionStore:
 
     def start_cleanup(self) -> None:
         if self._cleanup_task is None or self._cleanup_task.done():
-            self._cleanup_task = asyncio.create_task(self._cleanup_loop())
+            stop_event = asyncio.Event()
+            self._stop_cleanup = stop_event
+            self._cleanup_task = asyncio.create_task(self._cleanup_loop(stop_event))
 
     async def stop_cleanup(self) -> None:
         task = self._cleanup_task
+        stop_event = self._stop_cleanup
         if task is None:
             return
-        self._stop_cleanup.set()
+        if stop_event is not None:
+            stop_event.set()
         try:
             await task
         finally:
             self._cleanup_task = None
+            self._stop_cleanup = None
 
     @property
     def size(self) -> int:

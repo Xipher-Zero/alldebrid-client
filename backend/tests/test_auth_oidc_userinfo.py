@@ -48,7 +48,9 @@ def test_discovery_accepts_optional_https_userinfo_and_rejects_insecure_userinfo
         "authorization_endpoint": cfg.issuer + "/authorize",
         "token_endpoint": cfg.issuer + "/token",
         "jwks_uri": cfg.issuer + "/jwks",
+        "response_types_supported": ["code"],
         "code_challenge_methods_supported": ["S256"],
+        "id_token_signing_alg_values_supported": ["RS256"],
     }
     parsed = oidc._parse_discovery(
         cfg,

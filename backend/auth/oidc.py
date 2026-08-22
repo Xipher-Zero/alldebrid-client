@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import hmac
+import json
 import os
 import secrets
 import time
@@ -14,7 +17,7 @@ import httpx
 from authlib.integrations.httpx_client import AsyncOAuth2Client
 from authlib.oidc.core import CodeIDToken
 from joserfc import jwt
-from joserfc.jwk import KeySet
+from joserfc.jwk import KeySet, OctKey
 
 from auth.models import Principal
 from auth.oidc_version import oidc_configuration_version_from_config
@@ -281,27 +284,69 @@ def _discovery_url(issuer: str) -> str:
     return issuer.rstrip("/") + "/.well-known/openid-configuration"
 
 
+def _metadata_string_array(
+    data: Mapping[str, Any],
+    field: str,
+    *,
+    required: bool,
+) -> tuple[str, ...] | None:
+    raw = data.get(field)
+    if raw is None:
+        if required:
+            raise OidcProtocolError(f"OIDC discovery is missing required {field} metadata")
+        return None
+    if not isinstance(raw, list) or not raw:
+        raise OidcProtocolError(f"OIDC discovery returned invalid {field} metadata")
+    values: list[str] = []
+    for item in raw:
+        if not isinstance(item, str) or not item.strip():
+            raise OidcProtocolError(f"OIDC discovery returned invalid {field} metadata")
+        value = item.strip()
+        if value not in values:
+            values.append(value)
+    return tuple(values)
+
+
 def _parse_discovery(config: OidcConfiguration, data: Mapping[str, Any]) -> OidcDiscovery:
     discovered_issuer = str(data.get("issuer") or "").strip()
     if not discovered_issuer or discovered_issuer != config.issuer:
         raise OidcProtocolError("OIDC discovery issuer does not match the configured issuer")
 
-    methods = tuple(
-        str(item)
-        for item in (data.get("token_endpoint_auth_methods_supported") or [])
-        if str(item or "").strip()
+    authorization_endpoint = _https_endpoint(
+        str(data.get("authorization_endpoint") or ""),
+        field="authorization endpoint",
     )
-    algorithms = tuple(
-        str(item)
-        for item in (data.get("id_token_signing_alg_values_supported") or ["RS256"])
-        if str(item or "").strip() and str(item) != "none"
+    token_endpoint = _https_endpoint(
+        str(data.get("token_endpoint") or ""),
+        field="token endpoint",
     )
-    if not algorithms:
-        raise OidcProtocolError("OIDC provider advertises no usable ID-token signing algorithm")
+    jwks_uri = _https_endpoint(str(data.get("jwks_uri") or ""), field="JWKS URI")
 
-    pkce = data.get("code_challenge_methods_supported")
+    response_types = _metadata_string_array(data, "response_types_supported", required=True)
+    if response_types is None or "code" not in response_types:
+        raise OidcProtocolError("OIDC provider does not advertise Authorization Code flow support")
+
+    pkce = _metadata_string_array(data, "code_challenge_methods_supported", required=False)
     if pkce is not None and "S256" not in pkce:
         raise OidcProtocolError("OIDC provider does not advertise PKCE S256 support")
+
+    methods = _metadata_string_array(
+        data,
+        "token_endpoint_auth_methods_supported",
+        required=False,
+    )
+    if methods is None:
+        # OIDC Discovery 1.0 defines this default when the member is omitted.
+        methods = ("client_secret_basic",)
+
+    advertised_algorithms = _metadata_string_array(
+        data,
+        "id_token_signing_alg_values_supported",
+        required=True,
+    )
+    algorithms = tuple(alg for alg in (advertised_algorithms or ()) if alg != "none")
+    if not algorithms:
+        raise OidcProtocolError("OIDC provider advertises no usable ID-token signing algorithm")
 
     raw_userinfo = str(data.get("userinfo_endpoint") or "").strip()
     userinfo_endpoint = (
@@ -312,15 +357,9 @@ def _parse_discovery(config: OidcConfiguration, data: Mapping[str, Any]) -> Oidc
 
     return OidcDiscovery(
         issuer=config.issuer,
-        authorization_endpoint=_https_endpoint(
-            str(data.get("authorization_endpoint") or ""),
-            field="authorization endpoint",
-        ),
-        token_endpoint=_https_endpoint(
-            str(data.get("token_endpoint") or ""),
-            field="token endpoint",
-        ),
-        jwks_uri=_https_endpoint(str(data.get("jwks_uri") or ""), field="JWKS URI"),
+        authorization_endpoint=authorization_endpoint,
+        token_endpoint=token_endpoint,
+        jwks_uri=jwks_uri,
         token_endpoint_auth_methods=methods,
         signing_algorithms=algorithms,
         userinfo_endpoint=userinfo_endpoint,
@@ -507,6 +546,23 @@ def _validate_authorized_party(claims: Mapping[str, Any], client_id: str) -> Non
         raise OidcProtocolError("OIDC ID token authorized party is invalid")
 
 
+def _id_token_algorithm(encoded: str) -> str:
+    try:
+        header_segment = str(encoded).split(".", 1)[0]
+        if not header_segment:
+            raise ValueError("missing JOSE header")
+        padding = "=" * (-len(header_segment) % 4)
+        header = json.loads(base64.urlsafe_b64decode(header_segment + padding))
+    except (binascii.Error, UnicodeError, ValueError, TypeError, json.JSONDecodeError) as exc:
+        raise OidcProtocolError("OIDC ID token header is invalid") from exc
+    if not isinstance(header, dict):
+        raise OidcProtocolError("OIDC ID token header is invalid")
+    algorithm = str(header.get("alg") or "").strip()
+    if not algorithm or algorithm == "none":
+        raise OidcProtocolError("OIDC ID token signing algorithm is invalid")
+    return algorithm
+
+
 async def validate_id_token(
     token_response: Mapping[str, Any],
     transaction: OidcTransaction,
@@ -514,13 +570,27 @@ async def validate_id_token(
     encoded = str(token_response.get("id_token") or "")
     if not encoded:
         raise OidcProtocolError("OIDC token response did not include an ID token")
-    jwks = await _fetch_json(transaction.discovery.jwks_uri)
+
+    algorithm = _id_token_algorithm(encoded)
+    if algorithm not in transaction.discovery.signing_algorithms:
+        raise OidcProtocolError("OIDC ID token uses an unadvertised signing algorithm")
+
     try:
-        key_set = KeySet.import_key_set(dict(jwks))
+        if algorithm in {"HS256", "HS384", "HS512"}:
+            if not transaction.config.client_secret:
+                raise OidcProtocolError("OIDC MAC-signed ID token requires a client secret")
+            verification_key = OctKey.import_key(
+                transaction.config.client_secret,
+                {"use": "sig"},
+            )
+        else:
+            jwks = await _fetch_json(transaction.discovery.jwks_uri)
+            verification_key = KeySet.import_key_set(dict(jwks))
+
         token = jwt.decode(
             encoded,
-            key_set,
-            algorithms=list(transaction.discovery.signing_algorithms),
+            verification_key,
+            algorithms=[algorithm],
         )
         claims = CodeIDToken(
             token.claims,
@@ -546,6 +616,10 @@ async def validate_id_token(
     if claims.get("nonce") != transaction.nonce:
         raise OidcProtocolError("OIDC ID token nonce is invalid")
     _validate_authorized_party(claims, transaction.config.client_id)
+    if algorithm in {"HS256", "HS384", "HS512"} and not isinstance(claims.get("aud"), str):
+        # OIDC Core leaves MAC validation behavior unspecified for multi-audience
+        # ID tokens. Reject rather than guessing which party shares the secret.
+        raise OidcProtocolError("OIDC MAC-signed ID token requires a single audience")
     return dict(claims)
 
 

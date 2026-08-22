@@ -141,6 +141,28 @@ _SECRET_SETTINGS = {
     "auth_password", "extraction_password",
 }
 
+# SettingsUpdate inherits AppSettings, so omitted values are otherwise populated
+# with model defaults before the route sees them. Authentication transition
+# enforcement reasons from the raw request and deliberately treats omitted auth
+# fields as unchanged. Preserve those fields here too so a partial legacy PUT
+# cannot silently reset authentication behind the transition state machine.
+_AUTH_COMPAT_SETTINGS_FIELDS = (
+    "auth_password_enabled",
+    "auth_username",
+    "auth_session_lifetime_hours",
+    "auth_oidc_enabled",
+    "oidc_provider_name",
+    "oidc_issuer_url",
+    "oidc_client_id",
+    "oidc_scopes",
+    "oidc_allow_all",
+    "oidc_allowed_subjects",
+    "oidc_allowed_emails",
+    "oidc_allowed_groups",
+    "oidc_group_claim",
+    "public_base_url",
+)
+
 
 def _public_settings(settings: AppSettings) -> dict:
     data = settings.model_dump()
@@ -251,6 +273,10 @@ def _merge_secret_settings(new: SettingsUpdate, previous: AppSettings) -> dict:
     if unknown:
         raise HTTPException(400, f"Unsupported secret field(s): {', '.join(sorted(unknown))}")
     merged = new.model_dump(exclude={"clear_secrets"})
+    explicitly_set = set(new.model_fields_set)
+    for field in _AUTH_COMPAT_SETTINGS_FIELDS:
+        if field not in explicitly_set:
+            merged[field] = getattr(previous, field)
     for field in _SECRET_SETTINGS:
         if field in requested_clears:
             merged[field] = ""

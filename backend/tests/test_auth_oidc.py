@@ -7,7 +7,7 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 from fastapi import Request, Response
 from joserfc import jwt
-from joserfc.jwk import RSAKey
+from joserfc.jwk import OctKey, RSAKey
 
 from auth import oidc
 from auth.middleware import enforce_authentication
@@ -128,11 +128,13 @@ def test_discovery_is_issuer_bound_https_and_pkce_capable():
             "authorization_endpoint": cfg.issuer + "/authorize",
             "token_endpoint": cfg.issuer + "/token",
             "jwks_uri": cfg.issuer + "/jwks",
+            "response_types_supported": ["code", "id_token"],
             "code_challenge_methods_supported": ["S256"],
             "id_token_signing_alg_values_supported": ["RS256", "none"],
         },
     )
     assert valid.signing_algorithms == ("RS256",)
+    assert valid.token_endpoint_auth_methods == ("client_secret_basic",)
 
     with pytest.raises(oidc.OidcProtocolError, match="issuer"):
         oidc._parse_discovery(cfg, {"issuer": "https://other.example"})
@@ -151,10 +153,33 @@ def test_discovery_is_issuer_bound_https_and_pkce_capable():
         "authorization_endpoint": cfg.issuer + "/authorize",
         "token_endpoint": cfg.issuer + "/token",
         "jwks_uri": cfg.issuer + "/jwks",
+        "response_types_supported": ["code"],
+        "id_token_signing_alg_values_supported": ["RS256"],
         "code_challenge_methods_supported": ["plain"],
     }
     with pytest.raises(oidc.OidcProtocolError, match="PKCE S256"):
         oidc._parse_discovery(cfg, no_pkce)
+
+    no_code = {
+        "issuer": cfg.issuer,
+        "authorization_endpoint": cfg.issuer + "/authorize",
+        "token_endpoint": cfg.issuer + "/token",
+        "jwks_uri": cfg.issuer + "/jwks",
+        "response_types_supported": ["id_token"],
+        "id_token_signing_alg_values_supported": ["RS256"],
+    }
+    with pytest.raises(oidc.OidcProtocolError, match="Authorization Code"):
+        oidc._parse_discovery(cfg, no_code)
+
+    missing_signing_metadata = {
+        "issuer": cfg.issuer,
+        "authorization_endpoint": cfg.issuer + "/authorize",
+        "token_endpoint": cfg.issuer + "/token",
+        "jwks_uri": cfg.issuer + "/jwks",
+        "response_types_supported": ["code"],
+    }
+    with pytest.raises(oidc.OidcProtocolError, match="id_token_signing_alg_values_supported"):
+        oidc._parse_discovery(cfg, missing_signing_metadata)
 
 
 def test_oidc_transaction_store_is_bounded_correlated_expiring_and_one_time():
@@ -334,6 +359,50 @@ async def test_valid_id_token_is_signature_issuer_audience_nonce_and_expiry_chec
     )
     with pytest.raises(oidc.OidcProtocolError):
         await oidc.validate_id_token({"id_token": forged}, transaction)
+
+
+@pytest.mark.asyncio
+async def test_hmac_id_token_uses_client_secret_without_fetching_jwks(monkeypatch):
+    cfg = _config(
+        oidc_client_secret="authentik-generated-client-secret-with-sufficient-entropy",
+        oidc_allow_all=True,
+        oidc_allowed_groups=[],
+    )
+    disc = _discovery(cfg, signing_algorithms=("HS256",))
+    transaction = _transaction(cfg, disc, nonce="expected-nonce")
+    now = int(time.time())
+    key = OctKey.import_key(cfg.client_secret, {"use": "sig"})
+
+    def encoded(audience=None):
+        claims = {
+            "iss": cfg.issuer,
+            "sub": "user-1",
+            "aud": audience if audience is not None else cfg.client_id,
+            "exp": now + 300,
+            "iat": now,
+            "nonce": "expected-nonce",
+        }
+        if isinstance(claims["aud"], list):
+            claims["azp"] = cfg.client_id
+        return jwt.encode(
+            {"alg": "HS256"},
+            claims,
+            key,
+            algorithms=["HS256"],
+        )
+
+    async def unexpected_jwks_fetch(_url):
+        raise AssertionError("MAC-signed ID token must use client_secret, not JWKS")
+
+    monkeypatch.setattr(oidc, "_fetch_json", unexpected_jwks_fetch)
+    valid = await oidc.validate_id_token({"id_token": encoded()}, transaction)
+    assert valid["sub"] == "user-1"
+
+    with pytest.raises(oidc.OidcProtocolError, match="single audience"):
+        await oidc.validate_id_token(
+            {"id_token": encoded([cfg.client_id, "other-audience"])},
+            transaction,
+        )
 
 
 @pytest.mark.asyncio

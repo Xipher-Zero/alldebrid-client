@@ -213,6 +213,7 @@ def test_oidc_issuer_identifier_is_exact_and_trailing_slash_is_preserved():
             "authorization_endpoint": issuer + "authorize",
             "token_endpoint": issuer + "token",
             "jwks_uri": issuer + "jwks",
+            "response_types_supported": ["code"],
             "code_challenge_methods_supported": ["S256"],
             "id_token_signing_alg_values_supported": ["RS256"],
         },

@@ -5,6 +5,7 @@ import pytest
 from fastapi import Request
 
 from auth.models import Principal
+from auth.passwords import hash_password
 from auth.transitions import settings_transition_rejection
 
 
@@ -75,6 +76,50 @@ async def test_legacy_settings_cannot_enable_incomplete_password_as_only_auth():
 
 
 @pytest.mark.asyncio
+async def test_malformed_stored_password_hash_cannot_become_sole_auth():
+    current = _settings(
+        auth_username="operator",
+        auth_password_hash="$argon2id$configured-but-not-valid",
+    )
+    response = await settings_transition_rejection(
+        _request({"auth_password_enabled": True}),
+        Principal.anonymous(),
+        current,
+    )
+    assert response is not None
+    assert response.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_password_clear_intent_cannot_count_simultaneous_plaintext_as_fallback():
+    current = _settings(
+        auth_password_enabled=True,
+        auth_username="operator",
+        auth_password_hash=hash_password("old-secret"),
+        auth_oidc_enabled=True,
+        oidc_issuer_url="https://id.example/application/o/debridpulse",
+        oidc_client_id="client",
+        oidc_allow_all=True,
+        public_base_url="https://pulse.example",
+    )
+    response = await settings_transition_rejection(
+        _request(
+            {
+                "auth_password_enabled": True,
+                "auth_password": "new-but-discarded",
+                "clear_password": True,
+                "auth_oidc_enabled": False,
+            },
+            path="/api/auth/config",
+        ),
+        Principal.password_session("operator"),
+        current,
+    )
+    assert response is not None
+    assert response.status_code == 409
+
+
+@pytest.mark.asyncio
 async def test_dedicated_settings_cannot_enable_deny_everyone_oidc_as_only_auth():
     payload = {
         "auth_oidc_enabled": True,
@@ -118,7 +163,7 @@ async def test_broken_supplemental_oidc_does_not_disable_working_password():
     current = _settings(
         auth_password_enabled=True,
         auth_username="operator",
-        auth_password_hash="$argon2id$configured",
+        auth_password_hash=hash_password("secret"),
     )
     response = await settings_transition_rejection(
         _request({"auth_oidc_enabled": True, "oidc_issuer_url": "not-https"}),

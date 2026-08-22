@@ -1,0 +1,111 @@
+name: Temporary audit-loop correction v5
+
+on:
+  pull_request:
+    branches:
+      - 'staging/**'
+
+permissions:
+  contents: write
+
+jobs:
+  correct:
+    if: github.head_ref == 'work/v1.0.6-auth-overhaul'
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - name: Checkout correction branch
+        uses: actions/checkout@v5
+        with:
+          ref: work/v1.0.6-auth-overhaul
+          fetch-depth: 0
+
+      - name: Bind verified email claims to one source
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace(path: str, old: str, new: str, *, count: int = 1) -> None:
+              p = Path(path)
+              text = p.read_text(encoding="utf-8")
+              actual = text.count(old)
+              if actual != count:
+                  raise SystemExit(f"{path}: expected {count} occurrence(s), found {actual}: {old[:120]!r}")
+              p.write_text(text.replace(old, new, count), encoding="utf-8")
+
+          replace(
+              "backend/auth/oidc.py",
+              '''    merged = dict(id_claims)\n    for key in (\n        "email",\n        "email_verified",\n        "name",\n        "preferred_username",\n        config.group_claim,\n    ):\n        if key not in merged and key in userinfo:\n            merged[key] = userinfo[key]\n    return merged\n''',
+              '''    merged = dict(id_claims)\n\n    # Treat email + email_verified as one authorization-bearing claim pair. If\n    # the ID token does not already contain a verified email, UserInfo may\n    # replace that pair only when UserInfo itself supplies both the address and\n    # an explicit boolean true verification claim. Never attach UserInfo's\n    # verification bit to a different email retained from the ID token.\n    if config.allowed_emails:\n        if id_claims.get("email_verified") is not True:\n            userinfo_email = str(userinfo.get("email") or "").strip()\n            if userinfo_email and userinfo.get("email_verified") is True:\n                merged["email"] = userinfo["email"]\n                merged["email_verified"] = True\n    else:\n        for key in ("email", "email_verified"):\n            if key not in merged and key in userinfo:\n                merged[key] = userinfo[key]\n\n    for key in ("name", "preferred_username", config.group_claim):\n        if key not in merged and key in userinfo:\n            merged[key] = userinfo[key]\n    return merged\n''',
+          )
+
+          # Replace the older blanket merge assertion with provenance-specific
+          # tests for both unverified and already-verified ID-token email pairs.
+          p = Path("backend/tests/test_auth_oidc_userinfo.py")
+          text = p.read_text(encoding="utf-8")
+          old = '''def test_userinfo_merge_never_overwrites_id_token_claims():\n    cfg = _config()\n    merged = oidc._merge_userinfo_claims(\n        cfg,\n        {\n            "iss": cfg.issuer,\n            "sub": "user-1",\n            "email": "id-token@example.com",\n        },\n        {\n            "sub": "user-1",\n            "email": "userinfo@example.com",\n            "groups": ["operators"],\n            "iss": "https://evil.example",\n        },\n    )\n    assert merged["iss"] == cfg.issuer\n    assert merged["sub"] == "user-1"\n    assert merged["email"] == "id-token@example.com"\n    assert merged["groups"] == ["operators"]\n'''
+          new = '''def test_userinfo_verified_email_pair_replaces_unverified_id_token_email_as_a_pair():\n    cfg = _config()\n    merged = oidc._merge_userinfo_claims(\n        cfg,\n        {\n            "iss": cfg.issuer,\n            "sub": "user-1",\n            "email": "unverified-id-token@example.com",\n        },\n        {\n            "sub": "user-1",\n            "email": "operator@example.com",\n            "email_verified": True,\n            "groups": ["operators"],\n            "iss": "https://evil.example",\n        },\n    )\n    assert merged["iss"] == cfg.issuer\n    assert merged["sub"] == "user-1"\n    assert merged["email"] == "operator@example.com"\n    assert merged["email_verified"] is True\n    assert merged["groups"] == ["operators"]\n\n\ndef test_userinfo_never_rebinds_verification_to_a_different_id_token_email():\n    cfg = _config(oidc_allowed_emails=["claimed@example.com"], oidc_allowed_groups=[])\n    merged = oidc._merge_userinfo_claims(\n        cfg,\n        {\n            "iss": cfg.issuer,\n            "sub": "user-1",\n            "email": "claimed@example.com",\n        },\n        {\n            "sub": "user-1",\n            "email": "different-verified@example.com",\n            "email_verified": True,\n        },\n    )\n    assert merged["email"] == "different-verified@example.com"\n    assert merged["email_verified"] is True\n    with pytest.raises(oidc.OidcAuthorizationError):\n        oidc.authorize_oidc_claims(cfg, merged)\n\n\ndef test_userinfo_does_not_override_an_already_verified_id_token_email_pair():\n    cfg = _config(oidc_allowed_emails=["id-token@example.com"], oidc_allowed_groups=[])\n    merged = oidc._merge_userinfo_claims(\n        cfg,\n        {\n            "iss": cfg.issuer,\n            "sub": "user-1",\n            "email": "id-token@example.com",\n            "email_verified": True,\n        },\n        {\n            "sub": "user-1",\n            "email": "userinfo@example.com",\n            "email_verified": True,\n        },\n    )\n    assert merged["email"] == "id-token@example.com"\n    assert merged["email_verified"] is True\n    assert oidc.authorize_oidc_claims(cfg, merged).authenticated is True\n'''
+          if text.count(old) != 1:
+              raise SystemExit("userinfo merge regression source did not match exactly")
+          p.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          # The subject policy is intentionally issuer-qualified in runtime;
+          # expose that exact input contract to operators.
+          replace(
+              "docs/authentication.md",
+              '''Email allow-list authorization requires the provider to assert `email_verified: true` for the matching address. If that claim is absent from the ID token, DebridPulse may use the provider's UserInfo endpoint to complete it. If the provider never supplies a verified-email claim, use subject or group authorization instead of an email allow list.\n\nDo not enable OIDC without an authorization policy that matches the intended users.\n''',
+              '''Subject allow-list entries use the issuer-qualified identity form `<issuer>|<sub>`, for example `https://id.example/application/o/debridpulse/|user-1`. This is the same stable identity stored in DebridPulse OIDC sessions.\n\nEmail allow-list authorization requires the provider to assert `email_verified: true` for the matching address. If that claim is absent from the ID token, DebridPulse may use the provider's UserInfo endpoint to complete it. The email address and verification status are evaluated as one claim pair from the same source; verification from UserInfo is never attached to a different email from the ID token. If the provider never supplies a verified-email claim, use subject or group authorization instead of an email allow list.\n\nDo not enable OIDC without an authorization policy that matches the intended users.\n''',
+          )
+          replace(
+              "frontend/static/auth-settings.js",
+              '''            <div class="form-group"><label class="form-label">Allowed Subjects (one per line)</label><textarea class="input" id="auth-oidc-subjects" rows="3">${authEsc(authLines(a.oidc_allowed_subjects))}</textarea></div>\n''',
+              '''            <div class="form-group"><label class="form-label">Allowed Subjects (one per line)</label><textarea class="input" id="auth-oidc-subjects" rows="3">${authEsc(authLines(a.oidc_allowed_subjects))}</textarea><div class="form-hint">Use issuer-qualified identities in the form <code>&lt;issuer&gt;|&lt;sub&gt;</code>.</div></div>\n''',
+          )
+
+          Path(".github/workflows/audit-loop-correction-v5.yml").unlink(missing_ok=True)
+          PY
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+
+      - name: Install validation dependencies
+        run: |
+          cd backend
+          pip install -r requirements-dev.txt
+          pip install ruff pip-audit bandit
+
+      - name: Validate corrected working tree
+        run: |
+          set -euo pipefail
+          cd backend
+          ruff check api auth core db services main.py --select F821,F822,F823
+          python -m pytest tests/ -q --tb=short
+          python -m compileall -q .
+          pip-audit -r requirements.txt --progress-spinner off
+          bandit -r . --exclude ./tests --severity-level high --confidence-level high -f txt
+          cd ..
+          node --check frontend/static/app.js
+          node --check frontend/static/auth.js
+          node --check frontend/static/auth-settings.js
+          node --check frontend/static/auth-help.js
+
+      - name: Commit corrected tree and remove temporary workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git diff --cached --stat
+          git commit -m "Bind OIDC verified email claim provenance"
+          git push origin HEAD:work/v1.0.6-auth-overhaul

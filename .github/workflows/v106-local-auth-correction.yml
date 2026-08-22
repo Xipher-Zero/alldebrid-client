@@ -1,0 +1,77 @@
+name: v1.0.6 Local Auth Correction
+
+on:
+  push:
+    branches:
+      - staging/v1.0.6
+
+permissions:
+  contents: write
+
+jobs:
+  correct-and-validate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: staging/v1.0.6
+          fetch-depth: 0
+      - name: Apply corrections
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('backend/auth/middleware.py'); t=p.read_text()
+          t=t.replace('from auth.sessions import CSRF_HEADER, request_is_secure, session_cookie_token, session_store','from auth.sessions import CSRF_HEADER, session_cookie_token, session_store')
+          old='    request_scheme = "https" if request_is_secure(request) else str(request.url.scheme or "http").casefold()\n'
+          new='''    # Origin validation must use the ASGI transport scheme, not the broader\n    # secure-cookie classification. request_is_secure() may infer HTTPS from\n    # PUBLIC_BASE_URL; using that inference here can reject direct HTTP LAN login.\n    # Uvicorn rewrites scope["scheme"] when trusted proxy headers are accepted.\n    request_scheme = str(request.url.scheme or "http").casefold()\n'''
+          assert old in t; p.write_text(t.replace(old,new,1))
+
+          p=Path('backend/api/auth_routes.py'); t=p.read_text(); anchor='router = APIRouter()\n\n\n'
+          style='''router = APIRouter()\n\n\n_AUTH_PAGE_STYLE = """\n:root { --bg:#090812;--bg2:#100e1c;--surface:#171526;--surface2:#211e34;--border:#302c49;--border2:#484268;--text:#f4f1ff;--text2:#c2bdd6;--text3:#89839f;--accent:#a67cff;--accent2:#66a8ff;--accent-rgb:166,124,255;--accent-contrast:#120d1d;--danger:#ff6b6b;--primary-gradient:linear-gradient(135deg,#a67cff,#4f8cff);--primary-gradient-hover:linear-gradient(135deg,#b991ff,#66a8ff); }\n* { box-sizing:border-box; }\nbody { margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:radial-gradient(circle at 16% 12%,rgba(var(--accent-rgb),.13),transparent 25%),radial-gradient(circle at 88% 8%,rgba(99,164,255,.10),transparent 20%),linear-gradient(180deg,var(--bg2),var(--bg));color:var(--text);font-family:Outfit,Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }\n.card { width:min(420px,100%);padding:30px;border:1px solid var(--border);border-radius:12px;background:linear-gradient(160deg,rgba(33,30,52,.97),rgba(15,13,27,.94));box-shadow:0 18px 40px rgba(0,0,8,.34); }\n.brand { font-size:28px;font-weight:800;letter-spacing:-.7px;margin-bottom:6px; }.brand span { color:var(--accent); }h1 { font-size:17px;margin:0 0 24px;color:var(--text2);font-weight:500; }\nlabel { display:block;font-size:12px;font-weight:700;color:var(--text2);margin:14px 0 7px; }input { width:100%;border:1px solid var(--border);background:var(--surface2);color:var(--text);border-radius:8px;padding:11px 12px;font:inherit;outline:none; }input:focus { border-color:var(--accent);box-shadow:0 0 0 3px rgba(var(--accent-rgb),.24); }\n.auth-action { width:100%;margin-top:20px;border-radius:8px;padding:11px 14px;font-weight:800;font-size:14px;cursor:pointer;text-align:center;text-decoration:none;display:block; }button.auth-action { font-family:inherit; }.auth-action:hover { filter:brightness(1.06); }.primary { border:0;background:var(--primary-gradient);color:var(--accent-contrast); }.primary:hover { background:var(--primary-gradient-hover); }.secondary { background:var(--surface2);color:var(--text);border:1px solid var(--border); }\n.divider { display:flex;align-items:center;gap:12px;color:var(--text3);font-size:11px;margin:22px 0 0; }.divider:before,.divider:after { content:"";height:1px;background:var(--border);flex:1; }.error { border:1px solid rgba(255,107,107,.4);background:rgba(255,107,107,.08);color:#ffc0c0;padding:10px 12px;border-radius:8px;font-size:12px;line-height:1.45;margin:0 0 15px; }.muted { color:var(--text3);font-size:13px;line-height:1.55; }.foot { margin-top:22px;padding-top:16px;border-top:1px solid var(--border);color:var(--text3);font-size:11px;line-height:1.5; }\n"""\n\n\n'''
+          assert anchor in t; t=t.replace(anchor,style,1)
+          s=t.index('<style>\n:root{{--bg:#0c0d10;'); e=t.index('</style>',s); t=t[:s]+'<style>{_AUTH_PAGE_STYLE}</style>'+t[e+8:]
+          old='<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sign in · DebridPulse</title></head>\n<body><main><h1>DebridPulse sign-in</h1><p>{html.escape(message)}</p><p><a href="/login">Return to sign in</a></p></main></body>'
+          new='<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sign in · DebridPulse</title><style>{_AUTH_PAGE_STYLE}</style></head>\n<body><main class="card"><div class="brand">Debrid<span>Pulse</span></div><h1>Sign in unavailable</h1><div class="error" role="alert">{html.escape(message)}</div><a class="auth-action secondary" href="/login">Return to sign in</a></main></body>'
+          assert old in t; t=t.replace(old,new,1)
+          old='response.headers["Content-Security-Policy"] = "default-src \'none\'; base-uri \'none\'; frame-ancestors \'none\'"'; new='response.headers["Content-Security-Policy"] = "default-src \'none\'; style-src \'unsafe-inline\'; base-uri \'none\'; frame-ancestors \'none\'"'
+          assert old in t; p.write_text(t.replace(old,new,1))
+
+          Path('backend/tests/test_auth_local_deployment_regressions.py').write_text('''from fastapi import Request, Response\nimport pytest\nfrom api.auth_routes import _AUTH_PAGE_STYLE, _state_free_auth_page\nfrom auth.middleware import enforce_general_web_security\n\ndef _request(*, scheme="http", host="debridpulse.local:8081", origin=None, fetch_site="same-origin"):\n    headers=[(b"host",host.encode())]\n    if origin is not None: headers.append((b"origin",origin.encode()))\n    if fetch_site is not None: headers.append((b"sec-fetch-site",fetch_site.encode()))\n    return Request({"type":"http","asgi":{"version":"3.0"},"http_version":"1.1","method":"POST","scheme":scheme,"path":"/login","raw_path":b"/login","query_string":b"","headers":headers,"client":("192.168.226.10",54321),"server":("debridpulse.local",8081)})\n\nasync def _ok(_request): return Response(content="ok",status_code=200)\n\n@pytest.mark.asyncio\nasync def test_direct_http_login_origin_is_not_reclassified_by_public_https_base(monkeypatch):\n    monkeypatch.setenv("PUBLIC_BASE_URL","https://debridpulse.local:8081")\n    assert (await enforce_general_web_security(_request(origin="http://debridpulse.local:8081"),_ok)).status_code == 200\n\n@pytest.mark.asyncio\nasync def test_trusted_proxy_https_scope_remains_same_origin():\n    assert (await enforce_general_web_security(_request(scheme="https",host="debridpulse.example",origin="https://debridpulse.example"),_ok)).status_code == 200\n\n@pytest.mark.asyncio\nasync def test_cross_site_login_mutation_is_still_rejected(monkeypatch):\n    monkeypatch.setenv("PUBLIC_BASE_URL","https://debridpulse.local:8081")\n    assert (await enforce_general_web_security(_request(origin="https://evil.example",fetch_site="cross-site"),_ok)).status_code == 403\n\ndef test_auth_pages_use_debridpulse_dark_theme_palette():\n    assert "--bg:#090812" in _AUTH_PAGE_STYLE\n    assert "--accent:#a67cff" in _AUTH_PAGE_STYLE\n    assert "#f08a24" not in _AUTH_PAGE_STYLE\n    response=_state_free_auth_page(message="Try again shortly.",status_code=429,retry_after=60)\n    assert 'class="card"' in response.body.decode()\n    assert "style-src 'unsafe-inline'" in response.headers["Content-Security-Policy"]\n''')
+          PY
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+      - name: Validate
+        run: |
+          set -euo pipefail
+          cd backend
+          pip install -r requirements-dev.txt
+          pip install ruff pip-audit bandit
+          ruff check api auth core db services main.py --select F821,F822,F823
+          python -m pytest tests/test_auth_local_deployment_regressions.py -v --tb=short
+          python -m pytest tests/ -v --tb=short
+          python -m compileall -q .
+          pip-audit -r requirements.txt --progress-spinner off
+          bandit -r . --exclude ./tests --severity-level high --confidence-level high -f txt
+          cd ..
+          node --check frontend/static/app.js
+          node --check frontend/static/auth.js
+          node --check frontend/static/auth-settings.js
+          node --check frontend/static/auth-help.js
+      - name: Commit correction and remove workflow
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/v106-local-auth-correction.yml
+          git add backend/auth/middleware.py backend/api/auth_routes.py backend/tests/test_auth_local_deployment_regressions.py
+          git diff --cached --check
+          git commit -m 'Fix local password login origin and auth theme'
+          git push origin HEAD:staging/v1.0.6

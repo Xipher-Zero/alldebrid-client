@@ -140,10 +140,24 @@ def _merge_verified_oidc_settings(current: Any, item: PendingOidcConfiguration):
     return current.model_copy(update=updates, deep=True)
 
 
-def commit_verified_pending_oidc(state: str) -> bool:
+def commit_verified_pending_oidc(
+    state: str,
+    *,
+    expected_configuration_version: str,
+) -> bool:
     """Commit a staged config only after matching proof and unchanged baseline."""
     item = pending_oidc_store.consume_verified(state)
     if item is None:
+        return False
+
+    proof_version = str(expected_configuration_version or "")
+    if not proof_version or not secrets.compare_digest(
+        proof_version,
+        item.configuration_version,
+    ):
+        # A successful OIDC proof is valid only for the exact staged snapshot
+        # that produced it. Reject before persistence; a post-write comparison is
+        # too late to protect the appliance from a stale/mismatched proof.
         return False
 
     from auth.models import AuthMechanism

@@ -1,11 +1,11 @@
-from types import SimpleNamespace
-
 import pytest
 from fastapi import Request
 
 from api import auth_config_routes, auth_routes
 from auth.models import Principal
+from auth.passwords import hash_password
 from auth.throttle import DualWindowRateLimiter
+from core.config import AppSettings
 
 
 def _request(path: str, *, peer: str = "127.0.0.1") -> Request:
@@ -28,10 +28,10 @@ def _request(path: str, *, peer: str = "127.0.0.1") -> Request:
 
 
 def _oidc_settings():
-    return SimpleNamespace(
+    return AppSettings(
         auth_password_enabled=True,
         auth_username="operator",
-        auth_password_hash="$argon2id$v=19$m=65536,t=3,p=2$ZmFrZQ$ZmFrZQ",
+        auth_password_hash=hash_password("secret"),
         auth_oidc_enabled=True,
         oidc_provider_name="OpenID Connect",
         oidc_issuer_url="https://id.example/application/o/debridpulse",
@@ -89,8 +89,7 @@ async def test_oidc_start_rate_limit_fails_before_discovery(monkeypatch):
     assert calls == ["/"]
 
 
-@pytest.mark.asyncio
-async def test_login_challenge_limit_rejects_without_allocating_csrf_state(monkeypatch):
+def test_login_challenge_limit_rejects_without_allocating_csrf_state(monkeypatch):
     cfg = _oidc_settings()
     monkeypatch.setattr(auth_routes, "get_settings", lambda: cfg)
     limiter = DualWindowRateLimiter(per_peer_limit=1, global_limit=1, window_seconds=60)
@@ -134,7 +133,7 @@ async def test_oidc_verification_rate_limit_fails_before_provider_work(monkeypat
     second_request.state.principal = Principal.password_session("operator")
     second = await auth_config_routes.verify_pending_oidc_configuration(second_request, proposed)
 
-    assert first.status_code in {200, 400}
+    assert first.status_code == 200
     assert second.status_code == 429
     assert second.headers["retry-after"] == "60"
     assert len(calls) == 1

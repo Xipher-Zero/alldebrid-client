@@ -35,9 +35,9 @@ _OIDC_COMMIT_FIELDS = (
 class PendingOidcConfiguration:
     settings: Any
     configuration_version: str
-    baseline_configuration_version: str
     created_at: float
     expires_at: float
+    baseline_configuration_version: str = ""
     apply_password_enabled: bool = False
 
 
@@ -70,7 +70,7 @@ class PendingOidcConfigurationStore:
         settings: Any,
         *,
         configuration_version: str,
-        baseline_configuration_version: str,
+        baseline_configuration_version: str = "",
         apply_password_enabled: bool = False,
     ) -> None:
         now = self._clock()
@@ -79,9 +79,9 @@ class PendingOidcConfigurationStore:
         self._entries[key] = PendingOidcConfiguration(
             settings=settings,
             configuration_version=str(configuration_version),
-            baseline_configuration_version=str(baseline_configuration_version),
             created_at=now,
             expires_at=now + self.ttl_seconds,
+            baseline_configuration_version=str(baseline_configuration_version),
             apply_password_enabled=bool(apply_password_enabled),
         )
         self._entries.move_to_end(key)
@@ -95,7 +95,6 @@ class PendingOidcConfigurationStore:
         return self._fingerprint(state) in self._entries
 
     def consume_verified(self, state: str) -> PendingOidcConfiguration | None:
-        """Consume a staged config after the matching OIDC transaction succeeded."""
         if not state:
             return None
         item = self._entries.pop(self._fingerprint(state), None)
@@ -130,7 +129,6 @@ class PendingOidcConfigurationStore:
 
 
 def _merge_verified_oidc_settings(current: Any, item: PendingOidcConfiguration):
-    """Apply the fully verified OIDC snapshot without rolling back live app state."""
     proposed = item.settings
     updates = {
         field: getattr(proposed, field)
@@ -158,8 +156,6 @@ def commit_verified_pending_oidc(state: str) -> bool:
         item.baseline_configuration_version,
         current_baseline,
     ):
-        # Another authentication mutation won while the browser was at the IdP.
-        # Never overwrite that newer authoritative state with a stale proposal.
         return False
 
     merged = _merge_verified_oidc_settings(current, item)

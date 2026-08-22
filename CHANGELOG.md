@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.0.6] — 2026-08-20
+## [1.0.6] — 2026-08-21
 
 ### Native authentication overhaul
 
@@ -11,6 +11,7 @@
 - Added supplemental bearer API tokens with one-time raw-token display, persisted one-way verifiers, rotation/clear controls, and open-mode semantics that do not silently turn an intentionally open deployment into token-only mode.
 - Added a dedicated Authentication settings surface, authentication/help documentation, secret-preserving update semantics, and runtime dependency/license inventory enforcement for the new authentication stack.
 - Hardened authentication responses with request correlation, baseline browser security headers, and no-store handling for session/CSRF state.
+- Refined the release Authentication UX with full-width Settings layout, semantic status cards and icons, prominent canonical-origin guidance, reorganized OIDC configuration/claim mapping, persistent sidebar logout, and isolated Verify Sign-In browser flow without navigating the main Settings SPA.
 
 ### Corrective architecture and security audit
 

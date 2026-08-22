@@ -47,6 +47,8 @@ Configure at minimum:
 - canonical public base URL;
 - authorization policy.
 
+The **issuer URL is an exact OpenID Connect identifier**. Copy the issuer exactly as published by the provider, including a trailing `/` when one is present. DebridPulse does not treat an issuer ending in `/` as equivalent to the same text without it. This is particularly relevant to providers such as authentik whose per-provider issuer commonly ends with `/`.
+
 The public base URL must be the externally reachable HTTPS origin used by the identity provider, for example:
 
 ```text
@@ -73,7 +75,7 @@ Enabling OIDC never silently disables a working local password.
 
 Username & Password cannot be disabled in favor of OIDC until a **real OIDC login** has completed successfully. Discovery or a configuration-only HTTP check is not sufficient.
 
-When OIDC is already the sole interactive mechanism, security-critical OIDC changes are staged as a pending configuration. The current known-working configuration remains authoritative until the proposed settings themselves complete a successful OIDC login. If verification fails, the previous configuration is retained unchanged.
+When OIDC is already the sole interactive mechanism, security-critical OIDC changes are staged as a pending configuration. The current known-working configuration remains authoritative until the proposed settings themselves complete a successful OIDC login. If another authentication change is committed while that verification is in flight, the pending proposal is considered stale and must be verified again rather than overwriting the newer state.
 
 Use **Verify Sign-In** in the Authentication settings tab after entering proposed OIDC changes.
 
@@ -106,7 +108,7 @@ A valid browser application session therefore remains authoritative even if an i
 
 Both Username & Password and OIDC may be deliberately disabled. Moving from an authenticated deployment into no-auth mode requires explicit confirmation because the application and REST API become unrestricted.
 
-DebridPulse distinguishes intentional open mode from a broken configured authentication mechanism. A configured authentication failure must not cause the application to fail open.
+DebridPulse distinguishes intentional open mode from a broken configured authentication mechanism. A configured authentication failure must not cause the application to fail open. Likewise, an existing `config.json` that cannot be read or parsed is a startup error rather than permission to invent default/open authentication state.
 
 ## Browser sessions and CSRF
 
@@ -119,6 +121,8 @@ Same-origin EventSource connections use the normal browser session cookie. REST 
 ## Reverse proxies
 
 For OIDC deployments, terminate HTTPS at the public ingress and set **Public Base URL** to the canonical external origin. Ensure the proxy preserves the normal Host/protocol information expected by the deployment and does not rewrite the registered callback path.
+
+DebridPulse does not independently trust an arbitrary client-supplied `X-Forwarded-Proto` header when deciding whether Password-session/login-CSRF cookies should use the HTTPS-only `__Host-` form. HTTPS is established from the ASGI request scheme after the server's trusted-proxy handling, or from the operator-configured HTTPS **Public Base URL** when its authority matches the request Host. This keeps secure-cookie classification tied to trusted deployment state rather than a spoofable request header.
 
 DebridPulse does not require an external authentication proxy when its native Password/OIDC mechanisms are enabled. An external proxy may still be used as an additional perimeter control, but it should not be relied on to repair an intentionally misconfigured native authentication state.
 
@@ -153,7 +157,7 @@ OIDC plus Password fallback:
   "auth_password_hash": "$argon2id$...",
   "auth_oidc_enabled": true,
   "oidc_provider_name": "Authentik",
-  "oidc_issuer_url": "https://id.example/application/o/debridpulse",
+  "oidc_issuer_url": "https://id.example/application/o/debridpulse/",
   "oidc_client_id": "debridpulse",
   "oidc_client_secret": "REDACTED",
   "oidc_scopes": ["openid", "profile", "email"],

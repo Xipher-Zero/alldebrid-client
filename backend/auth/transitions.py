@@ -137,6 +137,11 @@ def _prospective_oidc_ready(payload: Mapping[str, Any], current) -> bool:
         if field not in payload:
             continue
         value = payload[field]
+        if field in {"auth_oidc_enabled", "oidc_allow_all"}:
+            value = _coerced_bool(
+                value,
+                default=bool(getattr(current, field, False)),
+            )
         # Blank secret input preserves the stored secret unless an explicit
         # clear flag is present, matching the normal settings-write contract.
         if field == "oidc_client_secret" and not str(value or "").strip():
@@ -205,7 +210,7 @@ async def settings_transition_rejection(
                 {"detail": "Authentication is required for open-mode transition"},
                 status_code=401,
             )
-        if payload.get("confirm_open_mode") is not True:
+        if not _coerced_bool(payload.get("confirm_open_mode", False)):
             return JSONResponse(
                 {"detail": "Explicit confirmation is required to disable all interactive authentication"},
                 status_code=409,

@@ -147,3 +147,42 @@ def test_sensitive_config_and_api_token_writers_use_secure_atomic_helper():
     token_source = open(os.path.join(root, "auth", "api_tokens.py"), encoding="utf-8").read()
     assert "atomic_write_json(CONFIG_PATH, data, indent=2)" in config_source
     assert "atomic_write_json(" in token_source and "self.path," in token_source
+
+
+@pytest.mark.asyncio
+async def test_transition_guard_matches_pydantic_true_string_for_open_mode_confirmation():
+    body = json.dumps({
+        "auth_password_enabled": "false",
+        "auth_oidc_enabled": "false",
+        "confirm_open_mode": "true",
+    }).encode()
+    parsed = AuthenticationConfigUpdate.model_validate_json(body)
+    assert parsed.confirm_open_mode is True
+    rejection = await transitions.settings_transition_rejection(
+        _request(body),
+        Principal.password_session("operator"),
+        _password_only_settings(),
+    )
+    assert rejection is None
+
+
+def test_prospective_oidc_readiness_does_not_treat_false_string_as_allow_all():
+    current = SimpleNamespace(
+        auth_oidc_enabled=False,
+        oidc_provider_name="OIDC",
+        oidc_issuer_url="https://id.example/application/o/debridpulse/",
+        oidc_client_id="client",
+        oidc_client_secret="",
+        oidc_scopes=["openid", "email"],
+        public_base_url="https://pulse.example",
+        oidc_allow_all=False,
+        oidc_allowed_subjects=[],
+        oidc_allowed_emails=[],
+        oidc_allowed_groups=[],
+        oidc_group_claim="groups",
+    )
+    payload = {
+        "auth_oidc_enabled": "true",
+        "oidc_allow_all": "false",
+    }
+    assert transitions._prospective_oidc_ready(payload, current) is False

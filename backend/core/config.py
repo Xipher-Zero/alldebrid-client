@@ -83,8 +83,8 @@ class AppSettings(BaseModel):
     # Automatically block sample files, extras, and featurettes.
     # Works alongside blocked_keywords — enabling this adds the most common
     # sample/extra patterns without requiring manual keyword configuration.
-    block_samples:    bool = False
-    block_extras:     bool = False
+    block_samples: bool = False
+    block_extras: bool = False
 
     # ── Advanced Extraction ───────────────────────────────────────────────────
     extraction_password: str = ""
@@ -185,6 +185,9 @@ class AppSettings(BaseModel):
         return data
 
     # ── Disk space guard ─────────────────────────────────────────────────────
+    # Minimum free disk space required on the download filesystem. At/below the
+    # configured threshold, new dispatch is deferred until the resume hysteresis
+    # is satisfied. Transfers already active in aria2 are allowed to finish.
     min_free_disk_gb: float = 0
     disk_guard_interval_seconds: int = 60
     disk_guard_resume_hysteresis_gb: float = 0.5
@@ -246,7 +249,7 @@ def load_settings() -> AppSettings:
     # ── Performance migration: built-in aria2 only ──────────────────────────
     if loaded.get("aria2_mode", "builtin") == "builtin":
         _PERF_UPGRADES = {
-            "aria2_split":                     (4, 8, 16),
+            "aria2_split": (4, 8, 16),
             "aria2_max_connection_per_server": (4, 8, 16),
         }
         for field, (old_low, old_mid, new_val) in _PERF_UPGRADES.items():

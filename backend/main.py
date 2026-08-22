@@ -5,6 +5,8 @@ import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI, Request, Response
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -164,9 +166,21 @@ class RequestBodyLimitMiddleware:
         if scope.get("type") != "http" or str(scope.get("method") or "").upper() not in {"POST", "PUT", "PATCH", "DELETE"}:
             await self.app(scope, receive, send)
             return
-        # Login credentials are tiny; give the pre-auth parser a much smaller
-        # ceiling than general torrent/form application requests.
-        limit = min(self.max_bytes, 64 * 1024) if scope.get("path") == "/login" else self.max_bytes
+        # Pre-authentication parsers must have tighter ceilings than torrent/form
+        # application requests. Auth settings are intentionally bounded because
+        # the transition state machine reads their body before route validation.
+        path = str(scope.get("path") or "")
+        if path == "/login":
+            limit = min(self.max_bytes, 64 * 1024)
+        elif path in {
+            "/api/settings",
+            "/api/auth/config",
+            "/api/auth/oidc/verify-config",
+            "/api/auth/api-token",
+        }:
+            limit = min(self.max_bytes, 1024 * 1024)
+        else:
+            limit = self.max_bytes
         headers = {key.lower(): value for key, value in scope.get("headers", [])}
         raw_length = headers.get(b"content-length", b"")
         try:
@@ -252,6 +266,31 @@ async def permission_error_handler(_request: Request, _exc: PermissionError):
     return Response(content="Forbidden", status_code=403)
 
 
+@app.exception_handler(RequestValidationError)
+async def request_validation_error_handler(_request: Request, exc: RequestValidationError):
+    """Return useful validation locations without reflecting submitted secrets.
+
+    Pydantic validation errors include the invalid ``input`` by default. That is
+    unsafe for password/client-secret fields because a rejected credential could
+    otherwise be copied into browser, proxy, or diagnostic logs as response
+    content. Keep only stable structural metadata and a generic message.
+    """
+    detail = []
+    for error in exc.errors():
+        detail.append(
+            {
+                "type": str(error.get("type") or "validation_error"),
+                "loc": list(error.get("loc") or ()),
+                "msg": "Invalid request value",
+            }
+        )
+    return JSONResponse(
+        status_code=422,
+        content={"detail": detail},
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 @app.exception_handler(DatabaseMaintenanceActive)
 async def database_maintenance_handler(_request: Request, _exc: DatabaseMaintenanceActive):
     """Fail closed rather than queue stale request work behind a destructive wipe."""
@@ -270,9 +309,6 @@ async def application_maintenance_handler(_request: Request, _exc: ApplicationMa
         status_code=503,
         headers={"Retry-After": "2"},
     )
-
-
-app.add_middleware(RequestBodyLimitMiddleware, max_bytes=_MAX_REQUEST_BODY_BYTES)
 
 
 _cors_origins = [origin.strip() for origin in os.getenv("CORS_ORIGINS", "").split(",") if origin.strip()]
@@ -295,6 +331,12 @@ async def authentication_boundary_middleware(request: Request, call_next):
     return await enforce_authentication(request, call_next)
 
 
+# Register the pure-ASGI body limiter after Authentication so Starlette places
+# it outside the authentication middleware. The auth transition guard reads
+# settings request bodies itself; no unbounded/chunked body may reach that read.
+app.add_middleware(RequestBodyLimitMiddleware, max_bytes=_MAX_REQUEST_BODY_BYTES)
+
+
 @app.middleware("http")
 async def general_web_security_middleware(request: Request, call_next):
     return await enforce_general_web_security(
@@ -306,9 +348,9 @@ async def general_web_security_middleware(request: Request, call_next):
 
 # ── Request-ID / Baseline Response Security Middleware ────────────────────────
 # Registered last so it is the outermost HTTP middleware. This guarantees that
-# responses produced directly by the browser-security or authentication
-# boundaries receive the same correlation and baseline security headers as
-# normal application responses.
+# responses produced directly by the body-limit, browser-security, or
+# authentication boundaries receive the same correlation and baseline security
+# headers as normal application responses.
 
 @app.middleware("http")
 async def request_id_middleware(request: Request, call_next):

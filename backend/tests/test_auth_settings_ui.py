@@ -81,7 +81,7 @@ def test_authentication_settings_module_is_loaded_without_rewriting_large_app_re
     module = AUTH_SETTINGS_JS.read_text(encoding="utf-8")
     app = APP_JS.read_text(encoding="utf-8")
 
-    assert "auth-settings.js?v=1" in bootstrap
+    assert "auth-settings.js?v=2" in bootstrap
     assert "removeLegacyAuthenticationControls" in module
     assert "Access Control" in app  # inherited renderer remains untouched
     assert "header.textContent.includes('Access Control')" in module
@@ -105,7 +105,7 @@ def test_authentication_tab_contains_required_cards_and_uses_dedicated_api():
     assert "api('POST', '/auth/oidc/verify-config'" in source
     assert "api('POST', '/auth/api-token'" in source
     assert "api('DELETE', '/auth/api-token'" in source
-    assert "return_to: '/?view=settings&tab=authentication'" in source
+    assert "return_to: '/oidc-verify-complete.html'" in source
     assert "Copy this token now — it will not be shown again." in source
 
 

@@ -15,5 +15,5 @@ def test_request_id_and_security_headers_wrap_authentication_boundaries():
     assert auth_at < browser_security_at < response_headers_at
     assert 'response.headers["X-Request-ID"] = req_id' in source
     assert 'response.headers.setdefault("X-Content-Type-Options", "nosniff")' in source
-    assert 'response.headers.setdefault("Referrer-Policy", "no-referrer")' in source
+    assert 'response.headers.setdefault("Referrer-Policy", "same-origin")' in source
     assert 'response.headers.setdefault("X-Frame-Options", "DENY")' in source

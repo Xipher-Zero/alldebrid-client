@@ -72,6 +72,20 @@ async def test_same_origin_fetch_metadata_does_not_bypass_origin_mismatch(monkey
 
 
 @pytest.mark.asyncio
+async def test_null_origin_is_not_accepted_as_same_origin(monkeypatch):
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://download.xipherzero.com")
+    request = _request(
+        scheme="http",
+        host="download.xipherzero.com",
+        origin="null",
+        fetch_site="same-origin",
+    )
+    response = await enforce_general_web_security(request, _ok)
+    assert response.status_code == 403
+    assert response.body == b"Forbidden origin"
+
+
+@pytest.mark.asyncio
 async def test_cross_site_login_mutation_is_still_rejected(monkeypatch):
     monkeypatch.setenv("PUBLIC_BASE_URL", "https://download.xipherzero.com")
     request = _request(
@@ -95,6 +109,12 @@ def test_auth_pages_use_debridpulse_dark_theme_palette():
     response = _state_free_auth_page(message="Try again shortly.", status_code=429, retry_after=60)
     assert 'class="card"' in response.body.decode()
     assert "style-src 'unsafe-inline'" in response.headers["Content-Security-Policy"]
+
+
+def test_baseline_referrer_policy_preserves_same_origin_form_origin():
+    source = (Path(__file__).resolve().parents[1] / "main.py").read_text()
+    assert 'setdefault("Referrer-Policy", "same-origin")' in source
+    assert 'setdefault("Referrer-Policy", "no-referrer")' not in source
 
 
 def test_auth_settings_present_external_base_as_general_security_setting():

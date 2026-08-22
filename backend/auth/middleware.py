@@ -9,20 +9,20 @@ from fastapi import Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from auth.api_tokens import api_token_store
-from auth.manager import verify_local_credentials
+from auth.manager import PasswordAuthenticationBusy, verify_local_credentials
 from auth.models import AuthMechanism, Principal
 from auth.passwords import password_credential_version
 from auth.policy import (
     MUTATING_HTTP_METHODS,
     interactive_auth_enabled,
     is_public_path,
-    normalized_origin_host,
+    normalized_origin,
     oidc_auth_enabled,
     password_auth_enabled,
     password_auth_ready,
     safe_return_path,
 )
-from auth.sessions import CSRF_HEADER, session_cookie_token, session_store
+from auth.sessions import CSRF_HEADER, request_is_secure, session_cookie_token, session_store
 from auth.transitions import (
     authentication_configuration_lock,
     is_auth_settings_mutation,
@@ -89,6 +89,14 @@ def _unauthorized(*, basic_challenge: bool = False, bearer_challenge: bool = Fal
     return JSONResponse(content={"detail": "Unauthorized"}, status_code=401, headers=headers)
 
 
+def _authentication_busy() -> Response:
+    return JSONResponse(
+        content={"detail": "Too many authentication attempts are already being processed"},
+        status_code=429,
+        headers={"Retry-After": "2"},
+    )
+
+
 def _is_browser_navigation(request: Request) -> bool:
     if request.method.upper() != "GET" or request.url.path.startswith("/api/"):
         return False
@@ -116,6 +124,9 @@ def _session_record_still_valid(record, cfg) -> bool:
     mechanism = record.principal.mechanism
     if mechanism is AuthMechanism.PASSWORD_SESSION:
         if not password_auth_ready(cfg):
+            return False
+        current_username = str(getattr(cfg, "auth_username", "") or "").strip()
+        if not current_username or record.principal.subject != current_username:
             return False
         current_version = password_credential_version(getattr(cfg, "auth_password_hash", ""))
         return bool(current_version and record.credential_version == current_version)
@@ -152,23 +163,33 @@ async def enforce_general_web_security(
         return await call_next(request)
 
     origin = str(request.headers.get("Origin", "") or "").strip()
-    origin_host = normalized_origin_host(origin) if origin else ""
-    request_host = str(request.headers.get("Host", "") or "").strip().casefold()
-    configured_origins = {
-        str(item or "").strip().rstrip("/")
-        for item in allowed_origins
-        if str(item or "").strip()
-    }
-    configured_cross_origin = bool(origin and origin.rstrip("/") in configured_origins)
-
     fetch_site = str(request.headers.get("Sec-Fetch-Site", "") or "").strip().casefold()
+    if not origin:
+        if fetch_site == "cross-site":
+            return Response(content="Forbidden request context", status_code=403)
+        return await call_next(request)
+
+    origin_identity = normalized_origin(origin)
+    request_host = str(request.headers.get("Host", "") or "").strip()
+    request_scheme = "https" if request_is_secure(request) else str(request.url.scheme or "http").casefold()
+    request_identity = normalized_origin(f"{request_scheme}://{request_host}")
+    configured_identities = {
+        identity
+        for item in allowed_origins
+        if (identity := normalized_origin(str(item or "").strip())) is not None
+    }
+    configured_cross_origin = bool(
+        origin_identity is not None and origin_identity in configured_identities
+    )
+
     if fetch_site == "cross-site" and not configured_cross_origin:
         return Response(content="Forbidden request context", status_code=403)
 
-    if not origin:
-        return await call_next(request)
-
-    if not origin_host or (origin_host != request_host and not configured_cross_origin):
+    if (
+        origin_identity is None
+        or request_identity is None
+        or (origin_identity != request_identity and not configured_cross_origin)
+    ):
         return Response(content="Forbidden origin", status_code=403)
 
     return await call_next(request)
@@ -226,22 +247,25 @@ async def _enforce_authentication_unlocked(request: Request, call_next: CallNext
                 status_code=503,
             )
         credentials = _decode_basic_credentials(auth_header)
-        if credentials is None:
-            await verify_local_credentials(request, "", "", settings=cfg)
+        try:
+            if credentials is None:
+                await verify_local_credentials(request, "", "", settings=cfg)
+                return _unauthorized(basic_challenge=True)
+            provided_user, provided_pass = credentials
+            if await verify_local_credentials(
+                request,
+                provided_user,
+                provided_pass,
+                allow_basic_success_cache=True,
+                settings=cfg,
+            ):
+                username = str(getattr(cfg, "auth_username", "") or "").strip()
+                principal = Principal.http_basic(username)
+                _attach_principal(request, principal)
+                return await _admit_authenticated(request, call_next, principal, cfg)
             return _unauthorized(basic_challenge=True)
-        provided_user, provided_pass = credentials
-        if await verify_local_credentials(
-            request,
-            provided_user,
-            provided_pass,
-            allow_basic_success_cache=True,
-            settings=cfg,
-        ):
-            username = str(getattr(cfg, "auth_username", "") or "").strip()
-            principal = Principal.http_basic(username)
-            _attach_principal(request, principal)
-            return await _admit_authenticated(request, call_next, principal, cfg)
-        return _unauthorized(basic_challenge=True)
+        except PasswordAuthenticationBusy:
+            return _authentication_busy()
 
     if not interactive_auth_enabled(cfg):
         # Open mode still runs the auth-transition state machine. This is

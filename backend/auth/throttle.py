@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import time
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from dataclasses import dataclass
+from typing import Callable
 
 
 @dataclass(slots=True)
@@ -80,4 +81,90 @@ class FailureThrottle:
         return len(self._entries)
 
 
+class DualWindowRateLimiter:
+    """Rolling-window limiter with both per-peer and process-wide budgets.
+
+    Public login/OIDC-start routes must remain unauthenticated, but they allocate
+    bounded server-side state and OIDC start also performs outbound discovery.
+    A process-wide budget prevents a rotating-source flood from exhausting those
+    stores while the per-peer budget stops one transport peer from monopolizing
+    the global allowance.
+    """
+
+    def __init__(
+        self,
+        *,
+        per_peer_limit: int,
+        global_limit: int,
+        window_seconds: float = 60.0,
+        max_peers: int = 1024,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self.per_peer_limit = max(1, int(per_peer_limit))
+        self.global_limit = max(self.per_peer_limit, int(global_limit))
+        self.window_seconds = max(1.0, float(window_seconds))
+        self.max_peers = max(1, int(max_peers))
+        self._clock = clock
+        self._global: deque[float] = deque()
+        self._peers: OrderedDict[str, deque[float]] = OrderedDict()
+
+    @staticmethod
+    def _trim(values: deque[float], cutoff: float) -> None:
+        while values and values[0] <= cutoff:
+            values.popleft()
+
+    def allow(self, peer: str) -> bool:
+        now = self._clock()
+        cutoff = now - self.window_seconds
+        self._trim(self._global, cutoff)
+
+        key = str(peer or "unknown")
+        peer_values = self._peers.get(key)
+        if peer_values is None:
+            peer_values = deque()
+            self._peers[key] = peer_values
+        else:
+            self._trim(peer_values, cutoff)
+            self._peers.move_to_end(key)
+
+        if len(self._global) >= self.global_limit or len(peer_values) >= self.per_peer_limit:
+            if not peer_values:
+                self._peers.pop(key, None)
+            return False
+
+        self._global.append(now)
+        peer_values.append(now)
+        self._peers.move_to_end(key)
+        self._prune_peers(cutoff)
+        return True
+
+    def _prune_peers(self, cutoff: float) -> None:
+        empty = []
+        for key, values in self._peers.items():
+            self._trim(values, cutoff)
+            if not values:
+                empty.append(key)
+        for key in empty:
+            self._peers.pop(key, None)
+        while len(self._peers) > self.max_peers:
+            self._peers.popitem(last=False)
+
+    def clear(self) -> None:
+        self._global.clear()
+        self._peers.clear()
+
+
 password_failure_throttle = FailureThrottle()
+# Login CSRF state lives for ten minutes with a 512-entry cap. At 40 starts per
+# rolling minute globally, ordinary public login-page issuance cannot exhaust it.
+login_challenge_rate_limiter = DualWindowRateLimiter(
+    per_peer_limit=20,
+    global_limit=40,
+)
+# OIDC transactions also live for ten minutes and are capped at 128 entries.
+# Ten starts per rolling minute keeps every application-originated start below
+# that capacity even before expired-state cleanup runs.
+oidc_start_rate_limiter = DualWindowRateLimiter(
+    per_peer_limit=6,
+    global_limit=10,
+)

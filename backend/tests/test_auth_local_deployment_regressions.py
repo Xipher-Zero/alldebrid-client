@@ -32,3 +32,31 @@ def test_auth_pages_use_debridpulse_dark_theme_palette():
     response=_state_free_auth_page(message="Try again shortly.",status_code=429,retry_after=60)
     assert 'class="card"' in response.body.decode()
     assert "style-src 'unsafe-inline'" in response.headers["Content-Security-Policy"]
+
+
+@pytest.mark.asyncio
+async def test_same_origin_fetch_metadata_survives_server_origin_reconstruction_mismatch():
+    request = _request(
+        scheme="https",
+        host="container-internal:8080",
+        origin="http://192.168.226.200:8081",
+        fetch_site="same-origin",
+    )
+    assert (await enforce_general_web_security(request, _ok)).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_same_site_different_origin_does_not_bypass_exact_origin_check():
+    request = _request(
+        scheme="http",
+        host="debridpulse.local:8081",
+        origin="http://other.debridpulse.local:8081",
+        fetch_site="same-site",
+    )
+    assert (await enforce_general_web_security(request, _ok)).status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_malformed_origin_is_rejected_even_with_same_origin_fetch_metadata():
+    request = _request(origin="null", fetch_site="same-origin")
+    assert (await enforce_general_web_security(request, _ok)).status_code == 403

@@ -190,12 +190,23 @@ async def enforce_general_web_security(
         origin_identity is not None and origin_identity in configured_identities
     )
 
+    # A browser-generated same-origin Fetch Metadata signal is stronger than
+    # reconstructing the public origin from server-side topology. Sec-Fetch-Site
+    # is a forbidden request header for browser JavaScript, so a cross-origin
+    # page cannot forge `same-origin`. Keep Origin syntax validation first, keep
+    # cross-site requests fail-closed, and use exact server reconstruction as the
+    # fallback for clients/browsers that omit Fetch Metadata.
+    if origin_identity is None:
+        return Response(content="Forbidden origin", status_code=403)
+
     if fetch_site == "cross-site" and not configured_cross_origin:
         return Response(content="Forbidden request context", status_code=403)
 
+    if fetch_site == "same-origin":
+        return await call_next(request)
+
     if (
-        origin_identity is None
-        or request_identity is None
+        request_identity is None
         or (origin_identity != request_identity and not configured_cross_origin)
     ):
         return Response(content="Forbidden origin", status_code=403)

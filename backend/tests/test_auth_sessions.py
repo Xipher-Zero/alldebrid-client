@@ -35,7 +35,15 @@ def _settings(*, enabled=True, username="operator", password="secret", lifetime=
     )
 
 
-def _request(method="GET", path="/api/stats", headers=None, query_string=b"", body=b""):
+def _request(
+    method="GET",
+    path="/api/stats",
+    headers=None,
+    query_string=b"",
+    body=b"",
+    *,
+    scheme="http",
+):
     raw_headers = []
     for key, value in (headers or {}).items():
         raw_headers.append((str(key).lower().encode("latin-1"), str(value).encode("latin-1")))
@@ -53,13 +61,13 @@ def _request(method="GET", path="/api/stats", headers=None, query_string=b"", bo
         "asgi": {"version": "3.0"},
         "http_version": "1.1",
         "method": method,
-        "scheme": "http",
+        "scheme": scheme,
         "path": path,
         "raw_path": path.encode("ascii"),
         "query_string": query_string,
         "headers": raw_headers,
         "client": ("127.0.0.1", 12345),
-        "server": ("debridpulse.local", 80),
+        "server": ("debridpulse.local", 443 if scheme == "https" else 80),
     }
     return Request(scope, receive=receive)
 
@@ -181,7 +189,11 @@ def test_login_csrf_is_one_time_bounded_and_expires():
 
 
 def test_session_cookie_attributes_for_https_and_lan_http():
-    https_request = _request("GET", headers={"Host": "dp.example", "X-Forwarded-Proto": "https"})
+    https_request = _request(
+        "GET",
+        headers={"Host": "dp.example"},
+        scheme="https",
+    )
     https_response = Response()
     set_session_cookie(https_response, https_request, "token", max_age=3600)
     secure = _response_cookie(https_response, HTTPS_SESSION_COOKIE)
@@ -202,12 +214,32 @@ def test_session_cookie_attributes_for_https_and_lan_http():
     assert lan["samesite"].lower() == "lax"
 
 
+def test_untrusted_forwarded_proto_does_not_upgrade_plain_http_cookie(monkeypatch):
+    import auth.sessions as sessions
+
+    monkeypatch.delenv("PUBLIC_BASE_URL", raising=False)
+    monkeypatch.setattr(
+        "core.config.get_settings",
+        lambda: SimpleNamespace(public_base_url=""),
+    )
+    request = _request(
+        "GET",
+        headers={"Host": "dp.lan", "X-Forwarded-Proto": "https"},
+    )
+    response = Response()
+    sessions.set_session_cookie(response, request, "token", max_age=3600)
+    assert _response_cookie(response, HTTPS_SESSION_COOKIE) is None
+    assert _response_cookie(response, HTTP_SESSION_COOKIE) is not None
+
+
 def test_safe_return_path_blocks_open_redirects():
     assert safe_return_path("/settings") == "/settings"
     assert safe_return_path("/downloads?filter=error") == "/downloads?filter=error"
     assert safe_return_path("https://evil.example/") == "/"
     assert safe_return_path("http://evil.example/") == "/"
     assert safe_return_path("//evil.example/") == "/"
+    assert safe_return_path("///evil.example/") == "/"
+    assert safe_return_path("////evil.example/") == "/"
     assert safe_return_path("/\\evil.example/") == "/"
     assert safe_return_path("/login") == "/"
 

@@ -241,3 +241,25 @@ async def test_userinfo_subject_mismatch_is_rejected(monkeypatch):
             "access",
             "user-1",
         )
+
+
+def test_userinfo_can_complete_verified_email_when_id_token_has_only_verification_flag():
+    cfg = _config(oidc_allowed_emails=["operator@example.com"], oidc_allowed_groups=[])
+    id_claims = {
+        "iss": cfg.issuer,
+        "sub": "user-1",
+        "email_verified": True,
+    }
+    assert oidc._claims_need_userinfo(cfg, id_claims) is True
+    merged = oidc._merge_userinfo_claims(
+        cfg,
+        id_claims,
+        {
+            "sub": "user-1",
+            "email": "operator@example.com",
+            "email_verified": True,
+        },
+    )
+    assert merged["email"] == "operator@example.com"
+    assert merged["email_verified"] is True
+    assert oidc.authorize_oidc_claims(cfg, merged).authenticated is True

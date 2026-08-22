@@ -9,7 +9,11 @@ from fastapi import Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from auth.api_tokens import api_token_store
-from auth.manager import PasswordAuthenticationBusy, verify_local_credentials
+from auth.manager import (
+    PasswordAuthenticationBusy,
+    password_authentication_snapshot_current,
+    verify_local_credentials,
+)
 from auth.models import AuthMechanism, Principal
 from auth.passwords import password_credential_version
 from auth.policy import (
@@ -259,10 +263,25 @@ async def _enforce_authentication_unlocked(request: Request, call_next: CallNext
                 allow_basic_success_cache=True,
                 settings=cfg,
             ):
-                username = str(getattr(cfg, "auth_username", "") or "").strip()
-                principal = Principal.http_basic(username)
-                _attach_principal(request, principal)
-                return await _admit_authenticated(request, call_next, principal, cfg)
+                if is_auth_settings_mutation(request):
+                    # The settings-mutation path already owns the non-reentrant
+                    # configuration lock in enforce_authentication().
+                    current = get_settings()
+                    if not password_authentication_snapshot_current(cfg, current):
+                        return _unauthorized(basic_challenge=True)
+                    username = str(getattr(current, "auth_username", "") or "").strip()
+                    principal = Principal.http_basic(username)
+                    _attach_principal(request, principal)
+                    return await _admit_authenticated(request, call_next, principal, current)
+
+                async with authentication_configuration_lock:
+                    current = get_settings()
+                    if not password_authentication_snapshot_current(cfg, current):
+                        return _unauthorized(basic_challenge=True)
+                    username = str(getattr(current, "auth_username", "") or "").strip()
+                    principal = Principal.http_basic(username)
+                    _attach_principal(request, principal)
+                return await _admit_authenticated(request, call_next, principal, current)
             return _unauthorized(basic_challenge=True)
         except PasswordAuthenticationBusy:
             return _authentication_busy()

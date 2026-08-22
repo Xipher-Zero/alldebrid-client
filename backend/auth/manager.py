@@ -6,7 +6,7 @@ import threading
 
 from fastapi import Request
 
-from auth.passwords import basic_verification_cache, verify_password_candidate_async
+from auth.passwords import basic_verification_cache, password_credential_version, verify_password_candidate_async
 from auth.policy import password_auth_ready
 from auth.throttle import password_failure_throttle
 from core.config import get_settings
@@ -67,6 +67,23 @@ def peer_key(request: Request) -> str:
     """Use the transport peer, not untrusted forwarding headers, for throttling."""
     client = request.client
     return str(client.host if client else "unknown")
+
+
+def password_authentication_snapshot_current(proven, current) -> bool:
+    """Return whether a completed password proof still matches live auth state."""
+    if not password_auth_ready(current):
+        return False
+    proven_username = str(getattr(proven, "auth_username", "") or "").strip()
+    current_username = str(getattr(current, "auth_username", "") or "").strip()
+    if not proven_username or proven_username != current_username:
+        return False
+    proven_version = password_credential_version(getattr(proven, "auth_password_hash", ""))
+    current_version = password_credential_version(getattr(current, "auth_password_hash", ""))
+    return bool(
+        proven_version
+        and current_version
+        and secrets.compare_digest(proven_version, current_version)
+    )
 
 
 async def verify_local_credentials(

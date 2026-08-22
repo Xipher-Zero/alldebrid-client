@@ -473,7 +473,8 @@ def _merge_userinfo_claims(
     # an explicit boolean true verification claim. Never attach UserInfo's
     # verification bit to a different email retained from the ID token.
     if config.allowed_emails:
-        if id_claims.get("email_verified") is not True:
+        id_email = str(id_claims.get("email") or "").strip()
+        if not (id_email and id_claims.get("email_verified") is True):
             userinfo_email = str(userinfo.get("email") or "").strip()
             if userinfo_email and userinfo.get("email_verified") is True:
                 merged["email"] = userinfo["email"]

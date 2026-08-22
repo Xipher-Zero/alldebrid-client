@@ -139,7 +139,8 @@ async def test_general_browser_security_requires_exact_configured_cors_origin():
 async def test_password_http_auth_sets_common_principal(monkeypatch):
     import auth.middleware as middleware
 
-    monkeypatch.setattr(middleware, "get_settings", lambda: _password_settings())
+    cfg = _password_settings()
+    monkeypatch.setattr(middleware, "get_settings", lambda: cfg)
     request = _request(
         "GET",
         headers={

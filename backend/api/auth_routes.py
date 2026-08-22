@@ -16,7 +16,12 @@ from auth.csrf import (
     login_csrf_store,
     set_login_csrf_cookie,
 )
-from auth.manager import PasswordAuthenticationBusy, peer_key, verify_local_credentials
+from auth.manager import (
+    PasswordAuthenticationBusy,
+    password_authentication_snapshot_current,
+    peer_key,
+    verify_local_credentials,
+)
 from auth.models import AuthMechanism, Principal
 from auth.oidc import (
     OIDC_CORRELATION_COOKIE,
@@ -374,18 +379,28 @@ async def password_login(request: Request):
             status_code=401,
         )
 
-    old_token = session_cookie_token(request)
-    if old_token:
-        session_store.revoke(old_token)
+    async with authentication_configuration_lock:
+        current = get_settings()
+        if not password_authentication_snapshot_current(cfg, current):
+            return _issue_login_page(
+                request,
+                return_to=return_to,
+                error="Authentication configuration changed while sign-in was in progress. Try again.",
+                status_code=409,
+            )
 
-    configured_username = str(getattr(cfg, "auth_username", "") or "").strip()
-    lifetime = _session_lifetime_seconds(cfg)
-    version = password_credential_version(getattr(cfg, "auth_password_hash", ""))
-    token, _record = session_store.create(
-        Principal.password_session(configured_username, credential_version=version),
-        lifetime_seconds=lifetime,
-        credential_version=version,
-    )
+        old_token = session_cookie_token(request)
+        if old_token:
+            session_store.revoke(old_token)
+
+        configured_username = str(getattr(current, "auth_username", "") or "").strip()
+        lifetime = _session_lifetime_seconds(current)
+        version = password_credential_version(getattr(current, "auth_password_hash", ""))
+        token, _record = session_store.create(
+            Principal.password_session(configured_username, credential_version=version),
+            lifetime_seconds=lifetime,
+            credential_version=version,
+        )
     response = RedirectResponse(url=return_to, status_code=303)
     set_session_cookie(response, request, token, max_age=lifetime)
     clear_login_csrf_cookie(response, request)

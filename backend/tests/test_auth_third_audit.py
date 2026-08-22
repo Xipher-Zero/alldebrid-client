@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 import os
 import stat
@@ -6,12 +7,13 @@ import threading
 from types import SimpleNamespace
 
 import pytest
-from fastapi import Request
+from fastapi import Request, Response
 
 from api.auth_config_routes import AuthenticationConfigUpdate
 from auth import oidc, passwords, transitions
 from auth.models import Principal
 from auth.passwords import hash_password
+from auth.sessions import session_store
 from core import secure_files
 
 
@@ -222,3 +224,111 @@ def test_verified_email_requirement_is_documented_in_operator_surfaces():
     ui = open(os.path.join(repo_root, "frontend", "static", "auth-settings.js"), encoding="utf-8").read()
     assert "email_verified: true" in docs
     assert "email_verified=true" in ui
+
+
+def _basic_header(username: str, password: str) -> str:
+    token = base64.b64encode(f"{username}:{password}".encode()).decode()
+    return f"Basic {token}"
+
+
+def _password_cfg(password: str, *, username: str = "operator", enabled: bool = True):
+    return SimpleNamespace(
+        auth_password_enabled=enabled,
+        auth_username=username,
+        auth_password_hash=hash_password(password),
+        auth_oidc_enabled=False,
+    )
+
+
+def _generic_request(method: str, path: str, *, headers=None, body: bytes = b""):
+    sent = False
+    raw_headers = [
+        (str(key).lower().encode("latin-1"), str(value).encode("latin-1"))
+        for key, value in (headers or {}).items()
+    ]
+
+    async def receive():
+        nonlocal sent
+        if sent:
+            return {"type": "http.request", "body": b"", "more_body": False}
+        sent = True
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    return Request({
+        "type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1",
+        "method": method, "scheme": "https", "path": path, "raw_path": path.encode(),
+        "query_string": b"", "headers": raw_headers,
+        "client": ("127.0.0.1", 12345), "server": ("pulse.example", 443),
+    }, receive=receive)
+
+
+@pytest.mark.asyncio
+async def test_http_basic_rejects_password_proof_that_became_stale_during_verification(monkeypatch):
+    import auth.middleware as middleware
+
+    old = _password_cfg("old-secret")
+    new = _password_cfg("new-secret")
+    authoritative = [old]
+    monkeypatch.setattr(middleware, "get_settings", lambda: authoritative[0])
+
+    async def fake_verify(*_args, **_kwargs):
+        authoritative[0] = new
+        return True
+
+    monkeypatch.setattr(middleware, "verify_local_credentials", fake_verify)
+    called = False
+
+    async def admitted(_request):
+        nonlocal called
+        called = True
+        return Response(content="ok")
+
+    request = _generic_request(
+        "GET",
+        "/api/stats",
+        headers={"Host": "pulse.example", "Authorization": _basic_header("operator", "old-secret")},
+    )
+    response = await middleware.enforce_authentication(request, admitted)
+    assert response.status_code == 401
+    assert called is False
+    assert request.state.principal.authenticated is False
+
+
+@pytest.mark.asyncio
+async def test_password_login_does_not_issue_session_from_stale_verified_snapshot(monkeypatch):
+    from urllib.parse import urlencode
+    from api import auth_routes
+
+    old = _password_cfg("old-secret")
+    old.auth_session_lifetime_hours = 12
+    new = _password_cfg("new-secret")
+    new.auth_session_lifetime_hours = 12
+    authoritative = [old]
+    monkeypatch.setattr(auth_routes, "get_settings", lambda: authoritative[0])
+    monkeypatch.setattr(auth_routes.login_csrf_store, "consume", lambda *_args, **_kwargs: True)
+
+    async def fake_verify(*_args, **_kwargs):
+        authoritative[0] = new
+        return True
+
+    monkeypatch.setattr(auth_routes, "verify_local_credentials", fake_verify)
+    session_store.clear()
+    form = urlencode({
+        "username": "operator",
+        "password": "old-secret",
+        "csrf_token": "valid",
+        "next": "/",
+    }).encode()
+    request = _generic_request(
+        "POST",
+        "/login",
+        headers={
+            "Host": "pulse.example",
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Content-Length": str(len(form)),
+        },
+        body=form,
+    )
+    response = await auth_routes.password_login(request)
+    assert response.status_code == 409
+    assert session_store.size == 0

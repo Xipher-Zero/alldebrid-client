@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import secrets
+import threading
 
 from fastapi import Request
 
@@ -9,6 +10,57 @@ from auth.passwords import basic_verification_cache, verify_password_candidate_a
 from auth.policy import password_auth_ready
 from auth.throttle import password_failure_throttle
 from core.config import get_settings
+
+
+class PasswordAuthenticationBusy(Exception):
+    """Password verification admission is saturated; fail fast instead of queueing."""
+
+
+class PasswordAttemptAdmission:
+    """Bound expensive password attempts globally and per transport peer.
+
+    Argon2 verification is intentionally expensive. The lower-level verifier
+    limits simultaneous Argon2 workers, while this admission boundary also caps
+    requests waiting through throttling or for a worker slot. Without it, a
+    parallel unauthenticated burst could create an unbounded coroutine queue.
+    """
+
+    def __init__(self, *, max_pending: int = 16, max_per_peer: int = 4) -> None:
+        self.max_pending = max(1, int(max_pending))
+        self.max_per_peer = max(1, min(int(max_per_peer), self.max_pending))
+        self._lock = threading.Lock()
+        self._pending = 0
+        self._peers: dict[str, int] = {}
+
+    def acquire(self, peer: str) -> bool:
+        key = str(peer or "unknown")
+        with self._lock:
+            peer_pending = self._peers.get(key, 0)
+            if self._pending >= self.max_pending or peer_pending >= self.max_per_peer:
+                return False
+            self._pending += 1
+            self._peers[key] = peer_pending + 1
+            return True
+
+    def release(self, peer: str) -> None:
+        key = str(peer or "unknown")
+        with self._lock:
+            peer_pending = self._peers.get(key, 0)
+            if peer_pending <= 0:
+                return
+            self._pending = max(0, self._pending - 1)
+            if peer_pending == 1:
+                self._peers.pop(key, None)
+            else:
+                self._peers[key] = peer_pending - 1
+
+    @property
+    def pending(self) -> int:
+        with self._lock:
+            return self._pending
+
+
+password_attempt_admission = PasswordAttemptAdmission()
 
 
 def peer_key(request: Request) -> str:
@@ -31,40 +83,45 @@ async def verify_local_credentials(
         return False
 
     peer = peer_key(request)
-    delay = password_failure_throttle.delay_for(peer)
-    if delay:
-        await asyncio.sleep(delay)
+    if not password_attempt_admission.acquire(peer):
+        raise PasswordAuthenticationBusy
+    try:
+        delay = password_failure_throttle.delay_for(peer)
+        if delay:
+            await asyncio.sleep(delay)
 
-    username = str(getattr(cfg, "auth_username", "") or "").strip()
-    password_hash = str(getattr(cfg, "auth_password_hash", "") or "").strip()
-    candidate_user = str(provided_user or "")
-    candidate_password = str(provided_password or "")
-    user_ok = secrets.compare_digest(candidate_user.encode(), username.encode())
+        username = str(getattr(cfg, "auth_username", "") or "").strip()
+        password_hash = str(getattr(cfg, "auth_password_hash", "") or "").strip()
+        candidate_user = str(provided_user or "")
+        candidate_password = str(provided_password or "")
+        user_ok = secrets.compare_digest(candidate_user.encode(), username.encode())
 
-    verified = False
-    if user_ok and allow_basic_success_cache:
-        verified = basic_verification_cache.contains(
-            username,
-            candidate_password,
-            password_hash,
-        )
-
-    if not verified:
-        verified = await verify_password_candidate_async(
-            password_hash,
-            candidate_password,
-            use_configured_hash=user_ok,
-        )
-        if verified and allow_basic_success_cache:
-            basic_verification_cache.remember(
+        verified = False
+        if user_ok and allow_basic_success_cache:
+            verified = basic_verification_cache.contains(
                 username,
                 candidate_password,
                 password_hash,
             )
 
-    if verified:
-        password_failure_throttle.record_success(peer)
-        return True
+        if not verified:
+            verified = await verify_password_candidate_async(
+                password_hash,
+                candidate_password,
+                use_configured_hash=user_ok,
+            )
+            if verified and allow_basic_success_cache:
+                basic_verification_cache.remember(
+                    username,
+                    candidate_password,
+                    password_hash,
+                )
 
-    password_failure_throttle.record_failure(peer)
-    return False
+        if verified:
+            password_failure_throttle.record_success(peer)
+            return True
+
+        password_failure_throttle.record_failure(peer)
+        return False
+    finally:
+        password_attempt_admission.release(peer)

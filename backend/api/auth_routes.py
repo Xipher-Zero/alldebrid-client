@@ -55,6 +55,18 @@ from core.config import get_settings
 router = APIRouter()
 
 
+_AUTH_PAGE_STYLE = """
+:root { --bg:#090812;--bg2:#100e1c;--surface:#171526;--surface2:#211e34;--border:#302c49;--border2:#484268;--text:#f4f1ff;--text2:#c2bdd6;--text3:#89839f;--accent:#a67cff;--accent2:#66a8ff;--accent-rgb:166,124,255;--accent-contrast:#120d1d;--danger:#ff6b6b;--primary-gradient:linear-gradient(135deg,#a67cff,#4f8cff);--primary-gradient-hover:linear-gradient(135deg,#b991ff,#66a8ff); }
+* { box-sizing:border-box; }
+body { margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:radial-gradient(circle at 16% 12%,rgba(var(--accent-rgb),.13),transparent 25%),radial-gradient(circle at 88% 8%,rgba(99,164,255,.10),transparent 20%),linear-gradient(180deg,var(--bg2),var(--bg));color:var(--text);font-family:Outfit,Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+.card { width:min(420px,100%);padding:30px;border:1px solid var(--border);border-radius:12px;background:linear-gradient(160deg,rgba(33,30,52,.97),rgba(15,13,27,.94));box-shadow:0 18px 40px rgba(0,0,8,.34); }
+.brand { font-size:28px;font-weight:800;letter-spacing:-.7px;margin-bottom:6px; }.brand span { color:var(--accent); }h1 { font-size:17px;margin:0 0 24px;color:var(--text2);font-weight:500; }
+label { display:block;font-size:12px;font-weight:700;color:var(--text2);margin:14px 0 7px; }input { width:100%;border:1px solid var(--border);background:var(--surface2);color:var(--text);border-radius:8px;padding:11px 12px;font:inherit;outline:none; }input:focus { border-color:var(--accent);box-shadow:0 0 0 3px rgba(var(--accent-rgb),.24); }
+.auth-action { width:100%;margin-top:20px;border-radius:8px;padding:11px 14px;font-weight:800;font-size:14px;cursor:pointer;text-align:center;text-decoration:none;display:block; }button.auth-action { font-family:inherit; }.auth-action:hover { filter:brightness(1.06); }.primary { border:0;background:var(--primary-gradient);color:var(--accent-contrast); }.primary:hover { background:var(--primary-gradient-hover); }.secondary { background:var(--surface2);color:var(--text);border:1px solid var(--border); }
+.divider { display:flex;align-items:center;gap:12px;color:var(--text3);font-size:11px;margin:22px 0 0; }.divider:before,.divider:after { content:"";height:1px;background:var(--border);flex:1; }.error { border:1px solid rgba(255,107,107,.4);background:rgba(255,107,107,.08);color:#ffc0c0;padding:10px 12px;border-radius:8px;font-size:12px;line-height:1.45;margin:0 0 15px; }.muted { color:var(--text3);font-size:13px;line-height:1.55; }.foot { margin-top:22px;padding-top:16px;border-top:1px solid var(--border);color:var(--text3);font-size:11px;line-height:1.5; }
+"""
+
+
 def _session_lifetime_seconds(cfg) -> int:
     hours = int(getattr(cfg, "auth_session_lifetime_hours", 12) or 12)
     return max(3600, min(168 * 3600, hours * 3600))
@@ -164,17 +176,7 @@ def _login_page(
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Sign in · DebridPulse</title>
-<style>
-:root{{--bg:#0c0d10;--surface:#14161b;--surface2:#1b1e25;--border:#2a2e38;--text:#f2f3f5;--muted:#989daa;--accent:#f08a24;--danger:#ff6b6b}}
-*{{box-sizing:border-box}}body{{margin:0;min-height:100vh;display:grid;place-items:center;background:radial-gradient(circle at 50% 20%,#1a1d24 0,var(--bg) 48%);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:24px}}
-.card{{width:min(420px,100%);background:rgba(20,22,27,.96);border:1px solid var(--border);border-radius:18px;padding:30px;box-shadow:0 24px 70px rgba(0,0,0,.38)}}
-.brand{{font-size:28px;font-weight:800;letter-spacing:-.7px;margin-bottom:6px}}.brand span{{color:var(--accent)}}h1{{font-size:17px;margin:0 0 24px;color:#c8cbd2;font-weight:500}}
-label{{display:block;font-size:12px;font-weight:700;color:#c4c7cf;margin:14px 0 7px}}input{{width:100%;border:1px solid var(--border);background:var(--surface2);color:var(--text);border-radius:9px;padding:11px 12px;font:inherit;outline:none}}input:focus{{border-color:var(--accent);box-shadow:0 0 0 3px rgba(240,138,36,.12)}}
-.auth-action{{width:100%;margin-top:20px;border-radius:9px;padding:11px 14px;font-weight:800;font-size:14px;cursor:pointer;text-align:center;text-decoration:none;display:block}}button.auth-action{{font-family:inherit}}.auth-action:hover{{filter:brightness(1.06)}}.primary{{border:0;background:var(--accent);color:#17110a}}.secondary{{background:var(--surface2);color:var(--text);border:1px solid var(--border)}}
-.divider{{display:flex;align-items:center;gap:12px;color:var(--muted);font-size:11px;margin:22px 0 0}}.divider:before,.divider:after{{content:"";height:1px;background:var(--border);flex:1}}
-.error{{border:1px solid rgba(255,107,107,.4);background:rgba(255,107,107,.08);color:#ffc0c0;padding:10px 12px;border-radius:9px;font-size:12px;line-height:1.45;margin:0 0 15px}}.muted{{color:var(--muted);font-size:13px;line-height:1.55}}
-.foot{{margin-top:22px;padding-top:16px;border-top:1px solid var(--border);color:#747986;font-size:11px;line-height:1.5}}
-</style>
+<style>{_AUTH_PAGE_STYLE}</style>
 </head>
 <body>
 <main class="card">
@@ -204,12 +206,12 @@ def _state_free_auth_page(
     """Render an authentication error without allocating browser challenge state."""
     body = f"""<!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sign in · DebridPulse</title></head>
-<body><main><h1>DebridPulse sign-in</h1><p>{html.escape(message)}</p><p><a href="/login">Return to sign in</a></p></main></body>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sign in · DebridPulse</title><style>{_AUTH_PAGE_STYLE}</style></head>
+<body><main class="card"><div class="brand">Debrid<span>Pulse</span></div><h1>Sign in unavailable</h1><div class="error" role="alert">{html.escape(message)}</div><a class="auth-action secondary" href="/login">Return to sign in</a></main></body>
 </html>"""
     response = HTMLResponse(content=body, status_code=status_code)
     response.headers["Cache-Control"] = "no-store"
-    response.headers["Content-Security-Policy"] = "default-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+    response.headers["Content-Security-Policy"] = "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'"
     if retry_after is not None:
         response.headers["Retry-After"] = str(max(1, int(retry_after)))
     return response

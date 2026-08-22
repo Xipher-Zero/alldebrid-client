@@ -26,7 +26,7 @@ from auth.policy import (
     password_auth_ready,
     safe_return_path,
 )
-from auth.sessions import CSRF_HEADER, request_is_secure, session_cookie_token, session_store
+from auth.sessions import CSRF_HEADER, session_cookie_token, session_store
 from auth.transitions import (
     authentication_configuration_lock,
     is_auth_settings_mutation,
@@ -175,7 +175,11 @@ async def enforce_general_web_security(
 
     origin_identity = normalized_origin(origin)
     request_host = str(request.headers.get("Host", "") or "").strip()
-    request_scheme = "https" if request_is_secure(request) else str(request.url.scheme or "http").casefold()
+    # Origin validation must use the ASGI transport scheme, not the broader
+    # secure-cookie classification. request_is_secure() may infer HTTPS from
+    # PUBLIC_BASE_URL; using that inference here can reject direct HTTP LAN login.
+    # Uvicorn rewrites scope["scheme"] when trusted proxy headers are accepted.
+    request_scheme = str(request.url.scheme or "http").casefold()
     request_identity = normalized_origin(f"{request_scheme}://{request_host}")
     configured_identities = {
         identity

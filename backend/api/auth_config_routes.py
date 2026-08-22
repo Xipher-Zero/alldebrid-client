@@ -7,7 +7,7 @@ import secrets
 from urllib.parse import parse_qs, urlsplit
 
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
 from api import auth_routes as interactive_routes
@@ -26,6 +26,7 @@ from auth.oidc import (
     oidc_auth_ready,
     oidc_callback_url,
     oidc_configuration,
+    oidc_transaction_store,
 )
 from auth.oidc_version import (
     authentication_configuration_baseline_version,
@@ -295,6 +296,64 @@ def _clear_pending_correlation_cookie(response) -> None:
     )
 
 
+def _oidc_verification_failure_page(*, status_code: int) -> HTMLResponse:
+    """Return a popup-safe failure result without navigating the operator SPA."""
+    body = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OIDC verification · DebridPulse</title>
+<style>
+:root { color-scheme: dark; }
+* { box-sizing: border-box; }
+body { margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:#090812;color:#f4f1ff;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+main { width:min(420px,100%);padding:28px;border:1px solid #302c49;border-radius:12px;background:#171526;text-align:center; }
+h1 { margin:0 0 10px;font-size:19px; }
+p { margin:0;color:#c2bdd6;font-size:13px;line-height:1.55; }
+.status { color:#ff6b6b;font-weight:700; }
+</style>
+</head>
+<body>
+<main>
+  <h1>OIDC verification failed</h1>
+  <p class="status">Provider sign-in or authorization did not complete successfully.</p>
+  <p>This window should close automatically.</p>
+</main>
+<script>
+(() => {
+  'use strict';
+  const payload = {
+    type: 'debridpulse-oidc-verification',
+    ok: false,
+    message: 'OIDC verification failed — provider sign-in or authorization did not complete successfully.'
+  };
+  try {
+    if ('BroadcastChannel' in window) {
+      const channel = new BroadcastChannel('debridpulse-oidc-verification');
+      channel.postMessage(payload);
+      window.setTimeout(() => channel.close(), 250);
+    }
+  } catch (_) {}
+  try {
+    if (window.opener && !window.opener.closed) {
+      window.opener.postMessage(payload, window.location.origin);
+    }
+  } catch (_) {}
+  window.setTimeout(() => window.close(), 180);
+})();
+</script>
+</body>
+</html>"""
+    response = HTMLResponse(content=body, status_code=status_code)
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; "
+        "base-uri 'none'; frame-ancestors 'none'"
+    )
+    return response
+
+
 @router.get("/api/auth/config")
 async def get_authentication_config(request: Request):
     response = JSONResponse(await _authentication_payload(request))
@@ -491,12 +550,10 @@ async def pending_aware_oidc_callback(
     correlation = str(request.cookies.get(OIDC_CORRELATION_COOKIE, "") or "")
     if error:
         pending_oidc_store.discard(state)
-        return await interactive_routes.oidc_callback(
-            request,
-            state=state,
-            code=code,
-            error=error,
-        )
+        oidc_transaction_store.consume(state, correlation)
+        response = _oidc_verification_failure_page(status_code=401)
+        _clear_pending_correlation_cookie(response)
+        return response
 
     try:
         principal, return_to = await complete_oidc_login(
@@ -506,20 +563,14 @@ async def pending_aware_oidc_callback(
         )
     except OidcError:
         pending_oidc_store.discard(state)
-        response = interactive_routes._state_free_auth_page(
-            message="The proposed OpenID Connect configuration did not authenticate and authorize successfully. The current configuration was not changed.",
-            status_code=401,
-        )
+        response = _oidc_verification_failure_page(status_code=401)
         _clear_pending_correlation_cookie(response)
         return response
 
     proof_version = str(principal.credential_version or "")
     if not proof_version:
         pending_oidc_store.discard(state)
-        response = interactive_routes._state_free_auth_page(
-            message="OpenID Connect verification completed without a configuration-bound proof. Start verification again.",
-            status_code=409,
-        )
+        response = _oidc_verification_failure_page(status_code=409)
         _clear_pending_correlation_cookie(response)
         return response
 
@@ -534,10 +585,7 @@ async def pending_aware_oidc_callback(
         except Exception:  # noqa: BLE001 - never expose persistence/config details at callback boundary
             committed = False
         if not committed:
-            response = interactive_routes._state_free_auth_page(
-                message="OpenID Connect verification succeeded, but the pending configuration could not be committed. The current configuration remains authoritative.",
-                status_code=409,
-            )
+            response = _oidc_verification_failure_page(status_code=409)
             _clear_pending_correlation_cookie(response)
             return response
 
@@ -547,10 +595,7 @@ async def pending_aware_oidc_callback(
             proof_version,
             current_version,
         ):
-            response = interactive_routes._state_free_auth_page(
-                message="OpenID Connect verification completed under stale configuration. Start verification again.",
-                status_code=409,
-            )
+            response = _oidc_verification_failure_page(status_code=409)
             _clear_pending_correlation_cookie(response)
             return response
 

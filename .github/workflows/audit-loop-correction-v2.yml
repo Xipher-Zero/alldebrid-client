@@ -1,0 +1,183 @@
+name: Temporary audit-loop correction v2
+
+on:
+  pull_request:
+    branches:
+      - 'staging/**'
+
+permissions:
+  contents: write
+
+jobs:
+  correct:
+    if: github.head_ref == 'work/v1.0.6-auth-overhaul'
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - name: Checkout correction branch
+        uses: actions/checkout@v5
+        with:
+          ref: work/v1.0.6-auth-overhaul
+          fetch-depth: 0
+
+      - name: Apply third audit corrections and regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace(path: str, old: str, new: str, *, count: int = 1) -> None:
+              p = Path(path)
+              text = p.read_text(encoding="utf-8")
+              actual = text.count(old)
+              if actual != count:
+                  raise SystemExit(f"{path}: expected {count} occurrence(s), found {actual}: {old[:100]!r}")
+              p.write_text(text.replace(old, new, count), encoding="utf-8")
+
+          # 1. The pre-route transition guard must evaluate booleans exactly as
+          # the Pydantic route model that will later persist the request.
+          replace(
+              "backend/auth/transitions.py",
+              "from fastapi.responses import JSONResponse\n",
+              "from fastapi.responses import JSONResponse\nfrom pydantic import TypeAdapter, ValidationError\n",
+          )
+          replace(
+              "backend/auth/transitions.py",
+              "authentication_configuration_lock = asyncio.Lock()\n\n\ndef is_auth_settings_mutation",
+              "authentication_configuration_lock = asyncio.Lock()\n_BOOL_ADAPTER = TypeAdapter(bool)\n\n\ndef _coerced_bool(value: Any, *, default: bool = False) -> bool:\n    \"\"\"Apply the same bool coercion used by the Pydantic request models.\"\"\"\n    try:\n        return bool(_BOOL_ADAPTER.validate_python(value))\n    except ValidationError:\n        # Invalid values are rejected later by FastAPI/Pydantic and are never\n        # persisted. Falling back here avoids inventing different semantics in\n        # the pre-route transition guard.\n        return bool(default)\n\n\ndef is_auth_settings_mutation",
+          )
+          replace(
+              "backend/auth/transitions.py",
+              "    if field == \"oidc_allow_all\":\n        return bool(value)\n",
+              "    if field == \"oidc_allow_all\":\n        return _coerced_bool(value)\n",
+          )
+          replace(
+              "backend/auth/transitions.py",
+              "    if \"oidc_client_secret\" in clears or payload.get(\"clear_oidc_client_secret\") is True:\n",
+              "    if \"oidc_client_secret\" in clears or _coerced_bool(payload.get(\"clear_oidc_client_secret\", False)):\n",
+              count=2,
+          )
+          replace(
+              "backend/auth/transitions.py",
+              "    if \"auth_password\" in clears or payload.get(\"clear_password\") is True:\n",
+              "    if \"auth_password\" in clears or _coerced_bool(payload.get(\"clear_password\", False)):\n",
+          )
+          replace(
+              "backend/auth/transitions.py",
+              "    proposed_password = bool(payload.get(\"auth_password_enabled\", current_password))\n    proposed_oidc = bool(payload.get(\"auth_oidc_enabled\", current_oidc))\n",
+              "    proposed_password = _coerced_bool(\n        payload.get(\"auth_password_enabled\", current_password),\n        default=current_password,\n    )\n    proposed_oidc = _coerced_bool(\n        payload.get(\"auth_oidc_enabled\", current_oidc),\n        default=current_oidc,\n    )\n",
+          )
+
+          # 2. Email allow-list authorization is ownership-sensitive: a matching
+          # address is accepted only when the provider says it is verified.
+          replace(
+              "backend/auth/oidc.py",
+              "    if config.allowed_emails and not str(claims.get(\"email\") or \"\").strip():\n        return True\n",
+              "    if config.allowed_emails:\n        email = str(claims.get(\"email\") or \"\").strip()\n        if not email or claims.get(\"email_verified\") is not True:\n            return True\n",
+          )
+          replace(
+              "backend/auth/oidc.py",
+              "            if claims.get(\"email_verified\") is False or email not in config.allowed_emails:\n",
+              "            if claims.get(\"email_verified\") is not True or email not in config.allowed_emails:\n",
+          )
+          replace(
+              "backend/tests/test_auth_oidc_userinfo.py",
+              "        \"email\": \"operator@example.com\",\n        \"groups\": [\"operators\"],\n",
+              "        \"email\": \"operator@example.com\",\n        \"email_verified\": True,\n        \"groups\": [\"operators\"],\n",
+          )
+
+          # 3. Cancellation of the awaiting request cannot cancel a to_thread
+          # worker. Keep the semaphore owned until the Argon2 worker really ends.
+          replace(
+              "backend/auth/passwords.py",
+              "    async with _PASSWORD_VERIFY_SLOTS:\n        return await asyncio.to_thread(\n            verify_password_candidate,\n            password_hash,\n            password,\n            use_configured_hash=use_configured_hash,\n        )\n",
+              "    async with _PASSWORD_VERIFY_SLOTS:\n        worker = asyncio.create_task(\n            asyncio.to_thread(\n                verify_password_candidate,\n                password_hash,\n                password,\n                use_configured_hash=use_configured_hash,\n            )\n        )\n        try:\n            return await asyncio.shield(worker)\n        except asyncio.CancelledError:\n            # asyncio.to_thread cannot stop the underlying worker. Keep this\n            # semaphore slot occupied until that worker has really completed;\n            # otherwise disconnect/cancellation churn can exceed the Argon2\n            # memory-concurrency bound.\n            try:\n                await asyncio.shield(worker)\n            finally:\n                raise\n",
+          )
+
+          # 4. Sensitive atomic writes are mode 0600 from creation. A unique
+          # mkstemp also prevents a stale legacy .tmp file from retaining an old
+          # permissive mode when chmod is unavailable.
+          Path("backend/core/secure_files.py").write_text(
+              '''from __future__ import annotations\n\nimport json\nimport os\nimport tempfile\nfrom pathlib import Path\nfrom typing import Any\n\n\ndef atomic_write_json(\n    path: Path,\n    payload: Any,\n    *,\n    indent: int | None = None,\n    separators: tuple[str, str] | None = None,\n) -> None:\n    \"\"\"Atomically write sensitive JSON with owner-only creation permissions.\"\"\"\n    target = Path(path)\n    target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)\n    try:\n        os.chmod(target.parent, 0o700)\n    except OSError:\n        pass\n\n    fd, raw_tmp = tempfile.mkstemp(\n        prefix=f\".{target.name}.\",\n        suffix=\".tmp\",\n        dir=target.parent,\n    )\n    tmp = Path(raw_tmp)\n    try:\n        try:\n            os.fchmod(fd, 0o600)\n        except OSError:\n            pass\n        with os.fdopen(fd, \"w\", encoding=\"utf-8\") as handle:\n            fd = -1\n            json.dump(payload, handle, indent=indent, separators=separators)\n            handle.flush()\n            os.fsync(handle.fileno())\n        os.replace(tmp, target)\n        try:\n            os.chmod(target, 0o600)\n        except OSError:\n            pass\n    except Exception:\n        if fd >= 0:\n            os.close(fd)\n        try:\n            tmp.unlink()\n        except OSError:\n            pass\n        raise\n\n    # Persist the directory entry update where the host filesystem supports it.\n    dir_fd = -1\n    try:\n        dir_fd = os.open(target.parent, os.O_RDONLY | getattr(os, \"O_DIRECTORY\", 0))\n        os.fsync(dir_fd)\n    except OSError:\n        pass\n    finally:\n        if dir_fd >= 0:\n            os.close(dir_fd)\n''',
+              encoding="utf-8",
+          )
+
+          replace(
+              "backend/core/config.py",
+              "from core.branding import APP_SHORT_NAME\n",
+              "from core.branding import APP_SHORT_NAME\nfrom core.secure_files import atomic_write_json\n",
+          )
+          replace(
+              "backend/core/config.py",
+              '''    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)\n    try:\n        os.chmod(CONFIG_PATH.parent, 0o700)\n    except OSError:\n        pass\n    data = s.model_dump()\n    data.pop("auth_password", None)\n    data["auth_password_hash"] = str(getattr(s, "auth_password_hash", "") or "")\n    data["oidc_client_secret"] = str(getattr(s, "oidc_client_secret", "") or "")\n    tmp = CONFIG_PATH.with_name(CONFIG_PATH.name + ".tmp")\n    with open(tmp, "w", encoding="utf-8") as f:\n        json.dump(data, f, indent=2)\n        f.flush()\n        os.fsync(f.fileno())\n    try:\n        os.chmod(tmp, 0o600)\n    except OSError:\n        pass\n    os.replace(tmp, CONFIG_PATH)\n    try:\n        os.chmod(CONFIG_PATH, 0o600)\n    except OSError:\n        pass\n''',
+              '''    data = s.model_dump()\n    data.pop("auth_password", None)\n    data["auth_password_hash"] = str(getattr(s, "auth_password_hash", "") or "")\n    data["oidc_client_secret"] = str(getattr(s, "oidc_client_secret", "") or "")\n    atomic_write_json(CONFIG_PATH, data, indent=2)\n''',
+          )
+          replace(
+              "backend/tests/test_v105_architecture.py",
+              "    assert \"os.chmod(CONFIG_PATH, 0o600)\" in config\n",
+              "    assert \"atomic_write_json(CONFIG_PATH, data, indent=2)\" in config\n    secure_files = text(\"backend/core/secure_files.py\")\n    assert \"tempfile.mkstemp\" in secure_files\n    assert \"os.fchmod(fd, 0o600)\" in secure_files\n",
+          )
+
+          replace("backend/auth/api_tokens.py", "import os\n", "")
+          replace(
+              "backend/auth/api_tokens.py",
+              "from core.config import CONFIG_PATH\n",
+              "from core.config import CONFIG_PATH\nfrom core.secure_files import atomic_write_json\n",
+          )
+          replace(
+              "backend/auth/api_tokens.py",
+              '''        self.path.parent.mkdir(parents=True, exist_ok=True)\n        try:\n            os.chmod(self.path.parent, 0o700)\n        except OSError:\n            pass\n        tmp = self.path.with_name(self.path.name + ".tmp")\n        with open(tmp, "w", encoding="utf-8") as handle:\n            json.dump(\n                {"enabled": bool(state.enabled), "verifier": str(state.verifier)},\n                handle,\n                separators=(",", ":"),\n            )\n            handle.flush()\n            os.fsync(handle.fileno())\n        try:\n            os.chmod(tmp, 0o600)\n        except OSError:\n            pass\n        os.replace(tmp, self.path)\n        try:\n            os.chmod(self.path, 0o600)\n        except OSError:\n            pass\n        self._state = state\n''',
+              '''        atomic_write_json(\n            self.path,\n            {"enabled": bool(state.enabled), "verifier": str(state.verifier)},\n            separators=(",", ":"),\n        )\n        self._state = state\n''',
+          )
+
+          Path("backend/tests/test_auth_third_audit.py").write_text(
+              '''import asyncio\nimport json\nimport os\nimport stat\nimport threading\nfrom types import SimpleNamespace\n\nimport pytest\nfrom fastapi import Request\n\nfrom api.auth_config_routes import AuthenticationConfigUpdate\nfrom auth import oidc, passwords, transitions\nfrom auth.models import Principal\nfrom auth.passwords import hash_password\nfrom core import secure_files\n\n\ndef _request(body: bytes):\n    sent = False\n\n    async def receive():\n        nonlocal sent\n        if sent:\n            return {\"type\": \"http.request\", \"body\": b\"\", \"more_body\": False}\n        sent = True\n        return {\"type\": \"http.request\", \"body\": body, \"more_body\": False}\n\n    return Request({\n        \"type\": \"http\", \"asgi\": {\"version\": \"3.0\"}, \"http_version\": \"1.1\",\n        \"method\": \"PUT\", \"scheme\": \"https\", \"path\": \"/api/auth/config\",\n        \"raw_path\": b\"/api/auth/config\", \"query_string\": b\"\",\n        \"headers\": [(b\"content-type\", b\"application/json\")],\n        \"client\": (\"127.0.0.1\", 12345), \"server\": (\"pulse.example\", 443),\n    }, receive=receive)\n\n\ndef _password_only_settings():\n    return SimpleNamespace(\n        auth_password_enabled=True, auth_username=\"operator\",\n        auth_password_hash=hash_password(\"secret\"), auth_oidc_enabled=False,\n    )\n\n\n@pytest.mark.asyncio\nasync def test_transition_guard_matches_pydantic_false_string_coercion_for_open_mode():\n    body = json.dumps({\"auth_password_enabled\": \"false\", \"auth_oidc_enabled\": \"false\"}).encode()\n    parsed = AuthenticationConfigUpdate.model_validate_json(body)\n    assert parsed.auth_password_enabled is False\n    assert parsed.auth_oidc_enabled is False\n    rejection = await transitions.settings_transition_rejection(\n        _request(body), Principal.password_session(\"operator\"), _password_only_settings()\n    )\n    assert rejection is not None and rejection.status_code == 409\n\n\n@pytest.mark.asyncio\nasync def test_transition_guard_matches_pydantic_true_string_for_password_clear():\n    body = json.dumps({\n        \"auth_password_enabled\": True, \"auth_oidc_enabled\": False, \"clear_password\": \"true\"\n    }).encode()\n    parsed = AuthenticationConfigUpdate.model_validate_json(body)\n    assert parsed.clear_password is True\n    rejection = await transitions.settings_transition_rejection(\n        _request(body), Principal.password_session(\"operator\"), _password_only_settings()\n    )\n    assert rejection is not None and rejection.status_code == 409\n\n\ndef test_oidc_email_allowlist_requires_verified_email_and_requests_userinfo_completion():\n    cfg = oidc.OidcConfiguration(\n        issuer=\"https://id.example/application/o/debridpulse\", client_id=\"client\",\n        client_secret=\"\", scopes=(\"openid\", \"email\"),\n        callback_url=\"https://pulse.example/auth/oidc/callback\", provider_name=\"OIDC\",\n        allow_all=False, allowed_subjects=(), allowed_emails=(\"operator@example.com\",),\n        allowed_groups=(), group_claim=\"groups\",\n    )\n    claims = {\"iss\": cfg.issuer, \"sub\": \"user-1\", \"email\": \"operator@example.com\"}\n    assert oidc._claims_need_userinfo(cfg, claims) is True\n    with pytest.raises(oidc.OidcAuthorizationError):\n        oidc.authorize_oidc_claims(cfg, claims)\n    verified = {**claims, \"email_verified\": True}\n    assert oidc._claims_need_userinfo(cfg, verified) is False\n    assert oidc.authorize_oidc_claims(cfg, verified).authenticated is True\n\n\n@pytest.mark.asyncio\nasync def test_cancelled_password_verification_keeps_worker_slot_until_thread_finishes(monkeypatch):\n    semaphore = asyncio.Semaphore(1)\n    monkeypatch.setattr(passwords, \"_PASSWORD_VERIFY_SLOTS\", semaphore)\n    release = threading.Event()\n    first_started = threading.Event()\n    second_started = threading.Event()\n    calls = 0\n    calls_lock = threading.Lock()\n\n    def blocking_verify(*_args, **_kwargs):\n        nonlocal calls\n        with calls_lock:\n            calls += 1\n            call_number = calls\n        (first_started if call_number == 1 else second_started).set()\n        release.wait(timeout=5)\n        return False\n\n    monkeypatch.setattr(passwords, \"verify_password_candidate\", blocking_verify)\n    first = asyncio.create_task(passwords.verify_password_candidate_async(\"hash\", \"pw\", use_configured_hash=False))\n    assert await asyncio.to_thread(first_started.wait, 1.0) is True\n    first.cancel()\n    await asyncio.sleep(0.05)\n    second = asyncio.create_task(passwords.verify_password_candidate_async(\"hash\", \"pw2\", use_configured_hash=False))\n    await asyncio.sleep(0.1)\n    assert second_started.is_set() is False\n    release.set()\n    with pytest.raises(asyncio.CancelledError):\n        await first\n    assert await second is False\n    assert second_started.is_set() is True\n\n\ndef test_sensitive_atomic_json_is_0600_before_payload_write_even_without_chmod(tmp_path, monkeypatch):\n    target = tmp_path / \"config\" / \"secret.json\"\n    observed_modes = []\n    real_dump = secure_files.json.dump\n\n    def inspect_dump(payload, handle, **kwargs):\n        observed_modes.append(stat.S_IMODE(os.fstat(handle.fileno()).st_mode))\n        return real_dump(payload, handle, **kwargs)\n\n    def chmod_unavailable(*_args, **_kwargs):\n        raise OSError(\"chmod unavailable\")\n\n    monkeypatch.setattr(secure_files.json, \"dump\", inspect_dump)\n    monkeypatch.setattr(secure_files.os, \"chmod\", chmod_unavailable)\n    monkeypatch.setattr(secure_files.os, \"fchmod\", chmod_unavailable)\n    old_umask = os.umask(0)\n    try:\n        secure_files.atomic_write_json(target, {\"secret\": \"value\"}, indent=2)\n    finally:\n        os.umask(old_umask)\n    assert observed_modes == [0o600]\n    assert stat.S_IMODE(target.stat().st_mode) == 0o600\n\n\ndef test_sensitive_config_and_api_token_writers_use_secure_atomic_helper():\n    root = os.path.dirname(os.path.dirname(__file__))\n    config_source = open(os.path.join(root, \"core\", \"config.py\"), encoding=\"utf-8\").read()\n    token_source = open(os.path.join(root, \"auth\", \"api_tokens.py\"), encoding=\"utf-8\").read()\n    assert \"atomic_write_json(CONFIG_PATH, data, indent=2)\" in config_source\n    assert \"atomic_write_json(\" in token_source and \"self.path,\" in token_source\n''', encoding="utf-8")
+
+          # The correction workflow must not remain in the candidate tree.
+          Path(".github/workflows/audit-loop-correction.yml").unlink(missing_ok=True)
+          Path(".github/workflows/audit-loop-correction-v2.yml").unlink(missing_ok=True)
+          PY
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+
+      - name: Install validation dependencies
+        run: |
+          cd backend
+          pip install -r requirements-dev.txt
+          pip install ruff pip-audit bandit
+
+      - name: Validate corrected working tree
+        run: |
+          set -euo pipefail
+          cd backend
+          ruff check api auth core db services main.py --select F821,F822,F823
+          python -m pytest tests/ -q --tb=short
+          python -m compileall -q .
+          pip-audit -r requirements.txt --progress-spinner off
+          bandit -r . --exclude ./tests --severity-level high --confidence-level high -f txt
+          cd ..
+          node --check frontend/static/app.js
+          node --check frontend/static/auth.js
+          node --check frontend/static/auth-settings.js
+          node --check frontend/static/auth-help.js
+
+      - name: Commit corrected tree and remove temporary workflows
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git diff --cached --stat
+          git commit -m "Close third authentication audit findings"
+          git push origin HEAD:work/v1.0.6-auth-overhaul

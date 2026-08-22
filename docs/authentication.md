@@ -67,7 +67,9 @@ Register that exact callback URL with the identity provider.
 
 OIDC authentication and DebridPulse authorization are separate checks. Configure either **Allow all authenticated identities** or one or more explicit allow lists for subject, email, or group claims. Group matching uses the configured group-claim name.
 
-Email allow-list authorization requires the provider to assert `email_verified: true` for the matching address. If that claim is absent from the ID token, DebridPulse may use the provider's UserInfo endpoint to complete it. If the provider never supplies a verified-email claim, use subject or group authorization instead of an email allow list.
+Subject allow-list entries use the issuer-qualified identity form `<issuer>|<sub>`, for example `https://id.example/application/o/debridpulse/|user-1`. This is the same stable identity stored in DebridPulse OIDC sessions.
+
+Email allow-list authorization requires the provider to assert `email_verified: true` for the matching address. If that claim is absent from the ID token, DebridPulse may use the provider's UserInfo endpoint to complete it. The email address and verification status are evaluated as one claim pair from the same source; verification from UserInfo is never attached to a different email from the ID token. If the provider never supplies a verified-email claim, use subject or group authorization instead of an email allow list.
 
 Do not enable OIDC without an authorization policy that matches the intended users.
 

@@ -86,26 +86,70 @@ def test_userinfo_is_only_required_for_missing_authorization_claims():
     assert oidc._claims_need_userinfo(allow_all, {"sub": "user-1"}) is False
 
 
-def test_userinfo_merge_never_overwrites_id_token_claims():
+def test_userinfo_verified_email_pair_replaces_unverified_id_token_email_as_a_pair():
     cfg = _config()
     merged = oidc._merge_userinfo_claims(
         cfg,
         {
             "iss": cfg.issuer,
             "sub": "user-1",
-            "email": "id-token@example.com",
+            "email": "unverified-id-token@example.com",
         },
         {
             "sub": "user-1",
-            "email": "userinfo@example.com",
+            "email": "operator@example.com",
+            "email_verified": True,
             "groups": ["operators"],
             "iss": "https://evil.example",
         },
     )
     assert merged["iss"] == cfg.issuer
     assert merged["sub"] == "user-1"
-    assert merged["email"] == "id-token@example.com"
+    assert merged["email"] == "operator@example.com"
+    assert merged["email_verified"] is True
     assert merged["groups"] == ["operators"]
+
+
+def test_userinfo_never_rebinds_verification_to_a_different_id_token_email():
+    cfg = _config(oidc_allowed_emails=["claimed@example.com"], oidc_allowed_groups=[])
+    merged = oidc._merge_userinfo_claims(
+        cfg,
+        {
+            "iss": cfg.issuer,
+            "sub": "user-1",
+            "email": "claimed@example.com",
+        },
+        {
+            "sub": "user-1",
+            "email": "different-verified@example.com",
+            "email_verified": True,
+        },
+    )
+    assert merged["email"] == "different-verified@example.com"
+    assert merged["email_verified"] is True
+    with pytest.raises(oidc.OidcAuthorizationError):
+        oidc.authorize_oidc_claims(cfg, merged)
+
+
+def test_userinfo_does_not_override_an_already_verified_id_token_email_pair():
+    cfg = _config(oidc_allowed_emails=["id-token@example.com"], oidc_allowed_groups=[])
+    merged = oidc._merge_userinfo_claims(
+        cfg,
+        {
+            "iss": cfg.issuer,
+            "sub": "user-1",
+            "email": "id-token@example.com",
+            "email_verified": True,
+        },
+        {
+            "sub": "user-1",
+            "email": "userinfo@example.com",
+            "email_verified": True,
+        },
+    )
+    assert merged["email"] == "id-token@example.com"
+    assert merged["email_verified"] is True
+    assert oidc.authorize_oidc_claims(cfg, merged).authenticated is True
 
 
 @pytest.mark.asyncio

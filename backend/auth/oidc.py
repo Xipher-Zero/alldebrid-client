@@ -466,13 +466,24 @@ def _merge_userinfo_claims(
     userinfo: Mapping[str, Any],
 ) -> dict[str, Any]:
     merged = dict(id_claims)
-    for key in (
-        "email",
-        "email_verified",
-        "name",
-        "preferred_username",
-        config.group_claim,
-    ):
+
+    # Treat email + email_verified as one authorization-bearing claim pair. If
+    # the ID token does not already contain a verified email, UserInfo may
+    # replace that pair only when UserInfo itself supplies both the address and
+    # an explicit boolean true verification claim. Never attach UserInfo's
+    # verification bit to a different email retained from the ID token.
+    if config.allowed_emails:
+        if id_claims.get("email_verified") is not True:
+            userinfo_email = str(userinfo.get("email") or "").strip()
+            if userinfo_email and userinfo.get("email_verified") is True:
+                merged["email"] = userinfo["email"]
+                merged["email_verified"] = True
+    else:
+        for key in ("email", "email_verified"):
+            if key not in merged and key in userinfo:
+                merged[key] = userinfo[key]
+
+    for key in ("name", "preferred_username", config.group_claim):
         if key not in merged and key in userinfo:
             merged[key] = userinfo[key]
     return merged

@@ -84,10 +84,11 @@ def test_oidc_email_allowlist_requires_verified_email_and_requests_userinfo_comp
 
 
 @pytest.mark.asyncio
-async def test_cancelled_password_verification_keeps_worker_slot_until_thread_finishes(monkeypatch):
+async def test_cancelled_password_request_does_not_release_live_worker_slot(monkeypatch):
     semaphore = asyncio.Semaphore(1)
     monkeypatch.setattr(passwords, "_PASSWORD_VERIFY_SLOTS", semaphore)
-    release = threading.Event()
+    release_first = threading.Event()
+    release_second = threading.Event()
     first_started = threading.Event()
     second_started = threading.Event()
     calls = 0
@@ -98,23 +99,34 @@ async def test_cancelled_password_verification_keeps_worker_slot_until_thread_fi
         with calls_lock:
             calls += 1
             call_number = calls
-        (first_started if call_number == 1 else second_started).set()
-        release.wait(timeout=5)
+        if call_number == 1:
+            first_started.set()
+            release_first.wait(timeout=5)
+        else:
+            second_started.set()
+            release_second.wait(timeout=5)
         return False
 
     monkeypatch.setattr(passwords, "verify_password_candidate", blocking_verify)
     first = asyncio.create_task(passwords.verify_password_candidate_async("hash", "pw", use_configured_hash=False))
     assert await asyncio.to_thread(first_started.wait, 1.0) is True
+
     first.cancel()
-    await asyncio.sleep(0.05)
+    with pytest.raises(asyncio.CancelledError):
+        await first
+    # Repeated cancellation of the already-cancelled request must not affect
+    # ownership of the still-running worker's semaphore slot.
+    first.cancel()
+
     second = asyncio.create_task(passwords.verify_password_candidate_async("hash", "pw2", use_configured_hash=False))
     await asyncio.sleep(0.1)
     assert second_started.is_set() is False
-    release.set()
-    with pytest.raises(asyncio.CancelledError):
-        await first
+    assert semaphore.locked() is True
+
+    release_first.set()
+    assert await asyncio.to_thread(second_started.wait, 1.0) is True
+    release_second.set()
     assert await second is False
-    assert second_started.is_set() is True
 
 
 def test_sensitive_atomic_json_is_0600_before_payload_write_even_without_chmod(tmp_path, monkeypatch):
@@ -186,3 +198,27 @@ def test_prospective_oidc_readiness_does_not_treat_false_string_as_allow_all():
         "oidc_allow_all": "false",
     }
     assert transitions._prospective_oidc_ready(payload, current) is False
+
+
+def test_api_token_clear_fsyncs_parent_directory(tmp_path, monkeypatch):
+    from auth import api_tokens
+
+    path = tmp_path / "api-token.json"
+    store = api_tokens.ApiTokenStore(path)
+    store.generate()
+    calls = []
+    monkeypatch.setattr(api_tokens, "fsync_parent_directory", lambda target: calls.append(target))
+    store.clear()
+    assert calls == [path]
+    assert path.exists() is False
+    assert store.configured is False
+    assert store.enabled is False
+
+
+def test_verified_email_requirement_is_documented_in_operator_surfaces():
+    root = os.path.dirname(os.path.dirname(__file__))
+    repo_root = os.path.dirname(root)
+    docs = open(os.path.join(repo_root, "docs", "authentication.md"), encoding="utf-8").read()
+    ui = open(os.path.join(repo_root, "frontend", "static", "auth-settings.js"), encoding="utf-8").read()
+    assert "email_verified: true" in docs
+    assert "email_verified=true" in ui

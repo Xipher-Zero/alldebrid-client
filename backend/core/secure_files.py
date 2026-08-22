@@ -7,6 +7,20 @@ from pathlib import Path
 from typing import Any
 
 
+def fsync_parent_directory(path: Path) -> None:
+    """Best-effort fsync of the directory containing a credential file."""
+    target = Path(path)
+    dir_fd = -1
+    try:
+        dir_fd = os.open(target.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        os.fsync(dir_fd)
+    except OSError:
+        pass
+    finally:
+        if dir_fd >= 0:
+            os.close(dir_fd)
+
+
 def atomic_write_json(
     path: Path,
     payload: Any,
@@ -53,12 +67,4 @@ def atomic_write_json(
         raise
 
     # Persist the directory entry update where the host filesystem supports it.
-    dir_fd = -1
-    try:
-        dir_fd = os.open(target.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-        os.fsync(dir_fd)
-    except OSError:
-        pass
-    finally:
-        if dir_fd >= 0:
-            os.close(dir_fd)
+    fsync_parent_directory(target)

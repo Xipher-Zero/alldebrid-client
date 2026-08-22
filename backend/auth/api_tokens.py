@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from core.config import CONFIG_PATH
-from core.secure_files import atomic_write_json
+from core.secure_files import atomic_write_json, fsync_parent_directory
 
 
 API_TOKEN_PREFIX = "dp_"
@@ -92,6 +92,8 @@ class ApiTokenStore:
             self.path.unlink()
         except FileNotFoundError:
             pass
+        else:
+            fsync_parent_directory(self.path)
         self._state = ApiTokenState()
 
     def verify(self, candidate: str) -> bool:

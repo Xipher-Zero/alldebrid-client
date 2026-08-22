@@ -122,7 +122,7 @@
               <label class="toggle"><input type="checkbox" id="auth-oidc-allow-all" ${authChecked(a.oidc_allow_all)}><div class="ttrack"></div></label>
             </div>
             <div class="form-group"><label class="form-label">Allowed Subjects (one per line)</label><textarea class="input" id="auth-oidc-subjects" rows="3">${authEsc(authLines(a.oidc_allowed_subjects))}</textarea></div>
-            <div class="form-group"><label class="form-label">Allowed Emails (one per line)</label><textarea class="input" id="auth-oidc-emails" rows="3">${authEsc(authLines(a.oidc_allowed_emails))}</textarea></div>
+            <div class="form-group"><label class="form-label">Allowed Emails (one per line)</label><textarea class="input" id="auth-oidc-emails" rows="3">${authEsc(authLines(a.oidc_allowed_emails))}</textarea><div class="form-hint">Email authorization requires the provider to assert <code>email_verified=true</code>.</div></div>
             <div class="form-group"><label class="form-label">Allowed Groups (one per line)</label><textarea class="input" id="auth-oidc-groups" rows="3">${authEsc(authLines(a.oidc_allowed_groups))}</textarea></div>
             <div class="form-group"><label class="form-label">Group Claim</label><input class="input" id="auth-oidc-group-claim" value="${authEsc(a.oidc_group_claim || 'groups')}"></div>
           </div>

@@ -16,7 +16,7 @@ from auth.csrf import (
     login_csrf_store,
     set_login_csrf_cookie,
 )
-from auth.manager import PasswordAuthenticationBusy, verify_local_credentials
+from auth.manager import PasswordAuthenticationBusy, peer_key, verify_local_credentials
 from auth.models import AuthMechanism, Principal
 from auth.oidc import (
     OIDC_CORRELATION_COOKIE,
@@ -42,6 +42,7 @@ from auth.sessions import (
     session_store,
     set_session_cookie,
 )
+from auth.throttle import login_challenge_rate_limiter, oidc_start_rate_limiter
 from auth.transitions import authentication_configuration_lock
 from core.config import get_settings
 
@@ -189,6 +190,26 @@ label{{display:block;font-size:12px;font-weight:700;color:#c4c7cf;margin:14px 0 
     return response
 
 
+def _state_free_auth_page(
+    *,
+    message: str,
+    status_code: int,
+    retry_after: int | None = None,
+) -> HTMLResponse:
+    """Render an authentication error without allocating browser challenge state."""
+    body = f"""<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sign in · DebridPulse</title></head>
+<body><main><h1>DebridPulse sign-in</h1><p>{html.escape(message)}</p><p><a href="/login">Return to sign in</a></p></main></body>
+</html>"""
+    response = HTMLResponse(content=body, status_code=status_code)
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Content-Security-Policy"] = "default-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+    if retry_after is not None:
+        response.headers["Retry-After"] = str(max(1, int(retry_after)))
+    return response
+
+
 def _issue_login_page(
     request: Request,
     *,
@@ -196,6 +217,12 @@ def _issue_login_page(
     error: str = "",
     status_code: int = 200,
 ) -> HTMLResponse:
+    if not login_challenge_rate_limiter.allow(peer_key(request)):
+        return _state_free_auth_page(
+            message="Too many sign-in challenges have been requested. Try again shortly.",
+            status_code=429,
+            retry_after=60,
+        )
     browser_nonce, form_token = login_csrf_store.issue()
     response = _login_page(
         request,
@@ -376,6 +403,12 @@ async def oidc_start(request: Request, next: str = "/"):
             return_to=return_to,
             error="OpenID Connect authentication is disabled.",
             status_code=404,
+        )
+    if not oidc_start_rate_limiter.allow(peer_key(request)):
+        return _state_free_auth_page(
+            message="Too many OpenID Connect sign-in attempts have been started. Try again shortly.",
+            status_code=429,
+            retry_after=60,
         )
     try:
         authorization_url, correlation = await begin_oidc_login(cfg, return_to=return_to)

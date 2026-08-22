@@ -63,7 +63,10 @@ def test_security_contracts():
     assert "enforce_authentication" in main
     assert "enforce_general_web_security" in main
     assert 'allow_origins=["*"]' not in main
-    assert "os.chmod(CONFIG_PATH, 0o600)" in config
+    assert "atomic_write_json(CONFIG_PATH, data, indent=2)" in config
+    secure_files = text("backend/core/secure_files.py")
+    assert "tempfile.mkstemp" in secure_files
+    assert "os.fchmod(fd, 0o600)" in secure_files
 
 
 def test_reconciliation_keeps_v104_snapshot_and_negative_cache_invariants():

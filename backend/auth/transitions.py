@@ -7,6 +7,7 @@ from typing import Any, Mapping
 
 from fastapi import Request, Response
 from fastapi.responses import JSONResponse
+from pydantic import TypeAdapter, ValidationError
 
 from auth.models import AuthMechanism, Principal
 from auth.oidc import OidcConfigurationError, oidc_configuration
@@ -34,6 +35,18 @@ _AUTH_SETTINGS_PATHS = frozenset({"/api/settings", "/api/auth/config"})
 # one authoritative state. Middleware holds this lock through the settings route
 # so concurrent requests cannot both pass lockout checks against stale state.
 authentication_configuration_lock = asyncio.Lock()
+_BOOL_ADAPTER = TypeAdapter(bool)
+
+
+def _coerced_bool(value: Any, *, default: bool = False) -> bool:
+    """Apply the same bool coercion used by the Pydantic request models."""
+    try:
+        return bool(_BOOL_ADAPTER.validate_python(value))
+    except ValidationError:
+        # Invalid values are rejected later by FastAPI/Pydantic and are never
+        # persisted. Falling back here avoids inventing different semantics in
+        # the pre-route transition guard.
+        return bool(default)
 
 
 def is_auth_settings_mutation(request: Request) -> bool:
@@ -54,7 +67,7 @@ def _normalized_list(value: Any, *, casefold: bool = False) -> tuple[str, ...]:
 
 def _normalized_critical(field: str, value: Any) -> Any:
     if field == "oidc_allow_all":
-        return bool(value)
+        return _coerced_bool(value)
     if field == "oidc_scopes":
         scopes = list(_normalized_list(value))
         if "openid" not in scopes:
@@ -75,7 +88,7 @@ def _normalized_critical(field: str, value: Any) -> Any:
 
 def oidc_critical_change(payload: Mapping[str, Any], current) -> bool:
     clears = {str(item) for item in payload.get("clear_secrets", []) if str(item)}
-    if "oidc_client_secret" in clears or payload.get("clear_oidc_client_secret") is True:
+    if "oidc_client_secret" in clears or _coerced_bool(payload.get("clear_oidc_client_secret", False)):
         return True
     for field in CRITICAL_OIDC_FIELDS:
         if field not in payload:
@@ -100,7 +113,7 @@ def _prospective_password_ready(payload: Mapping[str, Any], current) -> bool:
     plaintext = str(payload.get("auth_password", "") or "")
     stored_hash = str(getattr(current, "auth_password_hash", "") or "").strip()
     clears = {str(item) for item in payload.get("clear_secrets", []) if str(item)}
-    if "auth_password" in clears or payload.get("clear_password") is True:
+    if "auth_password" in clears or _coerced_bool(payload.get("clear_password", False)):
         # Clear intent is destructive and wins over any simultaneously supplied
         # plaintext. The route does not persist that plaintext, so it must not be
         # counted as a viable replacement credential here.
@@ -131,7 +144,7 @@ def _prospective_oidc_ready(payload: Mapping[str, Any], current) -> bool:
         setattr(candidate, field, value)
 
     clears = {str(item) for item in payload.get("clear_secrets", []) if str(item)}
-    if "oidc_client_secret" in clears or payload.get("clear_oidc_client_secret") is True:
+    if "oidc_client_secret" in clears or _coerced_bool(payload.get("clear_oidc_client_secret", False)):
         setattr(candidate, "oidc_client_secret", "")
 
     try:
@@ -173,8 +186,14 @@ async def settings_transition_rejection(
 
     current_password = password_auth_enabled(current)
     current_oidc = oidc_auth_enabled(current)
-    proposed_password = bool(payload.get("auth_password_enabled", current_password))
-    proposed_oidc = bool(payload.get("auth_oidc_enabled", current_oidc))
+    proposed_password = _coerced_bool(
+        payload.get("auth_password_enabled", current_password),
+        default=current_password,
+    )
+    proposed_oidc = _coerced_bool(
+        payload.get("auth_oidc_enabled", current_oidc),
+        default=current_oidc,
+    )
     critical_oidc_change = oidc_critical_change(payload, current)
 
     # Explicitly opening an installation is supported, but only as an

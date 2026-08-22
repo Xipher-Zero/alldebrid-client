@@ -72,6 +72,7 @@ def test_userinfo_is_only_required_for_missing_authorization_claims():
         "iss": cfg.issuer,
         "sub": "user-1",
         "email": "operator@example.com",
+        "email_verified": True,
         "groups": ["operators"],
     }
     assert oidc._claims_need_userinfo(cfg, complete) is False

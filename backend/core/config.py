@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 
 from auth.passwords import hash_password
 from core.branding import APP_SHORT_NAME
+from core.secure_files import atomic_write_json
 
 CONFIG_PATH = Path(os.getenv("CONFIG_PATH", "/app/config/config.json"))
 logger = logging.getLogger("alldebrid.config")
@@ -294,29 +295,11 @@ def save_settings(s: AppSettings):
     elif not str(getattr(s, "oidc_client_secret", "") or "").strip():
         s.oidc_client_secret = str(getattr(_settings, "oidc_client_secret", "") or "")
 
-    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        os.chmod(CONFIG_PATH.parent, 0o700)
-    except OSError:
-        pass
     data = s.model_dump()
     data.pop("auth_password", None)
     data["auth_password_hash"] = str(getattr(s, "auth_password_hash", "") or "")
     data["oidc_client_secret"] = str(getattr(s, "oidc_client_secret", "") or "")
-    tmp = CONFIG_PATH.with_name(CONFIG_PATH.name + ".tmp")
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
-        f.flush()
-        os.fsync(f.fileno())
-    try:
-        os.chmod(tmp, 0o600)
-    except OSError:
-        pass
-    os.replace(tmp, CONFIG_PATH)
-    try:
-        os.chmod(CONFIG_PATH, 0o600)
-    except OSError:
-        pass
+    atomic_write_json(CONFIG_PATH, data, indent=2)
 
     s.auth_password_hash_clear = False
     s.oidc_client_secret_clear = False

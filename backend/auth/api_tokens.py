@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import secrets
 from dataclasses import dataclass
 from pathlib import Path
 
 from core.config import CONFIG_PATH
+from core.secure_files import atomic_write_json
 
 
 API_TOKEN_PREFIX = "dp_"
@@ -52,29 +52,11 @@ class ApiTokenStore:
         return state
 
     def _persist(self, state: ApiTokenState) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            os.chmod(self.path.parent, 0o700)
-        except OSError:
-            pass
-        tmp = self.path.with_name(self.path.name + ".tmp")
-        with open(tmp, "w", encoding="utf-8") as handle:
-            json.dump(
-                {"enabled": bool(state.enabled), "verifier": str(state.verifier)},
-                handle,
-                separators=(",", ":"),
-            )
-            handle.flush()
-            os.fsync(handle.fileno())
-        try:
-            os.chmod(tmp, 0o600)
-        except OSError:
-            pass
-        os.replace(tmp, self.path)
-        try:
-            os.chmod(self.path, 0o600)
-        except OSError:
-            pass
+        atomic_write_json(
+            self.path,
+            {"enabled": bool(state.enabled), "verifier": str(state.verifier)},
+            separators=(",", ":"),
+        )
         self._state = state
 
     @staticmethod

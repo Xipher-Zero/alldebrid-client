@@ -64,12 +64,25 @@ async def verify_password_candidate_async(
 ) -> bool:
     """Run one real-or-dummy Argon2 verification off the request event loop."""
     async with _PASSWORD_VERIFY_SLOTS:
-        return await asyncio.to_thread(
-            verify_password_candidate,
-            password_hash,
-            password,
-            use_configured_hash=use_configured_hash,
+        worker = asyncio.create_task(
+            asyncio.to_thread(
+                verify_password_candidate,
+                password_hash,
+                password,
+                use_configured_hash=use_configured_hash,
+            )
         )
+        try:
+            return await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            # asyncio.to_thread cannot stop the underlying worker. Keep this
+            # semaphore slot occupied until that worker has really completed;
+            # otherwise disconnect/cancellation churn can exceed the Argon2
+            # memory-concurrency bound.
+            try:
+                await asyncio.shield(worker)
+            finally:
+                raise
 
 
 def password_credential_version(password_hash: str) -> str:

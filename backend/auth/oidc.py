@@ -423,8 +423,10 @@ def _claims_need_userinfo(
 ) -> bool:
     if config.allow_all:
         return False
-    if config.allowed_emails and not str(claims.get("email") or "").strip():
-        return True
+    if config.allowed_emails:
+        email = str(claims.get("email") or "").strip()
+        if not email or claims.get("email_verified") is not True:
+            return True
     if config.allowed_groups and config.group_claim not in claims:
         return True
     return False
@@ -555,7 +557,7 @@ def authorize_oidc_claims(
 
         if config.allowed_emails:
             email = str(claims.get("email") or "").strip().casefold()
-            if claims.get("email_verified") is False or email not in config.allowed_emails:
+            if claims.get("email_verified") is not True or email not in config.allowed_emails:
                 raise OidcAuthorizationError("OIDC identity is not authorized")
 
         if config.allowed_groups:

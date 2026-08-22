@@ -33,9 +33,9 @@
       <summary style="cursor:pointer;font-weight:600;color:var(--text1);font-size:13px">Authentication</summary>
       <div style="padding:6px 0 0 12px">
         <b>Username &amp; Password</b> — Browser users sign in through the DebridPulse login page. REST clients may use HTTP Basic with the same credentials. Passwords are stored only as Argon2id verifiers.<br>
-        <b>OpenID Connect</b> — Provider-neutral Authorization Code + PKCE login. Configure the HTTPS Public Base URL and register the derived <code>/auth/oidc/callback</code> URL with the IdP. Use <b>Verify Sign-In</b> to prove a configuration before relying on OIDC-only access.<br>
+        <b>OpenID Connect</b> — Provider-neutral Authorization Code + PKCE login. Configure the HTTPS Public Base URL and register the derived <code>/auth/oidc/callback</code> URL with the IdP. On a fresh/open installation, enable Username &amp; Password as a temporary fallback first, sign in locally, then use <b>Verify Sign-In</b> to prove the real provider flow before relying on OIDC-only access.<br>
         <b>API Access</b> — Generate a <code>dp_…</code> bearer token for automation, Prometheus, and scripts. The full token is shown once; only a one-way verifier is persisted. Rotation invalidates the old token immediately.<br>
-        <b>Lockout prevention</b> — Password cannot be disabled in favor of OIDC until a real OIDC login succeeds. Critical OIDC changes in OIDC-only mode remain pending until the proposed configuration completes a successful login. Disabling all interactive authentication requires explicit open-mode confirmation.<br>
+        <b>Lockout prevention</b> — An unproven OIDC configuration cannot become the first and only interactive mechanism. Password cannot be disabled in favor of OIDC until a real OIDC login succeeds. Critical OIDC changes in OIDC-only mode remain pending until the proposed configuration completes a successful login. Disabling all interactive authentication requires explicit open-mode confirmation.<br>
       </div>
     `;
 

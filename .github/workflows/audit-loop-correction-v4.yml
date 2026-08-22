@@ -1,0 +1,139 @@
+name: Temporary audit-loop correction v4
+
+on:
+  pull_request:
+    branches:
+      - 'staging/**'
+
+permissions:
+  contents: write
+
+jobs:
+  correct:
+    if: github.head_ref == 'work/v1.0.6-auth-overhaul'
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - name: Checkout correction branch
+        uses: actions/checkout@v5
+        with:
+          ref: work/v1.0.6-auth-overhaul
+          fetch-depth: 0
+
+      - name: Apply final third-audit corrections
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace(path: str, old: str, new: str, *, count: int = 1) -> None:
+              p = Path(path)
+              text = p.read_text(encoding="utf-8")
+              actual = text.count(old)
+              if actual != count:
+                  raise SystemExit(f"{path}: expected {count} occurrence(s), found {actual}: {old[:120]!r}")
+              p.write_text(text.replace(old, new, count), encoding="utf-8")
+
+          # Argon2 worker capacity belongs to the actual worker, not the request
+          # task. A cancelled/disconnected request therefore cannot release a
+          # slot while its non-cancellable to_thread operation is still running.
+          replace(
+              "backend/auth/passwords.py",
+              '''    async with _PASSWORD_VERIFY_SLOTS:\n        worker = asyncio.create_task(\n            asyncio.to_thread(\n                verify_password_candidate,\n                password_hash,\n                password,\n                use_configured_hash=use_configured_hash,\n            )\n        )\n        try:\n            return await asyncio.shield(worker)\n        except asyncio.CancelledError:\n            # asyncio.to_thread cannot stop the underlying worker. Keep this\n            # semaphore slot occupied until that worker has really completed;\n            # otherwise disconnect/cancellation churn can exceed the Argon2\n            # memory-concurrency bound.\n            try:\n                await asyncio.shield(worker)\n            finally:\n                raise\n''',
+              '''    await _PASSWORD_VERIFY_SLOTS.acquire()\n    try:\n        worker = asyncio.create_task(\n            asyncio.to_thread(\n                verify_password_candidate,\n                password_hash,\n                password,\n                use_configured_hash=use_configured_hash,\n            )\n        )\n    except BaseException:\n        _PASSWORD_VERIFY_SLOTS.release()\n        raise\n\n    # asyncio.to_thread cannot cancel the underlying thread. Release the slot\n    # only when the worker itself finishes, never when its request task is\n    # cancelled or disconnected. The worker task is shielded so caller\n    # cancellation cannot mark it cancelled before the thread returns.\n    worker.add_done_callback(lambda _task: _PASSWORD_VERIFY_SLOTS.release())\n    return await asyncio.shield(worker)\n''',
+          )
+
+          # Reuse the directory-fsync primitive for both atomic replacement and
+          # credential deletion, making token revocation durable across crashes.
+          replace(
+              "backend/core/secure_files.py",
+              '''def atomic_write_json(\n''',
+              '''def fsync_parent_directory(path: Path) -> None:\n    \"\"\"Best-effort fsync of the directory containing a credential file.\"\"\"\n    target = Path(path)\n    dir_fd = -1\n    try:\n        dir_fd = os.open(target.parent, os.O_RDONLY | getattr(os, \"O_DIRECTORY\", 0))\n        os.fsync(dir_fd)\n    except OSError:\n        pass\n    finally:\n        if dir_fd >= 0:\n            os.close(dir_fd)\n\n\ndef atomic_write_json(\n''',
+          )
+          replace(
+              "backend/core/secure_files.py",
+              '''    # Persist the directory entry update where the host filesystem supports it.\n    dir_fd = -1\n    try:\n        dir_fd = os.open(target.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))\n        os.fsync(dir_fd)\n    except OSError:\n        pass\n    finally:\n        if dir_fd >= 0:\n            os.close(dir_fd)\n''',
+              '''    # Persist the directory entry update where the host filesystem supports it.\n    fsync_parent_directory(target)\n''',
+          )
+          replace(
+              "backend/auth/api_tokens.py",
+              "from core.secure_files import atomic_write_json\n",
+              "from core.secure_files import atomic_write_json, fsync_parent_directory\n",
+          )
+          replace(
+              "backend/auth/api_tokens.py",
+              '''        try:\n            self.path.unlink()\n        except FileNotFoundError:\n            pass\n        self._state = ApiTokenState()\n''',
+              '''        try:\n            self.path.unlink()\n        except FileNotFoundError:\n            pass\n        else:\n            fsync_parent_directory(self.path)\n        self._state = ApiTokenState()\n''',
+          )
+
+          # Make the verified-email authorization contract explicit to operators.
+          replace(
+              "docs/authentication.md",
+              '''OIDC authentication and DebridPulse authorization are separate checks. Configure either **Allow all authenticated identities** or one or more explicit allow lists for subject, email, or group claims. Group matching uses the configured group-claim name.\n\nDo not enable OIDC without an authorization policy that matches the intended users.\n''',
+              '''OIDC authentication and DebridPulse authorization are separate checks. Configure either **Allow all authenticated identities** or one or more explicit allow lists for subject, email, or group claims. Group matching uses the configured group-claim name.\n\nEmail allow-list authorization requires the provider to assert `email_verified: true` for the matching address. If that claim is absent from the ID token, DebridPulse may use the provider's UserInfo endpoint to complete it. If the provider never supplies a verified-email claim, use subject or group authorization instead of an email allow list.\n\nDo not enable OIDC without an authorization policy that matches the intended users.\n''',
+          )
+          replace(
+              "frontend/static/auth-settings.js",
+              '''            <div class="form-group"><label class="form-label">Allowed Emails (one per line)</label><textarea class="input" id="auth-oidc-emails" rows="3">${authEsc(authLines(a.oidc_allowed_emails))}</textarea></div>\n''',
+              '''            <div class="form-group"><label class="form-label">Allowed Emails (one per line)</label><textarea class="input" id="auth-oidc-emails" rows="3">${authEsc(authLines(a.oidc_allowed_emails))}</textarea><div class="form-hint">Email authorization requires the provider to assert <code>email_verified=true</code>.</div></div>\n''',
+          )
+
+          # Replace the cancellation regression with the stronger invariant: the
+          # request task may finish cancelled immediately, but the next Argon2
+          # worker remains blocked until the first thread actually completes.
+          p = Path("backend/tests/test_auth_third_audit.py")
+          text = p.read_text(encoding="utf-8")
+          old = '''@pytest.mark.asyncio\nasync def test_cancelled_password_verification_keeps_worker_slot_until_thread_finishes(monkeypatch):\n    semaphore = asyncio.Semaphore(1)\n    monkeypatch.setattr(passwords, "_PASSWORD_VERIFY_SLOTS", semaphore)\n    release = threading.Event()\n    first_started = threading.Event()\n    second_started = threading.Event()\n    calls = 0\n    calls_lock = threading.Lock()\n\n    def blocking_verify(*_args, **_kwargs):\n        nonlocal calls\n        with calls_lock:\n            calls += 1\n            call_number = calls\n        (first_started if call_number == 1 else second_started).set()\n        release.wait(timeout=5)\n        return False\n\n    monkeypatch.setattr(passwords, "verify_password_candidate", blocking_verify)\n    first = asyncio.create_task(passwords.verify_password_candidate_async("hash", "pw", use_configured_hash=False))\n    assert await asyncio.to_thread(first_started.wait, 1.0) is True\n    first.cancel()\n    await asyncio.sleep(0.05)\n    second = asyncio.create_task(passwords.verify_password_candidate_async("hash", "pw2", use_configured_hash=False))\n    await asyncio.sleep(0.1)\n    assert second_started.is_set() is False\n    release.set()\n    with pytest.raises(asyncio.CancelledError):\n        await first\n    assert await second is False\n    assert second_started.is_set() is True\n'''
+          new = '''@pytest.mark.asyncio\nasync def test_cancelled_password_request_does_not_release_live_worker_slot(monkeypatch):\n    semaphore = asyncio.Semaphore(1)\n    monkeypatch.setattr(passwords, "_PASSWORD_VERIFY_SLOTS", semaphore)\n    release_first = threading.Event()\n    release_second = threading.Event()\n    first_started = threading.Event()\n    second_started = threading.Event()\n    calls = 0\n    calls_lock = threading.Lock()\n\n    def blocking_verify(*_args, **_kwargs):\n        nonlocal calls\n        with calls_lock:\n            calls += 1\n            call_number = calls\n        if call_number == 1:\n            first_started.set()\n            release_first.wait(timeout=5)\n        else:\n            second_started.set()\n            release_second.wait(timeout=5)\n        return False\n\n    monkeypatch.setattr(passwords, "verify_password_candidate", blocking_verify)\n    first = asyncio.create_task(passwords.verify_password_candidate_async("hash", "pw", use_configured_hash=False))\n    assert await asyncio.to_thread(first_started.wait, 1.0) is True\n\n    first.cancel()\n    with pytest.raises(asyncio.CancelledError):\n        await first\n    # Repeated cancellation of the already-cancelled request must not affect\n    # ownership of the still-running worker's semaphore slot.\n    first.cancel()\n\n    second = asyncio.create_task(passwords.verify_password_candidate_async("hash", "pw2", use_configured_hash=False))\n    await asyncio.sleep(0.1)\n    assert second_started.is_set() is False\n    assert semaphore.locked() is True\n\n    release_first.set()\n    assert await asyncio.to_thread(second_started.wait, 1.0) is True\n    release_second.set()\n    assert await second is False\n'''
+          if text.count(old) != 1:
+              raise SystemExit("cancellation regression source did not match exactly")
+          text = text.replace(old, new, 1)
+          text += '''\n\ndef test_api_token_clear_fsyncs_parent_directory(tmp_path, monkeypatch):\n    from auth import api_tokens\n\n    path = tmp_path / "api-token.json"\n    store = api_tokens.ApiTokenStore(path)\n    store.generate()\n    calls = []\n    monkeypatch.setattr(api_tokens, "fsync_parent_directory", lambda target: calls.append(target))\n    store.clear()\n    assert calls == [path]\n    assert path.exists() is False\n    assert store.configured is False\n    assert store.enabled is False\n\n\ndef test_verified_email_requirement_is_documented_in_operator_surfaces():\n    root = os.path.dirname(os.path.dirname(__file__))\n    repo_root = os.path.dirname(root)\n    docs = open(os.path.join(repo_root, "docs", "authentication.md"), encoding="utf-8").read()\n    ui = open(os.path.join(repo_root, "frontend", "static", "auth-settings.js"), encoding="utf-8").read()\n    assert "email_verified: true" in docs\n    assert "email_verified=true" in ui\n'''
+          p.write_text(text, encoding="utf-8")
+
+          Path(".github/workflows/audit-loop-correction-v4.yml").unlink(missing_ok=True)
+          PY
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+
+      - name: Install validation dependencies
+        run: |
+          cd backend
+          pip install -r requirements-dev.txt
+          pip install ruff pip-audit bandit
+
+      - name: Validate corrected working tree
+        run: |
+          set -euo pipefail
+          cd backend
+          ruff check api auth core db services main.py --select F821,F822,F823
+          python -m pytest tests/ -q --tb=short
+          python -m compileall -q .
+          pip-audit -r requirements.txt --progress-spinner off
+          bandit -r . --exclude ./tests --severity-level high --confidence-level high -f txt
+          cd ..
+          node --check frontend/static/app.js
+          node --check frontend/static/auth.js
+          node --check frontend/static/auth-settings.js
+          node --check frontend/static/auth-help.js
+
+      - name: Commit corrected tree and remove temporary workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git diff --cached --stat
+          git commit -m "Harden authentication worker and credential durability"
+          git push origin HEAD:work/v1.0.6-auth-overhaul

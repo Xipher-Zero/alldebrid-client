@@ -7,6 +7,7 @@ from fastapi import Request
 from api import auth_routes
 from auth.models import AuthMechanism, Principal
 from auth.oidc import OIDC_CORRELATION_COOKIE
+from auth.oidc_version import oidc_configuration_version
 from auth.passwords import hash_password
 from auth.sessions import HTTPS_SESSION_COOKIE, session_store
 
@@ -123,6 +124,7 @@ async def test_oidc_start_sets_secure_bound_correlation_cookie(monkeypatch):
 @pytest.mark.asyncio
 async def test_oidc_callback_rotates_old_session_and_forces_secure_application_cookie(monkeypatch):
     cfg = _settings()
+    config_version = oidc_configuration_version(cfg)
     monkeypatch.setattr(auth_routes, "get_settings", lambda: cfg)
     session_store.clear()
     old_token, _ = session_store.create(
@@ -139,6 +141,7 @@ async def test_oidc_callback_rotates_old_session_and_forces_secure_application_c
             Principal.oidc_session(
                 "https://id.example/application/o/debridpulse|user-1",
                 display_name="Operator",
+                credential_version=config_version,
             ),
             "/stats",
         )
@@ -168,10 +171,44 @@ async def test_oidc_callback_rotates_old_session_and_forces_secure_application_c
     record = session_store.resolve(cookie.value)
     assert record is not None
     assert record.principal.mechanism is AuthMechanism.OIDC_SESSION
+    assert record.credential_version == config_version
 
     correlation = _response_cookie(response, OIDC_CORRELATION_COOKIE)
     assert correlation is not None
     assert correlation["max-age"] == "0"
+
+
+@pytest.mark.asyncio
+async def test_oidc_callback_rejects_proof_from_stale_configuration(monkeypatch):
+    current = _settings(oidc_allowed_groups=["new-policy"])
+    old = _settings(oidc_allowed_groups=["old-policy"])
+    monkeypatch.setattr(auth_routes, "get_settings", lambda: current)
+    session_store.clear()
+
+    async def fake_complete(**_kwargs):
+        return (
+            Principal.oidc_session(
+                "https://id.example/application/o/debridpulse|user-1",
+                credential_version=oidc_configuration_version(old),
+            ),
+            "/stats",
+        )
+
+    monkeypatch.setattr(auth_routes, "complete_oidc_login", fake_complete)
+    response = await auth_routes.oidc_callback(
+        _request(
+            "/auth/oidc/callback",
+            headers={
+                "Host": "pulse.example",
+                "Cookie": f"{OIDC_CORRELATION_COOKIE}=browser-correlation",
+            },
+        ),
+        state="state",
+        code="code",
+    )
+    assert response.status_code == 409
+    assert session_store.size == 0
+    assert b"configuration changed" in response.body
 
 
 @pytest.mark.asyncio

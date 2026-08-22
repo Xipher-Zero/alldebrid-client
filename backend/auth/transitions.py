@@ -206,6 +206,28 @@ async def settings_transition_rejection(
             status_code=409,
         )
 
+    # A fresh/open installation has no authenticated mechanism that can prove a
+    # proposed OIDC deployment. Do not let local syntax/discovery configuration
+    # become the only login path before any end-to-end OIDC proof exists. The
+    # safe bootstrap sequence is a temporary Password fallback, Verify Sign-In,
+    # then the already-protected Password -> OIDC-only transition below.
+    enabling_unproven_oidc_as_first_auth = (
+        not current_password
+        and not current_oidc
+        and proposed_oidc
+        and not proposed_password
+    )
+    if enabling_unproven_oidc_as_first_auth:
+        return JSONResponse(
+            {
+                "detail": (
+                    "OIDC cannot become the first and only interactive authentication mechanism without a verified fallback; "
+                    "enable Username & Password temporarily, verify OIDC sign-in, then disable Password"
+                )
+            },
+            status_code=409,
+        )
+
     # Leaving OIDC as the sole interactive mechanism is permitted only when
     # this exact request is made from a real OIDC application session. A local
     # password session, HTTP Basic, API token, discovery check, or configuration

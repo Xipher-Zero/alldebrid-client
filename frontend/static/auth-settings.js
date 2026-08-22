@@ -3,11 +3,15 @@
   'use strict';
 
   let authSettingsData = null;
+  let oidcVerificationPopup = null;
+  let oidcVerificationButton = null;
+  let oidcVerificationChannel = null;
+  let oidcVerificationPoll = null;
+  let oidcVerificationMessageHandler = null;
+  let oidcVerificationCompleted = false;
   const baseRenderSettings = renderSettings;
   const baseGetFormSettings = getFormSettings;
   const baseSaveSettings = saveSettings;
-  const OIDC_VERIFICATION_MARKER = 'debridpulse.oidc-verification-started';
-  const OIDC_VERIFICATION_MARKER_TTL_MS = 15 * 60 * 1000;
 
   function authEsc(value) {
     return esc(String(value ?? ''));
@@ -30,37 +34,103 @@
     return `<span style="font-weight:700;color:${color}">${authEsc(label)}</span>`;
   }
 
-  function markOidcVerificationStarted() {
-    try {
-      window.sessionStorage.setItem(OIDC_VERIFICATION_MARKER, String(Date.now()));
-    } catch (_) {
-      // Session storage is only UX state; verification itself must still proceed.
+  function clearOidcVerificationResources({closePopup = true} = {}) {
+    if (oidcVerificationPoll) {
+      window.clearInterval(oidcVerificationPoll);
+      oidcVerificationPoll = null;
+    }
+    if (oidcVerificationChannel) {
+      try { oidcVerificationChannel.close(); } catch (_) {}
+      oidcVerificationChannel = null;
+    }
+    if (oidcVerificationMessageHandler) {
+      window.removeEventListener('message', oidcVerificationMessageHandler);
+      oidcVerificationMessageHandler = null;
+    }
+    if (closePopup && oidcVerificationPopup && !oidcVerificationPopup.closed) {
+      try { oidcVerificationPopup.close(); } catch (_) {}
+    }
+    oidcVerificationPopup = null;
+    if (oidcVerificationButton) {
+      setButtonPending(oidcVerificationButton, false);
+      oidcVerificationButton = null;
     }
   }
 
-  function consumeOidcVerificationResult(params) {
-    let started = 0;
+  async function finishOidcVerification(result) {
+    if (oidcVerificationCompleted) return;
+    oidcVerificationCompleted = true;
+    clearOidcVerificationResources();
+
     try {
-      started = Number(window.sessionStorage.getItem(OIDC_VERIFICATION_MARKER) || 0);
+      if (window.debridPulseAuth) {
+        await window.debridPulseAuth.refreshSession({force: true});
+      }
+      authSettingsData = await api('GET', '/auth/config', null, 5000);
+      syncBroadSettingsFromAuth(authSettingsData);
+      renderSettings();
+      switchSettingsTab('tab-authentication');
     } catch (_) {
-      return;
+      // The verification result remains authoritative even if the status panel
+      // cannot be refreshed immediately; the next normal settings load will.
     }
-    if (!started) return;
 
-    const age = Date.now() - started;
-    if (age < 0 || age > OIDC_VERIFICATION_MARKER_TTL_MS) {
-      try { window.sessionStorage.removeItem(OIDC_VERIFICATION_MARKER); } catch (_) {}
-      return;
-    }
-    if (params.get('view') !== 'settings' || params.get('tab') !== 'authentication') return;
+    const ok = !!result?.ok;
+    const message = String(result?.message || (
+      ok
+        ? 'OIDC verification successful — provider sign-in and authorization completed.'
+        : 'OIDC verification failed — provider sign-in or authorization did not complete successfully.'
+    ));
+    toast(message, ok ? 'success' : 'error');
+  }
 
-    try { window.sessionStorage.removeItem(OIDC_VERIFICATION_MARKER); } catch (_) {}
-    const verified = authSettingsData?.current_session_mechanism === 'oidc_session';
-    if (verified) {
-      toast('OIDC verification successful — provider sign-in and authorization completed.', 'success');
-    } else {
-      toast('OIDC verification failed — no verified OIDC session was established.', 'error');
+  function armOidcVerificationResultChannel(popup, button) {
+    oidcVerificationCompleted = false;
+    oidcVerificationPopup = popup;
+    oidcVerificationButton = button;
+
+    if ('BroadcastChannel' in window) {
+      try {
+        oidcVerificationChannel = new BroadcastChannel('debridpulse-oidc-verification');
+        oidcVerificationChannel.onmessage = event => {
+          const result = event?.data;
+          if (result?.type !== 'debridpulse-oidc-verification') return;
+          finishOidcVerification(result);
+        };
+      } catch (_) {
+        oidcVerificationChannel = null;
+      }
     }
+
+    oidcVerificationMessageHandler = event => {
+      if (event.origin !== window.location.origin) return;
+      const result = event?.data;
+      if (result?.type !== 'debridpulse-oidc-verification') return;
+      finishOidcVerification(result);
+    };
+    window.addEventListener('message', oidcVerificationMessageHandler);
+
+    oidcVerificationPoll = window.setInterval(() => {
+      if (!oidcVerificationPopup || !oidcVerificationPopup.closed || oidcVerificationCompleted) return;
+      window.clearInterval(oidcVerificationPoll);
+      oidcVerificationPoll = null;
+      window.setTimeout(() => {
+        if (!oidcVerificationCompleted) {
+          finishOidcVerification({
+            ok: false,
+            message: 'OIDC verification did not complete — the verification window was closed.'
+          });
+        }
+      }, 250);
+    }, 300);
+  }
+
+  function renderOidcVerificationWaitingPage(popup) {
+    try {
+      popup.document.open();
+      popup.document.write(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Testing OIDC · DebridPulse</title><style>:root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:#090812;color:#f4f1ff;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}main{width:min(420px,100%);padding:28px;border:1px solid #302c49;border-radius:12px;background:#171526;text-align:center}h1{margin:0 0 10px;font-size:19px}p{margin:0;color:#c2bdd6;font-size:13px;line-height:1.55}</style></head><body><main><h1>Testing OpenID Connect…</h1><p>DebridPulse is validating the provider sign-in and authorization flow.</p></main></body></html>`);
+      popup.document.close();
+    } catch (_) {}
   }
 
   function removeLegacyAuthenticationControls() {
@@ -322,7 +392,6 @@
 
     const params = new URLSearchParams(window.location.search);
     switchSettingsTab(params.get('tab') === 'authentication' ? 'tab-authentication' : 'tab-general');
-    consumeOidcVerificationResult(params);
     const avatarUrl = settingsData.discord_avatar_url || '';
     if (avatarUrl && !avatarUrl.includes('github') && !avatarUrl.includes('_DEFAULT')) {
       showAvatarPreview(avatarUrl, 'Custom avatar', 0);
@@ -382,6 +451,29 @@
   };
 
   window.verifyOidcSignIn = async function verifyOidcSignIn(button) {
+    if (oidcVerificationPopup && !oidcVerificationPopup.closed) {
+      try { oidcVerificationPopup.focus(); } catch (_) {}
+      return;
+    }
+
+    const width = 520;
+    const height = 680;
+    const left = Math.max(0, Math.round((window.screenX || 0) + ((window.outerWidth || screen.width) - width) / 2));
+    const top = Math.max(0, Math.round((window.screenY || 0) + ((window.outerHeight || screen.height) - height) / 2));
+    const popup = window.open(
+      '',
+      'debridpulse-oidc-verification',
+      `popup=yes,width=${width},height=${height},left=${left},top=${top},resizable=yes,scrollbars=yes`
+    );
+    if (!popup) {
+      toast('OIDC verification could not start because the verification window was blocked by the browser.', 'error');
+      return;
+    }
+
+    renderOidcVerificationWaitingPage(popup);
+    armOidcVerificationResultChannel(popup, button);
+    setButtonPending(button, true, 'Testing…');
+
     const payload = currentAuthPayload();
     const verification = {
       oidc_provider_name: payload.oidc_provider_name,
@@ -396,17 +488,18 @@
       oidc_allowed_groups: payload.oidc_allowed_groups,
       oidc_group_claim: payload.oidc_group_claim,
       public_base_url: payload.public_base_url,
-      return_to: '/?view=settings&tab=authentication',
+      return_to: '/oidc-verify-complete.html',
     };
-    setButtonPending(button, true, 'Starting…');
+
     try {
       const result = await api('POST', '/auth/oidc/verify-config', verification, 10000);
       if (!result.authorization_url) throw new Error('OIDC verification did not return an authorization URL');
-      markOidcVerificationStarted();
-      window.location.assign(result.authorization_url);
+      if (popup.closed) throw new Error('OIDC verification window was closed before the provider test began');
+      popup.location.replace(result.authorization_url);
     } catch (e) {
+      oidcVerificationCompleted = true;
+      clearOidcVerificationResources();
       toast(sanitizeErrorMsg(e.message), 'error');
-      setButtonPending(button, false);
     }
   };
 
@@ -489,13 +582,4 @@
       setButtonPending(button, false);
     }
   };
-
-  // After a successful OIDC verification, the callback can return directly to
-  // the Authentication tab without introducing a new SPA routing framework.
-  window.addEventListener('load', () => {
-    const params = new URLSearchParams(window.location.search);
-    if (params.get('view') !== 'settings') return;
-    const settingsNav = document.querySelector('.nav-item[data-view="settings"]');
-    if (settingsNav) nav(settingsNav);
-  });
 })();

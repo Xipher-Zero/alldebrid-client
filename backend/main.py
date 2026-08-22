@@ -170,7 +170,7 @@ class RequestBodyLimitMiddleware:
         # application requests. Auth settings are intentionally bounded because
         # the transition state machine reads their body before route validation.
         path = str(scope.get("path") or "")
-        if path == "/login":
+        if scope.get("path") == "/login":
             limit = min(self.max_bytes, 64 * 1024)
         elif path in {
             "/api/settings",

@@ -156,15 +156,21 @@ class DualWindowRateLimiter:
 
 password_failure_throttle = FailureThrottle()
 # Login CSRF state lives for ten minutes with a 512-entry cap. At 40 starts per
-# rolling minute globally, ordinary public login-page issuance cannot exhaust it.
+# rolling minute globally, application-originated challenge issuance stays below
+# capacity even before expired-state cleanup runs.
 login_challenge_rate_limiter = DualWindowRateLimiter(
     per_peer_limit=20,
     global_limit=40,
 )
-# OIDC transactions also live for ten minutes and are capped at 128 entries.
-# Ten starts per rolling minute keeps every application-originated start below
-# that capacity even before expired-state cleanup runs.
+# OIDC transactions live for ten minutes and are capped at 128 entries. Normal
+# public starts and authenticated config-verification starts use independent
+# budgets so a public flood cannot consume the operator's verification quota;
+# their combined ten-minute maxima remain below transaction-store capacity.
 oidc_start_rate_limiter = DualWindowRateLimiter(
     per_peer_limit=6,
-    global_limit=10,
+    global_limit=8,
+)
+oidc_verify_rate_limiter = DualWindowRateLimiter(
+    per_peer_limit=4,
+    global_limit=4,
 )

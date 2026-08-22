@@ -32,8 +32,8 @@
     const footer = document.querySelector('.sidebar-footer');
     if (!footer) return;
 
-    // These inherited convenience links occupied the natural account-action
-    // position. Authentication now owns that space instead.
+    // Authentication now owns the bottom-left action position instead of the
+    // inherited provider/client convenience links.
     footer.querySelector('a[href="https://alldebrid.com"]')?.closest('.conn-row')?.remove();
     document.getElementById('aria2ng-row')?.remove();
 
@@ -46,31 +46,46 @@
     if (!row) {
       row = document.createElement('div');
       row.id = 'sidebar-auth-row';
-      row.className = 'conn-row';
-      row.style.cssText = 'margin-top:8px;padding-top:8px;border-top:1px solid var(--border);margin-bottom:0';
+      row.className = 'nav-item';
+      row.setAttribute('role', 'button');
+      row.setAttribute('tabindex', '0');
+      row.setAttribute('aria-label', 'Log out of DebridPulse');
+      row.style.flexShrink = '0';
+      row.innerHTML = `
+        <span class="icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M10 5H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h4"></path>
+            <path d="M14 8l4 4-4 4"></path>
+            <path d="M18 12H9"></path>
+          </svg>
+        </span>
+        <span class="nav-label">Log Out</span>`;
 
-      const button = document.createElement('button');
-      button.id = 'sidebar-logout';
-      button.type = 'button';
-      button.setAttribute('aria-label', 'Log out of DebridPulse');
-      button.style.cssText = 'width:100%;border:0;background:transparent;color:var(--text3);font:inherit;font-size:11px;cursor:pointer;text-align:left;padding:2px 0;display:flex;align-items:center;gap:6px;transition:color .15s';
-      button.innerHTML = '<span aria-hidden="true">↪</span><span>Log Out</span>';
-      button.addEventListener('mouseenter', () => { button.style.color = 'var(--accent)'; });
-      button.addEventListener('mouseleave', () => { button.style.color = 'var(--text3)'; });
-      button.addEventListener('focus', () => { button.style.color = 'var(--accent)'; });
-      button.addEventListener('blur', () => { button.style.color = 'var(--text3)'; });
-      button.addEventListener('click', async () => {
-        button.disabled = true;
-        const label = button.querySelector('span:last-child');
+      const activate = async () => {
+        if (row.getAttribute('aria-disabled') === 'true') return;
+        row.setAttribute('aria-disabled', 'true');
+        const label = row.querySelector('.nav-label');
         if (label) label.textContent = 'Logging out…';
-        const ok = await logoutSession();
-        if (!ok) {
-          button.disabled = false;
+        try {
+          const ok = await logoutSession();
+          if (!ok) throw new Error('Logout failed');
+        } catch (_) {
+          row.setAttribute('aria-disabled', 'false');
           if (label) label.textContent = 'Log Out';
         }
+      };
+
+      row.addEventListener('click', activate);
+      row.addEventListener('keydown', event => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        activate();
       });
-      row.appendChild(button);
-      footer.appendChild(row);
+
+      // Keep the action full-width and visually identical to Dashboard,
+      // Settings, and the other primary sidebar choices while retaining the
+      // connection-status footer above it.
+      footer.insertAdjacentElement('afterend', row);
     }
   }
 
@@ -155,7 +170,7 @@
   // Authentication UI/help augmentations remain isolated from the inherited
   // settings/index renderers. Dynamic loading keeps the 1.0.6 auth pass additive
   // while the combined app.js bundle finishes defining the legacy application.
-  for (const source of ['/auth-settings.js?v=1', '/auth-help.js?v=1']) {
+  for (const source of ['/auth-settings.js?v=2', '/auth-help.js?v=1']) {
     const script = document.createElement('script');
     script.src = source;
     script.async = false;

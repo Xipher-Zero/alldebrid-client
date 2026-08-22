@@ -101,7 +101,10 @@ def _prospective_password_ready(payload: Mapping[str, Any], current) -> bool:
     stored_hash = str(getattr(current, "auth_password_hash", "") or "").strip()
     clears = {str(item) for item in payload.get("clear_secrets", []) if str(item)}
     if "auth_password" in clears or payload.get("clear_password") is True:
-        stored_hash = ""
+        # Clear intent is destructive and wins over any simultaneously supplied
+        # plaintext. The route does not persist that plaintext, so it must not be
+        # counted as a viable replacement credential here.
+        return False
     # New plaintext will be converted to an Argon2id verifier by save_settings.
     # Existing state counts only when it is already a parseable Argon2id hash.
     return bool(username and (plaintext or is_usable_password_hash(stored_hash)))

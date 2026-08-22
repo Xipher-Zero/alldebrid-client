@@ -6,6 +6,8 @@
   const baseRenderSettings = renderSettings;
   const baseGetFormSettings = getFormSettings;
   const baseSaveSettings = saveSettings;
+  const OIDC_VERIFICATION_MARKER = 'debridpulse.oidc-verification-started';
+  const OIDC_VERIFICATION_MARKER_TTL_MS = 15 * 60 * 1000;
 
   function authEsc(value) {
     return esc(String(value ?? ''));
@@ -26,6 +28,39 @@
   function authStateBadge(label, ok, neutral) {
     const color = neutral ? 'var(--text2)' : (ok ? 'var(--green)' : 'var(--red)');
     return `<span style="font-weight:700;color:${color}">${authEsc(label)}</span>`;
+  }
+
+  function markOidcVerificationStarted() {
+    try {
+      window.sessionStorage.setItem(OIDC_VERIFICATION_MARKER, String(Date.now()));
+    } catch (_) {
+      // Session storage is only UX state; verification itself must still proceed.
+    }
+  }
+
+  function consumeOidcVerificationResult(params) {
+    let started = 0;
+    try {
+      started = Number(window.sessionStorage.getItem(OIDC_VERIFICATION_MARKER) || 0);
+    } catch (_) {
+      return;
+    }
+    if (!started) return;
+
+    const age = Date.now() - started;
+    if (age < 0 || age > OIDC_VERIFICATION_MARKER_TTL_MS) {
+      try { window.sessionStorage.removeItem(OIDC_VERIFICATION_MARKER); } catch (_) {}
+      return;
+    }
+    if (params.get('view') !== 'settings' || params.get('tab') !== 'authentication') return;
+
+    try { window.sessionStorage.removeItem(OIDC_VERIFICATION_MARKER); } catch (_) {}
+    const verified = authSettingsData?.current_session_mechanism === 'oidc_session';
+    if (verified) {
+      toast('OIDC verification successful — provider sign-in and authorization completed.', 'success');
+    } else {
+      toast('OIDC verification failed — no verified OIDC session was established.', 'error');
+    }
   }
 
   function removeLegacyAuthenticationControls() {
@@ -287,6 +322,7 @@
 
     const params = new URLSearchParams(window.location.search);
     switchSettingsTab(params.get('tab') === 'authentication' ? 'tab-authentication' : 'tab-general');
+    consumeOidcVerificationResult(params);
     const avatarUrl = settingsData.discord_avatar_url || '';
     if (avatarUrl && !avatarUrl.includes('github') && !avatarUrl.includes('_DEFAULT')) {
       showAvatarPreview(avatarUrl, 'Custom avatar', 0);
@@ -366,6 +402,7 @@
     try {
       const result = await api('POST', '/auth/oidc/verify-config', verification, 10000);
       if (!result.authorization_url) throw new Error('OIDC verification did not return an authorization URL');
+      markOidcVerificationStarted();
       window.location.assign(result.authorization_url);
     } catch (e) {
       toast(sanitizeErrorMsg(e.message), 'error');

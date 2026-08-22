@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import secrets
 from urllib.parse import parse_qs, urlsplit
 
 from fastapi import APIRouter, Request
@@ -24,8 +25,11 @@ from auth.oidc import (
     oidc_callback_url,
     oidc_configuration,
 )
-from auth.oidc_version import oidc_configuration_version
-from auth.passwords import basic_verification_cache
+from auth.oidc_version import (
+    authentication_configuration_baseline_version,
+    oidc_configuration_version,
+)
+from auth.passwords import basic_verification_cache, is_usable_password_hash
 from auth.pending_oidc import commit_verified_pending_oidc, pending_oidc_store
 from auth.policy import (
     interactive_auth_enabled,
@@ -35,7 +39,7 @@ from auth.policy import (
     safe_return_path,
 )
 from auth.sessions import session_cookie_token, session_store, set_session_cookie
-from auth.transitions import oidc_critical_change
+from auth.transitions import authentication_configuration_lock, oidc_critical_change
 from core.config import apply_settings, get_settings, save_settings
 from core.config_validator import validate_and_sanitise
 
@@ -103,7 +107,6 @@ def _authentication_mode(cfg) -> str:
 
 
 def _local_oidc_state(cfg) -> tuple[bool, str]:
-    """Return locally configured state and derived callback without exposing secrets."""
     candidate = cfg.model_copy(update={"auth_oidc_enabled": True}, deep=True)
     try:
         oidc_configuration(candidate)
@@ -158,8 +161,8 @@ async def _authentication_payload(request: Request) -> dict:
     }
 
 
-def _build_proposed_settings(request: OidcVerificationRequest):
-    current = get_settings()
+def _build_proposed_settings(request: OidcVerificationRequest, *, current=None):
+    current = current if current is not None else get_settings()
     updates: dict[str, object] = {"auth_oidc_enabled": True}
     ordinary_fields = (
         "oidc_provider_name",
@@ -247,7 +250,7 @@ def _prospective_password_ready(candidate, update: AuthenticationConfigUpdate) -
         return bool(str(update.auth_password or ""))
     return bool(
         str(update.auth_password or "")
-        or str(getattr(candidate, "auth_password_hash", "") or "").strip()
+        or is_usable_password_hash(getattr(candidate, "auth_password_hash", ""))
     )
 
 
@@ -391,17 +394,14 @@ async def verify_pending_oidc_configuration(
     request: Request,
     proposed: OidcVerificationRequest,
 ):
-    """Stage proposed OIDC settings and require a complete provider login.
-
-    Nothing is persisted here. The current working configuration remains
-    authoritative unless the matching OIDC callback authenticates and authorizes
-    successfully under this exact proposed configuration.
-    """
+    """Stage proposed OIDC settings and require a complete provider login."""
     principal = getattr(request.state, "principal", None)
     if principal is None or not getattr(principal, "authenticated", False):
         return JSONResponse({"detail": "Authentication required"}, status_code=401)
 
-    candidate = _build_proposed_settings(proposed)
+    current = get_settings()
+    baseline_version = authentication_configuration_baseline_version(current)
+    candidate = _build_proposed_settings(proposed, current=current)
     return_to = safe_return_path(proposed.return_to, default="/settings")
     try:
         authorization_url, correlation = await begin_oidc_login(
@@ -425,6 +425,7 @@ async def verify_pending_oidc_configuration(
         state,
         candidate,
         configuration_version=version,
+        baseline_configuration_version=baseline_version,
         apply_password_enabled=proposed.auth_password_enabled is not None,
     )
     response = JSONResponse(
@@ -483,31 +484,49 @@ async def pending_aware_oidc_callback(
         _clear_pending_correlation_cookie(response)
         return response
 
-    try:
-        committed = commit_verified_pending_oidc(state)
-    except Exception:  # noqa: BLE001 - never expose persistence/config details at the callback boundary
-        committed = False
-    if not committed:
-        response = interactive_routes._issue_login_page(
-            request,
-            return_to="/settings",
-            error="OpenID Connect verification succeeded, but the pending configuration could not be committed. The current configuration remains authoritative.",
-            status_code=500,
-        )
-        _clear_pending_correlation_cookie(response)
-        return response
+    # Serialize baseline validation, persistence, proof-version check, old-session
+    # revocation, and replacement-session creation as one auth configuration event.
+    async with authentication_configuration_lock:
+        try:
+            committed = commit_verified_pending_oidc(state)
+        except Exception:  # noqa: BLE001 - never expose persistence/config details at callback boundary
+            committed = False
+        if not committed:
+            response = interactive_routes._issue_login_page(
+                request,
+                return_to="/settings",
+                error="OpenID Connect verification succeeded, but the pending configuration could not be committed. The current configuration remains authoritative.",
+                status_code=409,
+            )
+            _clear_pending_correlation_cookie(response)
+            return response
 
-    # Commit happened before issuing the replacement application session, so
-    # its credential version is derived from the newly authoritative OIDC config.
-    old_token = session_cookie_token(request)
-    if old_token:
-        session_store.revoke(old_token)
-    cfg = get_settings()
-    lifetime = interactive_routes._session_lifetime_seconds(cfg)
-    token, _record = session_store.create(
-        principal,
-        lifetime_seconds=lifetime,
-    )
+        cfg = get_settings()
+        current_version = oidc_configuration_version(cfg)
+        proof_version = str(principal.credential_version or "")
+        if not proof_version or not current_version or not secrets.compare_digest(
+            proof_version,
+            current_version,
+        ):
+            response = interactive_routes._issue_login_page(
+                request,
+                return_to="/settings",
+                error="OpenID Connect verification completed under stale configuration. Start verification again.",
+                status_code=409,
+            )
+            _clear_pending_correlation_cookie(response)
+            return response
+
+        old_token = session_cookie_token(request)
+        if old_token:
+            session_store.revoke(old_token)
+        lifetime = interactive_routes._session_lifetime_seconds(cfg)
+        token, _record = session_store.create(
+            principal,
+            lifetime_seconds=lifetime,
+            credential_version=proof_version,
+        )
+
     response = RedirectResponse(url=safe_return_path(return_to), status_code=303)
     set_session_cookie(
         response,

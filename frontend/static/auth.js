@@ -28,6 +28,52 @@
     }
   }
 
+  function syncSidebarSessionUi(data) {
+    const footer = document.querySelector('.sidebar-footer');
+    if (!footer) return;
+
+    // These inherited convenience links occupied the natural account-action
+    // position. Authentication now owns that space instead.
+    footer.querySelector('a[href="https://alldebrid.com"]')?.closest('.conn-row')?.remove();
+    document.getElementById('aria2ng-row')?.remove();
+
+    let row = document.getElementById('sidebar-auth-row');
+    if (!data?.authenticated) {
+      row?.remove();
+      return;
+    }
+
+    if (!row) {
+      row = document.createElement('div');
+      row.id = 'sidebar-auth-row';
+      row.className = 'conn-row';
+      row.style.cssText = 'margin-top:8px;padding-top:8px;border-top:1px solid var(--border);margin-bottom:0';
+
+      const button = document.createElement('button');
+      button.id = 'sidebar-logout';
+      button.type = 'button';
+      button.setAttribute('aria-label', 'Log out of DebridPulse');
+      button.style.cssText = 'width:100%;border:0;background:transparent;color:var(--text3);font:inherit;font-size:11px;cursor:pointer;text-align:left;padding:2px 0;display:flex;align-items:center;gap:6px;transition:color .15s';
+      button.innerHTML = '<span aria-hidden="true">↪</span><span>Log Out</span>';
+      button.addEventListener('mouseenter', () => { button.style.color = 'var(--accent)'; });
+      button.addEventListener('mouseleave', () => { button.style.color = 'var(--text3)'; });
+      button.addEventListener('focus', () => { button.style.color = 'var(--accent)'; });
+      button.addEventListener('blur', () => { button.style.color = 'var(--text3)'; });
+      button.addEventListener('click', async () => {
+        button.disabled = true;
+        const label = button.querySelector('span:last-child');
+        if (label) label.textContent = 'Logging out…';
+        const ok = await logoutSession();
+        if (!ok) {
+          button.disabled = false;
+          if (label) label.textContent = 'Log Out';
+        }
+      });
+      row.appendChild(button);
+      footer.appendChild(row);
+    }
+  }
+
   async function refreshSession({force = false} = {}) {
     if (sessionRequest && !force) return sessionRequest;
     sessionRequest = nativeFetch('/api/auth/session', {
@@ -39,6 +85,7 @@
       if (response.status === 401) {
         csrfToken = '';
         sessionState = null;
+        syncSidebarSessionUi(null);
         redirectToLogin();
         return null;
       }
@@ -46,6 +93,7 @@
       const data = await response.json();
       sessionState = data;
       csrfToken = String(data && data.csrf_token || '');
+      syncSidebarSessionUi(data);
       return data;
     }).catch(() => sessionState).finally(() => {
       sessionRequest = null;
@@ -77,19 +125,28 @@
     if (sameOrigin && response.status === 401 && window.location.pathname !== '/login') {
       csrfToken = '';
       sessionState = null;
+      syncSidebarSessionUi(null);
       redirectToLogin();
     }
     return response;
   };
 
+  async function logoutSession() {
+    const response = await window.fetch('/api/auth/logout', {method: 'POST'});
+    if (response.ok) {
+      csrfToken = '';
+      sessionState = null;
+      syncSidebarSessionUi(null);
+      window.location.assign('/login');
+      return true;
+    }
+    return false;
+  }
+
   window.debridPulseAuth = Object.freeze({
     refreshSession,
     session: () => sessionState,
-    logout: async () => {
-      const response = await window.fetch('/api/auth/logout', {method: 'POST'});
-      if (response.ok) window.location.assign('/login');
-      return response.ok;
-    }
+    logout: logoutSession,
   });
 
   refreshSession().catch(() => {});

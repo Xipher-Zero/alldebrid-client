@@ -167,10 +167,21 @@
   refreshSession().catch(() => {});
   window.setInterval(() => refreshSession({force: true}).catch(() => {}), 60000);
 
+  // Authentication-specific presentation stays additive to the inherited
+  // settings renderer. Load the stylesheet before the augmentation scripts so
+  // the first transformed render uses the final layout immediately.
+  if (!document.querySelector('link[data-debridpulse-auth-ux]')) {
+    const style = document.createElement('link');
+    style.rel = 'stylesheet';
+    style.href = '/auth-ux.css?v=1';
+    style.dataset.debridpulseAuthUx = 'true';
+    document.head.appendChild(style);
+  }
+
   // Authentication UI/help augmentations remain isolated from the inherited
   // settings/index renderers. Dynamic loading keeps the 1.0.6 auth pass additive
   // while the combined app.js bundle finishes defining the legacy application.
-  for (const source of ['/auth-settings.js?v=2', '/auth-help.js?v=1']) {
+  for (const source of ['/auth-settings.js?v=2', '/auth-help.js?v=1', '/auth-ux.js?v=1']) {
     const script = document.createElement('script');
     script.src = source;
     script.async = false;

@@ -98,7 +98,7 @@ async def test_cross_site_login_mutation_is_still_rejected(monkeypatch):
 
 def test_invalid_public_base_path_is_not_trusted_for_secure_classification(monkeypatch):
     monkeypatch.setenv("PUBLIC_BASE_URL", "https://download.xipherzero.com/not-an-origin")
-    request = _request(host="download.xipherzero.com")
+    request = _request(host="download.xipherzero.local")
     assert request_is_secure(request) is False
 
 
@@ -122,3 +122,17 @@ def test_auth_settings_present_external_base_as_general_security_setting():
     assert "External Base URL (Canonical Origin)" in source
     assert "reverse-proxy origin validation" in source
     assert "PUBLIC_BASE_URL environment variable" in source
+
+
+def test_authentication_ux_assets_are_packaged_and_loaded():
+    static = Path(__file__).resolve().parents[2] / "frontend" / "static"
+    bootstrap = (static / "auth.js").read_text()
+    ux_script = (static / "auth-ux.js").read_text()
+    ux_style = (static / "auth-ux.css").read_text()
+
+    assert "/auth-ux.js?v=1" in bootstrap
+    assert "/auth-ux.css?v=1" in bootstrap
+    assert "External Authentication Origin" in ux_script
+    assert "Authorization & Claim Mapping" in ux_script
+    assert "#settings-form .stab-panel.active" in ux_style
+    assert "max-width: none" in ux_style

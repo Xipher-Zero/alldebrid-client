@@ -8,6 +8,7 @@ from fastapi import Request
 from auth.middleware import _session_record_still_valid
 from auth.models import AuthMechanism, Principal
 from auth.oidc_version import oidc_configuration_version
+from auth.passwords import hash_password
 from auth.pending_oidc import PendingOidcConfigurationStore
 from auth.transitions import oidc_critical_change, settings_transition_rejection
 
@@ -16,7 +17,7 @@ def _settings(**updates):
     values = {
         "auth_password_enabled": True,
         "auth_username": "operator",
-        "auth_password_hash": "$argon2id$configured",
+        "auth_password_hash": hash_password("secret"),
         "auth_oidc_enabled": True,
         "oidc_provider_name": "Authentik",
         "oidc_issuer_url": "https://id.example/application/o/debridpulse",

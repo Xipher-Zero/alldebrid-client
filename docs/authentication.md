@@ -32,7 +32,7 @@ environment:
   PUBLIC_BASE_URL: https://download.example.com
 ```
 
-The equivalent persisted setting is available under **Settings → Authentication → Sessions & Security → External Base URL (Canonical Origin)**. `PUBLIC_BASE_URL` takes precedence when both are present; the UI displays the effective environment override as read-only.
+The equivalent persisted setting is available under **Settings → Authentication → External Authentication Origin → Canonical External URL**. `PUBLIC_BASE_URL` takes precedence when both are present; the UI displays the effective environment override as read-only.
 
 Use only an HTTPS origin in `scheme://host[:port]` form, with no path, query, fragment, or credentials. Configuring an external base does not disable direct LAN access: a direct LAN request continues to be evaluated against its own Host/scheme, while a request whose Host matches the configured external authority can be recognized as the canonical HTTPS origin across an internal HTTP reverse-proxy hop.
 
@@ -151,9 +151,9 @@ Authentication request bodies are bounded before authentication/configuration mi
 
 ## Reverse proxies
 
-For externally proxied deployments, terminate HTTPS at the public ingress and set **External Base URL (Canonical Origin)** to the canonical external origin. Ensure the proxy preserves the normal Host/protocol information expected by the deployment and does not rewrite the registered callback path.
+For externally proxied deployments, terminate HTTPS at the public ingress and set **Canonical External URL** in the **External Authentication Origin** card to the canonical external origin. Ensure the proxy preserves the normal Host/protocol information expected by the deployment and does not rewrite the registered callback path.
 
-DebridPulse does not independently trust an arbitrary client-supplied `X-Forwarded-Proto` header when deciding whether Password-session/login-CSRF cookies should use the HTTPS-only `__Host-` form. HTTPS is established from the ASGI request scheme after the server's trusted-proxy handling, or from the operator-configured HTTPS **Public Base URL** when its authority matches the request Host. This keeps secure-cookie classification tied to trusted deployment state rather than a spoofable request header.
+DebridPulse does not independently trust an arbitrary client-supplied `X-Forwarded-Proto` header when deciding whether Password-session/login-CSRF cookies should use the HTTPS-only `__Host-` form. HTTPS is established from the ASGI request scheme after the server's trusted-proxy handling, or from the operator-configured HTTPS canonical external URL when its authority matches the request Host. This keeps secure-cookie classification tied to trusted deployment state rather than a spoofable request header.
 
 If a non-loopback reverse proxy is expected to supply forwarded client/scheme information to Uvicorn, configure Uvicorn's `FORWARDED_ALLOW_IPS` allowlist for the actual proxy peer or proxy network. Do not use a blanket `*` trust setting on an interface reachable by untrusted clients. If forwarded client addresses are not trusted/configured, DebridPulse safely treats the transport proxy itself as the peer for authentication throttling; this can make multiple users behind the same proxy share the per-peer budget but does not create an authentication bypass.
 

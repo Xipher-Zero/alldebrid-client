@@ -16,7 +16,7 @@ from auth.csrf import (
     login_csrf_store,
     set_login_csrf_cookie,
 )
-from auth.manager import verify_local_credentials
+from auth.manager import PasswordAuthenticationBusy, verify_local_credentials
 from auth.models import AuthMechanism, Principal
 from auth.oidc import (
     OIDC_CORRELATION_COOKIE,
@@ -60,6 +60,9 @@ def _session_record_current(record, cfg) -> bool:
     mechanism = record.principal.mechanism
     if mechanism is AuthMechanism.PASSWORD_SESSION:
         if not password_auth_ready(cfg):
+            return False
+        current_username = str(getattr(cfg, "auth_username", "") or "").strip()
+        if not current_username or record.principal.subject != current_username:
             return False
         current_version = password_credential_version(getattr(cfg, "auth_password_hash", ""))
         return bool(current_version and record.credential_version == current_version)
@@ -320,12 +323,23 @@ async def password_login(request: Request):
             status_code=403,
         )
 
-    if not await verify_local_credentials(
-        request,
-        username,
-        password,
-        settings=cfg,
-    ):
+    try:
+        verified = await verify_local_credentials(
+            request,
+            username,
+            password,
+            settings=cfg,
+        )
+    except PasswordAuthenticationBusy:
+        response = _issue_login_page(
+            request,
+            return_to=return_to,
+            error="Too many sign-in attempts are already being processed. Try again shortly.",
+            status_code=429,
+        )
+        response.headers["Retry-After"] = "2"
+        return response
+    if not verified:
         return _issue_login_page(
             request,
             return_to=return_to,

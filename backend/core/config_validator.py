@@ -66,13 +66,14 @@ def _validate(cfg) -> List[Tuple[str, str, Any, Any]]:
         if val and not _is_valid_url(val):
             warn(field, "not a valid HTTP(S) URL — webhook will not fire", val)
 
+    public_base = getattr(cfg, "public_base_url", "")
+    if public_base and not _is_valid_url(public_base, require_https=True):
+        warn("public_base_url", "external base URL must use HTTPS", public_base)
+
     if getattr(cfg, "auth_oidc_enabled", False):
         issuer = getattr(cfg, "oidc_issuer_url", "")
         if issuer and not _is_valid_url(issuer, require_https=True):
             warn("oidc_issuer_url", "OIDC issuer must use HTTPS", issuer)
-        public_base = getattr(cfg, "public_base_url", "")
-        if public_base and not _is_valid_url(public_base, require_https=True):
-            warn("public_base_url", "OIDC public base URL must use HTTPS", public_base)
 
     # Discord avatar must be a real HTTP URL, not a data URI or SVG
     avatar = cfg.discord_avatar_url or ""

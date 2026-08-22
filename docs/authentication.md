@@ -21,6 +21,23 @@ The interactive authentication state is one of:
 
 The API token is supplemental. Configuring one does **not** create a separate API-token-only deployment mode, and it does not turn an intentionally open installation into a protected one.
 
+## External access and canonical origin
+
+When DebridPulse is exposed through an HTTPS reverse proxy, configure the exact externally reachable origin even if only Username & Password authentication is enabled. The same canonical origin is used for browser mutation-origin validation, HTTPS-only cookie classification, and OIDC callback construction.
+
+The recommended deployment-level setting is:
+
+```yaml
+environment:
+  PUBLIC_BASE_URL: https://download.example.com
+```
+
+The equivalent persisted setting is available under **Settings → Authentication → Sessions & Security → External Base URL (Canonical Origin)**. `PUBLIC_BASE_URL` takes precedence when both are present; the UI displays the effective environment override as read-only.
+
+Use only an HTTPS origin in `scheme://host[:port]` form, with no path, query, fragment, or credentials. Configuring an external base does not disable direct LAN access: a direct LAN request continues to be evaluated against its own Host/scheme, while a request whose Host matches the configured external authority can be recognized as the canonical HTTPS origin across an internal HTTP reverse-proxy hop.
+
+`CORS_ORIGINS` is not a substitute for the canonical origin. CORS controls intentionally permitted cross-origin API callers; the External Base URL describes DebridPulse's own externally reachable browser origin.
+
 ## Username & Password
 
 DebridPulse stores the local password only as an Argon2id verifier. The plaintext password is accepted only as transient input when setting or replacing the credential.
@@ -134,7 +151,7 @@ Authentication request bodies are bounded before authentication/configuration mi
 
 ## Reverse proxies
 
-For OIDC deployments, terminate HTTPS at the public ingress and set **Public Base URL** to the canonical external origin. Ensure the proxy preserves the normal Host/protocol information expected by the deployment and does not rewrite the registered callback path.
+For externally proxied deployments, terminate HTTPS at the public ingress and set **External Base URL (Canonical Origin)** to the canonical external origin. Ensure the proxy preserves the normal Host/protocol information expected by the deployment and does not rewrite the registered callback path.
 
 DebridPulse does not independently trust an arbitrary client-supplied `X-Forwarded-Proto` header when deciding whether Password-session/login-CSRF cookies should use the HTTPS-only `__Host-` form. HTTPS is established from the ASGI request scheme after the server's trusted-proxy handling, or from the operator-configured HTTPS **Public Base URL** when its authority matches the request Host. This keeps secure-cookie classification tied to trusted deployment state rather than a spoofable request header.
 

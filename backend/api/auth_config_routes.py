@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import secrets
 from urllib.parse import parse_qs, urlsplit
 
@@ -34,6 +35,7 @@ from auth.passwords import basic_verification_cache, is_usable_password_hash
 from auth.pending_oidc import commit_verified_pending_oidc, pending_oidc_store
 from auth.policy import (
     interactive_auth_enabled,
+    normalized_origin,
     oidc_auth_enabled,
     password_auth_enabled,
     password_auth_ready,
@@ -96,6 +98,14 @@ class ApiTokenEnableRequest(BaseModel):
     enabled: bool
 
 
+def _valid_public_base_url(value: str) -> bool:
+    raw = str(value or "").strip()
+    if not raw:
+        return True
+    identity = normalized_origin(raw)
+    return bool(identity is not None and identity[0] == "https")
+
+
 def _authentication_mode(cfg) -> str:
     password = password_auth_enabled(cfg)
     oidc = oidc_auth_enabled(cfg)
@@ -132,6 +142,9 @@ async def _authentication_payload(request: Request) -> dict:
     cfg = get_settings()
     oidc_configured, callback_url = _local_oidc_state(cfg)
     principal = getattr(request.state, "principal", Principal.anonymous())
+    configured_public_base = str(getattr(cfg, "public_base_url", "") or "").strip()
+    env_public_base = str(os.getenv("PUBLIC_BASE_URL", "") or "").strip()
+    effective_public_base = env_public_base or configured_public_base
     return {
         "mode": _authentication_mode(cfg),
         "authentication_required": interactive_auth_enabled(cfg),
@@ -154,7 +167,9 @@ async def _authentication_payload(request: Request) -> dict:
         "oidc_allowed_emails": list(getattr(cfg, "oidc_allowed_emails", []) or []),
         "oidc_allowed_groups": list(getattr(cfg, "oidc_allowed_groups", []) or []),
         "oidc_group_claim": str(getattr(cfg, "oidc_group_claim", "groups") or "groups"),
-        "public_base_url": str(getattr(cfg, "public_base_url", "") or ""),
+        "public_base_url": configured_public_base,
+        "public_base_url_effective": effective_public_base,
+        "public_base_url_env_override": bool(env_public_base),
         "oidc_callback_url": callback_url,
         "api_token_enabled": api_token_store.enabled,
         "api_token_configured": api_token_store.configured,
@@ -291,6 +306,12 @@ async def get_authentication_config(request: Request):
 async def update_authentication_config(request: Request, update: AuthenticationConfigUpdate):
     current = get_settings()
     candidate = _build_authentication_update(update)
+
+    if update.public_base_url is not None and not _valid_public_base_url(update.public_base_url):
+        return JSONResponse(
+            {"detail": "External Base URL must be an HTTPS origin in the form https://host[:port]"},
+            status_code=400,
+        )
 
     if bool(getattr(candidate, "auth_password_enabled", False)) and not _prospective_password_ready(candidate, update):
         return JSONResponse(

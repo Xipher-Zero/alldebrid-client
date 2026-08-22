@@ -26,7 +26,7 @@ from auth.policy import (
     password_auth_ready,
     safe_return_path,
 )
-from auth.sessions import CSRF_HEADER, session_cookie_token, session_store
+from auth.sessions import CSRF_HEADER, request_is_secure, session_cookie_token, session_store
 from auth.transitions import (
     authentication_configuration_lock,
     is_auth_settings_mutation,
@@ -175,11 +175,11 @@ async def enforce_general_web_security(
 
     origin_identity = normalized_origin(origin)
     request_host = str(request.headers.get("Host", "") or "").strip()
-    # Origin validation must use the ASGI transport scheme, not the broader
-    # secure-cookie classification. request_is_secure() may infer HTTPS from
-    # PUBLIC_BASE_URL; using that inference here can reject direct HTTP LAN login.
-    # Uvicorn rewrites scope["scheme"] when trusted proxy headers are accepted.
-    request_scheme = str(request.url.scheme or "http").casefold()
+    # Public HTTPS behind an internal HTTP reverse-proxy hop is established only
+    # from trusted ASGI proxy handling or the operator-owned canonical base URL.
+    # Direct LAN hosts do not match that canonical authority and retain their
+    # actual request scheme.
+    request_scheme = "https" if request_is_secure(request) else str(request.url.scheme or "http").casefold()
     request_identity = normalized_origin(f"{request_scheme}://{request_host}")
     configured_identities = {
         identity
@@ -190,23 +190,12 @@ async def enforce_general_web_security(
         origin_identity is not None and origin_identity in configured_identities
     )
 
-    # A browser-generated same-origin Fetch Metadata signal is stronger than
-    # reconstructing the public origin from server-side topology. Sec-Fetch-Site
-    # is a forbidden request header for browser JavaScript, so a cross-origin
-    # page cannot forge `same-origin`. Keep Origin syntax validation first, keep
-    # cross-site requests fail-closed, and use exact server reconstruction as the
-    # fallback for clients/browsers that omit Fetch Metadata.
-    if origin_identity is None:
-        return Response(content="Forbidden origin", status_code=403)
-
     if fetch_site == "cross-site" and not configured_cross_origin:
         return Response(content="Forbidden request context", status_code=403)
 
-    if fetch_site == "same-origin":
-        return await call_next(request)
-
     if (
-        request_identity is None
+        origin_identity is None
+        or request_identity is None
         or (origin_identity != request_identity and not configured_cross_origin)
     ):
         return Response(content="Forbidden origin", status_code=403)

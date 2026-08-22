@@ -49,6 +49,13 @@
     const passwordConfigured = a.password_configured ? 'Configured' : 'Not configured';
     const oidcSecretConfigured = a.oidc_client_secret_configured ? 'Configured — blank keeps current secret' : 'Not configured / public client';
     const tokenConfigured = a.api_token_configured ? 'Configured' : 'Not configured';
+    const externalBase = a.public_base_url_env_override
+      ? (a.public_base_url_effective || '')
+      : (a.public_base_url || '');
+    const externalBaseReadonly = a.public_base_url_env_override ? 'readonly' : '';
+    const externalBaseHint = a.public_base_url_env_override
+      ? 'Effective value is supplied by the PUBLIC_BASE_URL environment variable in the deployment and overrides the persisted UI value.'
+      : 'Canonical externally reachable HTTPS origin. Used for reverse-proxy origin validation, secure cookies, and OIDC callback construction.';
 
     return `<div class="stab-panel" id="tab-authentication">
       <div class="scard">
@@ -113,8 +120,7 @@
             <label style="display:flex;gap:8px;align-items:center;margin-top:8px;font-size:11px;color:var(--text2)"><input type="checkbox" id="auth-clear-oidc-secret"> Explicitly clear stored client secret</label>
           </div>
           <div class="form-group"><label class="form-label">Scopes</label><input class="input" id="auth-oidc-scopes" value="${authEsc(authScopes(a.oidc_scopes))}" placeholder="openid profile email"></div>
-          <div class="form-group"><label class="form-label">Public Base URL</label><input class="input" id="auth-public-base-url" value="${authEsc(a.public_base_url || '')}" placeholder="https://debridpulse.example"></div>
-          <div class="form-group"><label class="form-label">Derived Callback URL</label><input class="input" value="${authEsc(a.oidc_callback_url || '')}" readonly></div>
+          <div class="form-group"><label class="form-label">Derived Callback URL</label><input class="input" value="${authEsc(a.oidc_callback_url || 'Configure External Base URL to derive callback')}" readonly></div>
 
           <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">
             <div class="toggle-row">
@@ -155,6 +161,11 @@
       <div class="scard">
         <div class="scard-header">🕒 Sessions &amp; Security</div>
         <div class="scard-body">
+          <div class="form-group">
+            <label class="form-label">External Base URL (Canonical Origin)</label>
+            <input class="input" id="auth-public-base-url" value="${authEsc(externalBase)}" placeholder="https://download.example.com" ${externalBaseReadonly}>
+            <div class="form-hint">${authEsc(externalBaseHint)}</div>
+          </div>
           <div class="form-group"><label class="form-label">Browser Session Lifetime (hours)</label><input class="input" type="number" id="auth-session-hours" min="1" max="168" value="${Number(a.session_lifetime_hours || 12)}"></div>
           <div class="form-hint">Current mechanism: <b>${authEsc(currentMechanism)}</b> · Active in-process sessions: <b>${Number(a.session_count || 0)}</b></div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px"><button class="btn btn-ghost btn-sm" type="button" onclick="logoutAuthenticationSession(this)">Log Out</button></div>
@@ -249,7 +260,7 @@
       oidc_allowed_emails: lines('auth-oidc-emails'),
       oidc_allowed_groups: lines('auth-oidc-groups'),
       oidc_group_claim: value('auth-oidc-group-claim') || 'groups',
-      public_base_url: value('auth-public-base-url'),
+      public_base_url: authSettingsData?.public_base_url_env_override ? undefined : value('auth-public-base-url'),
     };
   }
 

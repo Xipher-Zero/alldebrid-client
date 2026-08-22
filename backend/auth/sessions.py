@@ -220,6 +220,10 @@ def _configured_https_origin_matches(request: Request) -> bool:
         return False
     if parsed.scheme.casefold() != "https":
         return False
+    if parsed.username is not None or parsed.password is not None:
+        return False
+    if parsed.query or parsed.fragment or parsed.path not in ("", "/"):
+        return False
     configured_authority = _authority(configured, default_scheme="https")
     request_authority = _authority(
         str(request.headers.get("Host", "") or ""),

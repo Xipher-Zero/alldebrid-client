@@ -73,9 +73,17 @@ Do not enable OIDC without an authorization policy that matches the intended use
 
 Enabling OIDC never silently disables a working local password.
 
+A fresh installation that is still in intentional open mode cannot make an **unproven OIDC configuration its first and only interactive authentication mechanism**. There is no authenticated DebridPulse session in that state from which to prove or recover a bad identity-provider configuration. Bootstrap OIDC safely in this order:
+
+1. configure and enable **Username & Password** together with the proposed OIDC settings;
+2. save the configuration and sign in with the new local password;
+3. use **Verify Sign-In** and complete the real provider flow through the externally reachable HTTPS URL;
+4. confirm normal OIDC sign-in works;
+5. only then disable Username & Password if OIDC-only operation is desired.
+
 Username & Password cannot be disabled in favor of OIDC until a **real OIDC login** has completed successfully. Discovery or a configuration-only HTTP check is not sufficient.
 
-When OIDC is already the sole interactive mechanism, security-critical OIDC changes are staged as a pending configuration. The current known-working configuration remains authoritative until the proposed settings themselves complete a successful OIDC login. If another authentication change is committed while that verification is in flight, the pending proposal is considered stale and must be verified again rather than overwriting the newer state.
+When OIDC is already the sole interactive mechanism, security-critical OIDC changes are staged as a pending configuration. The current known-working configuration remains authoritative until the proposed settings themselves complete a successful OIDC login. If another authentication change is committed while that verification is in flight, the pending proposal is considered stale and must be verified again rather than overwriting the newer state. The successful proof is bound to the exact staged OIDC configuration before that configuration can be persisted.
 
 Use **Verify Sign-In** in the Authentication settings tab after entering proposed OIDC changes.
 
@@ -118,17 +126,21 @@ State-changing requests made through an application session require the session 
 
 Same-origin EventSource connections use the normal browser session cookie. REST requests that are not browser navigation receive ordinary HTTP authentication failures rather than identity-provider HTML.
 
+Authentication request bodies are bounded before authentication/configuration middleware can buffer them. Public login/OIDC-start state allocation and expensive password verification also have bounded admission/rate limits so unauthenticated request bursts cannot create unbounded in-process authentication work.
+
 ## Reverse proxies
 
 For OIDC deployments, terminate HTTPS at the public ingress and set **Public Base URL** to the canonical external origin. Ensure the proxy preserves the normal Host/protocol information expected by the deployment and does not rewrite the registered callback path.
 
 DebridPulse does not independently trust an arbitrary client-supplied `X-Forwarded-Proto` header when deciding whether Password-session/login-CSRF cookies should use the HTTPS-only `__Host-` form. HTTPS is established from the ASGI request scheme after the server's trusted-proxy handling, or from the operator-configured HTTPS **Public Base URL** when its authority matches the request Host. This keeps secure-cookie classification tied to trusted deployment state rather than a spoofable request header.
 
+If a non-loopback reverse proxy is expected to supply forwarded client/scheme information to Uvicorn, configure Uvicorn's `FORWARDED_ALLOW_IPS` allowlist for the actual proxy peer or proxy network. Do not use a blanket `*` trust setting on an interface reachable by untrusted clients. If forwarded client addresses are not trusted/configured, DebridPulse safely treats the transport proxy itself as the peer for authentication throttling; this can make multiple users behind the same proxy share the per-peer budget but does not create an authentication bypass.
+
 DebridPulse does not require an external authentication proxy when its native Password/OIDC mechanisms are enabled. An external proxy may still be used as an additional perimeter control, but it should not be relied on to repair an intentionally misconfigured native authentication state.
 
 ## Release validation boundary
 
-The automated test suite exercises OIDC protocol validation, state/nonce/PKCE handling, authorization policy, pending-configuration lockout protection, session behavior, HTTP Basic coexistence, bearer-token behavior, and browser security boundaries with controlled test providers and responses.
+The automated test suite exercises OIDC protocol validation, state/nonce/PKCE handling, authorization policy, pending-configuration lockout protection, session behavior, HTTP Basic coexistence, bearer-token behavior, browser security boundaries, authentication admission limits, and pre-persistence proof/configuration binding with controlled test providers and responses.
 
 Those tests do not prove a particular external identity-provider, public DNS, TLS termination, or reverse-proxy deployment. Before relying on OIDC as the sole interactive mechanism in production, complete **Verify Sign-In** through the actual externally reachable HTTPS URL and configured identity provider while the known-working Password fallback is still available.
 

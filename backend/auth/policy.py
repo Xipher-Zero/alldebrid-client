@@ -72,8 +72,35 @@ def safe_return_path(value: str, *, default: str = "/") -> str:
     return candidate
 
 
+def normalized_origin(value: str) -> tuple[str, str, int] | None:
+    """Return a canonical HTTP(S) origin tuple or ``None`` when malformed.
+
+    Scheme is part of the browser origin. Treating ``http://host`` and
+    ``https://host`` as equivalent would weaken the cross-site mutation boundary
+    on deployments that expose both transports or have an HTTP downgrade path.
+    """
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = urlsplit(raw)
+        scheme = parsed.scheme.casefold()
+        if scheme not in {"http", "https"} or not parsed.hostname:
+            return None
+        if parsed.username is not None or parsed.password is not None:
+            return None
+        if parsed.path not in ("", "/") or parsed.query or parsed.fragment:
+            return None
+        port = parsed.port
+    except ValueError:
+        return None
+    if port is None:
+        port = 443 if scheme == "https" else 80
+    return scheme, parsed.hostname.casefold(), int(port)
+
+
 def normalized_origin_host(origin: str) -> str:
-    """Return a case-folded origin authority, or an empty string if malformed."""
+    """Compatibility helper returning the case-folded origin authority."""
     try:
         return (urlparse(str(origin or "").strip()).netloc or "").casefold()
     except ValueError:

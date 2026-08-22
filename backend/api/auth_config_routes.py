@@ -247,7 +247,9 @@ def _prospective_password_ready(candidate, update: AuthenticationConfigUpdate) -
     if not username:
         return False
     if update.clear_password:
-        return bool(str(update.auth_password or ""))
+        # Clear intent wins over simultaneous plaintext in _build_authentication_update
+        # and save_settings(), so it cannot be counted as a replacement credential.
+        return False
     return bool(
         str(update.auth_password or "")
         or is_usable_password_hash(getattr(candidate, "auth_password_hash", ""))

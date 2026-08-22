@@ -31,6 +31,10 @@ from core.config import (
 from core.config_validator import validate_and_sanitise
 from core.logging_utils import sanitize_exception, sanitize_log_value
 from core.version import normalize_version_tag, read_version
+from auth.models import AuthMechanism
+from auth.oidc_version import oidc_configuration_version
+from auth.passwords import basic_verification_cache, password_credential_version
+from auth.sessions import session_store
 from core import scheduler as scheduler_runtime
 from db.database import DB_PATH, database_maintenance, get_db
 
@@ -149,6 +153,30 @@ def _public_settings(settings: AppSettings) -> dict:
     return data
 
 
+def _password_auth_binding(settings: AppSettings) -> tuple[bool, str, str]:
+    return (
+        bool(getattr(settings, "auth_password_enabled", False)),
+        str(getattr(settings, "auth_username", "") or "").strip(),
+        password_credential_version(getattr(settings, "auth_password_hash", "")),
+    )
+
+
+def _oidc_auth_binding(settings: AppSettings) -> tuple[bool, str]:
+    return (
+        bool(getattr(settings, "auth_oidc_enabled", False)),
+        oidc_configuration_version(settings),
+    )
+
+
+def _revoke_stale_authentication_state(previous: AppSettings, current: AppSettings) -> None:
+    """Give the legacy broad Settings route the same revocation semantics as the dedicated auth route."""
+    if _password_auth_binding(previous) != _password_auth_binding(current):
+        basic_verification_cache.clear()
+        session_store.revoke_mechanism(AuthMechanism.PASSWORD_SESSION)
+    if _oidc_auth_binding(previous) != _oidc_auth_binding(current):
+        session_store.revoke_mechanism(AuthMechanism.OIDC_SESSION)
+
+
 @router.get("/settings")
 async def get_settings_ep():
     return _public_settings(get_settings())
@@ -240,6 +268,7 @@ async def update_settings(new: SettingsUpdate):
         clean = clean.model_copy(update={"aria2_max_active_downloads": clean.max_concurrent_downloads})
     save_settings(clean)
     apply_settings(clean)
+    _revoke_stale_authentication_state(previous, clean)
     transfer_service.reset_services()
     if getattr(clean, "aria2_mode", "external") == "builtin":
         if (getattr(previous, "aria2_mode", "external") == "builtin"

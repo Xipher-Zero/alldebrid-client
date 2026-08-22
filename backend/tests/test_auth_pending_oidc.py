@@ -16,6 +16,7 @@ from auth.pending_oidc import (
     commit_verified_pending_oidc,
     pending_oidc_store,
 )
+from auth.throttle import oidc_verify_rate_limiter
 from core import config as config_module
 from core.config import AppSettings
 
@@ -73,6 +74,13 @@ def _response_cookie(response, name):
         if name in parsed:
             return parsed[name]
     return None
+
+
+@pytest.fixture(autouse=True)
+def _clear_oidc_verification_rate_limit():
+    oidc_verify_rate_limiter.clear()
+    yield
+    oidc_verify_rate_limiter.clear()
 
 
 def test_pending_builder_preserves_replace_and_explicit_clear_secret_intent(monkeypatch):
@@ -150,12 +158,13 @@ def test_verified_pending_oidc_merge_applies_password_enable_only_when_explicitl
 def test_verified_pending_oidc_commit_rejects_changed_auth_baseline(monkeypatch):
     baseline = _settings()
     candidate = _settings(oidc_client_id="replacement-client")
+    candidate_version = oidc_configuration_version(candidate)
     newer = _settings(oidc_allowed_groups=["newer-policy"])
     pending_oidc_store.clear()
     pending_oidc_store.stage(
         "pending-state",
         candidate,
-        configuration_version=oidc_configuration_version(candidate),
+        configuration_version=candidate_version,
         baseline_configuration_version=authentication_configuration_baseline_version(baseline),
     )
     monkeypatch.setattr(config_module, "_settings", newer)
@@ -164,8 +173,34 @@ def test_verified_pending_oidc_commit_rejects_changed_auth_baseline(monkeypatch)
         raise AssertionError("stale pending configuration must not persist")
 
     monkeypatch.setattr(config_module, "save_settings", must_not_save)
-    assert commit_verified_pending_oidc("pending-state") is False
+    assert commit_verified_pending_oidc(
+        "pending-state",
+        expected_configuration_version=candidate_version,
+    ) is False
     assert config_module.get_settings() is newer
+
+
+def test_pending_oidc_commit_rejects_mismatched_proof_before_persistence(monkeypatch):
+    current = _settings()
+    candidate = _settings(oidc_client_id="replacement-client")
+    candidate_version = oidc_configuration_version(candidate)
+    pending_oidc_store.clear()
+    pending_oidc_store.stage(
+        "pending-state",
+        candidate,
+        configuration_version=candidate_version,
+        baseline_configuration_version=authentication_configuration_baseline_version(current),
+    )
+    monkeypatch.setattr(config_module, "_settings", current)
+    saves = []
+    monkeypatch.setattr(config_module, "save_settings", lambda value: saves.append(value))
+
+    assert commit_verified_pending_oidc(
+        "pending-state",
+        expected_configuration_version="proof-from-different-config",
+    ) is False
+    assert saves == []
+    assert config_module.get_settings() is current
 
 
 @pytest.mark.asyncio
@@ -224,7 +259,7 @@ async def test_failed_pending_callback_never_commits_proposed_config(monkeypatch
     monkeypatch.setattr(
         auth_config_routes,
         "commit_verified_pending_oidc",
-        lambda _state: calls.append("commit") or True,
+        lambda _state, **_kwargs: calls.append("commit") or True,
     )
 
     response = await auth_config_routes.pending_aware_oidc_callback(
@@ -260,8 +295,9 @@ async def test_successful_pending_callback_commits_before_new_session(monkeypatc
         events.append("verified")
         return principal, "/settings"
 
-    def fake_commit(state):
+    def fake_commit(state, *, expected_configuration_version):
         assert state == "pending-state"
+        assert expected_configuration_version == version
         events.append("committed")
         pending_oidc_store.discard(state)
         return True

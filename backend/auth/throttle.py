@@ -170,7 +170,9 @@ oidc_start_rate_limiter = DualWindowRateLimiter(
     per_peer_limit=6,
     global_limit=8,
 )
+# Pending verified configurations have their own 32-entry store. Three starts
+# per rolling minute keeps that ten-minute store below capacity too.
 oidc_verify_rate_limiter = DualWindowRateLimiter(
-    per_peer_limit=4,
-    global_limit=4,
+    per_peer_limit=3,
+    global_limit=3,
 )

@@ -173,7 +173,9 @@ def test_rar_extraction_fails_closed_without_preflight_capable_7z():
     assert '"unrar"' not in rar
     assert '"unrar-free"' not in rar
     dockerfile = (Path(__file__).resolve().parents[2] / "Dockerfile").read_text()
-    assert "p7zip-full" in dockerfile
+    assert "7zip" in dockerfile
+    assert "7zip-rar" in dockerfile
+    assert "p7zip-full" not in dockerfile
     assert "unrar-free" not in dockerfile
 
 def test_update_check_loop_has_failure_safe_backoff():

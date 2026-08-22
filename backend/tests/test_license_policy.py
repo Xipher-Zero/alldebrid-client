@@ -22,10 +22,14 @@ def _locked_runtime_packages() -> dict[str, str]:
     return packages
 
 
-def test_runtime_license_inventory_matches_lock_exactly():
-    manifest = json.loads(
+def _runtime_license_manifest() -> dict:
+    return json.loads(
         (REPO_ROOT / "licenses/python-runtime.json").read_text()
     )
+
+
+def test_runtime_license_inventory_matches_lock_exactly():
+    manifest = _runtime_license_manifest()
     inventoried = {
         _normalized_name(item["name"]): item["version"]
         for item in manifest["packages"]
@@ -33,10 +37,18 @@ def test_runtime_license_inventory_matches_lock_exactly():
     assert inventoried == _locked_runtime_packages()
 
 
+def test_human_runtime_license_inventory_covers_machine_manifest_exact_versions():
+    manifest = _runtime_license_manifest()
+    human_inventory = (REPO_ROOT / "docs/DEPENDENCY_LICENSES.md").read_text()
+    for item in manifest["packages"]:
+        expected_row_prefix = f'| {item["name"]} | {item["version"]} |'
+        assert expected_row_prefix in human_inventory, (
+            f"Human dependency inventory missing {item['name']} {item['version']}"
+        )
+
+
 def test_runtime_inventory_has_no_unknown_or_unreviewed_copyleft_license():
-    manifest = json.loads(
-        (REPO_ROOT / "licenses/python-runtime.json").read_text()
-    )
+    manifest = _runtime_license_manifest()
     for item in manifest["packages"]:
         license_id = item["license"].upper()
         assert "UNKNOWN" not in license_id
@@ -66,9 +78,7 @@ def test_bencode2_notice_and_machine_readable_inventory_ship_in_image():
 
 
 def test_installed_runtime_packages_retain_license_or_notice_files():
-    manifest = json.loads(
-        (REPO_ROOT / "licenses/python-runtime.json").read_text()
-    )
+    manifest = _runtime_license_manifest()
     explicit_notices = {
         "bencode2": REPO_ROOT / "licenses/bencode2-MIT.txt",
     }
@@ -124,3 +134,34 @@ def test_license_attribution_is_prominent_and_available_in_application_help():
     assert "SOURCE_OFFER.md" in frontend
     assert "docs/DEPENDENCY_LICENSES.md" in frontend
     assert (REPO_ROOT / ".github/ISSUE_TEMPLATE/source_request.yml").is_file()
+
+
+def test_authentication_docs_cover_new_runtime_security_dependencies():
+    readme = (REPO_ROOT / "README.md").read_text()
+    auth_docs = (REPO_ROOT / "docs/authentication.md").read_text()
+    dependency_licenses = (REPO_ROOT / "docs/DEPENDENCY_LICENSES.md").read_text()
+
+    assert "Settings → Authentication" in readme
+    assert "Argon2id" in auth_docs
+    assert "Authorization Code" in auth_docs
+    assert "PKCE" in auth_docs
+    assert "API bearer token" in auth_docs
+    assert "authlib" in dependency_licenses
+    assert "cryptography" in dependency_licenses
+    assert "httpx" in dependency_licenses
+    assert "joserfc" in dependency_licenses
+
+
+def test_container_runtime_declares_trixie_and_rar_codec_notices():
+    dockerfile = (REPO_ROOT / "Dockerfile").read_text()
+    dependency_licenses = (REPO_ROOT / "docs/DEPENDENCY_LICENSES.md").read_text()
+
+    assert dockerfile.startswith("FROM python:3.12.14-slim-trixie\n")
+    assert "Components: main non-free" in dockerfile
+    assert "    7zip" in dockerfile
+    assert "    7zip-rar" in dockerfile
+    assert "path-include=/usr/share/doc/7zip-rar/copyright" in dockerfile
+    assert "path-include=/usr/share/doc/7zip-rar/unRarLicense.txt" in dockerfile
+    assert "7zip-rar" in dependency_licenses
+    assert "UnRAR restricted freeware" in dependency_licenses
+    assert "/usr/share/doc/7zip-rar/unRarLicense.txt" in dependency_licenses

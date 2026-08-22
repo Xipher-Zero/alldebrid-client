@@ -31,6 +31,10 @@ from core.config import (
 from core.config_validator import validate_and_sanitise
 from core.logging_utils import sanitize_exception, sanitize_log_value
 from core.version import normalize_version_tag, read_version
+from auth.models import AuthMechanism
+from auth.oidc_version import oidc_configuration_version
+from auth.passwords import basic_verification_cache, password_credential_version
+from auth.sessions import session_store
 from core import scheduler as scheduler_runtime
 from db.database import DB_PATH, database_maintenance, get_db
 
@@ -137,6 +141,28 @@ _SECRET_SETTINGS = {
     "auth_password", "extraction_password",
 }
 
+# SettingsUpdate inherits AppSettings, so omitted values are otherwise populated
+# with model defaults before the route sees them. Authentication transition
+# enforcement reasons from the raw request and deliberately treats omitted auth
+# fields as unchanged. Preserve those fields here too so a partial legacy PUT
+# cannot silently reset authentication behind the transition state machine.
+_AUTH_COMPAT_SETTINGS_FIELDS = (
+    "auth_password_enabled",
+    "auth_username",
+    "auth_session_lifetime_hours",
+    "auth_oidc_enabled",
+    "oidc_provider_name",
+    "oidc_issuer_url",
+    "oidc_client_id",
+    "oidc_scopes",
+    "oidc_allow_all",
+    "oidc_allowed_subjects",
+    "oidc_allowed_emails",
+    "oidc_allowed_groups",
+    "oidc_group_claim",
+    "public_base_url",
+)
+
 
 def _public_settings(settings: AppSettings) -> dict:
     data = settings.model_dump()
@@ -147,6 +173,30 @@ def _public_settings(settings: AppSettings) -> dict:
     data["database_backend"] = "sqlite"
     data["timezone"] = (os.getenv("TZ", "UTC") or "UTC").strip() or "UTC"
     return data
+
+
+def _password_auth_binding(settings: AppSettings) -> tuple[bool, str, str]:
+    return (
+        bool(getattr(settings, "auth_password_enabled", False)),
+        str(getattr(settings, "auth_username", "") or "").strip(),
+        password_credential_version(getattr(settings, "auth_password_hash", "")),
+    )
+
+
+def _oidc_auth_binding(settings: AppSettings) -> tuple[bool, str]:
+    return (
+        bool(getattr(settings, "auth_oidc_enabled", False)),
+        oidc_configuration_version(settings),
+    )
+
+
+def _revoke_stale_authentication_state(previous: AppSettings, current: AppSettings) -> None:
+    """Give the legacy broad Settings route the same revocation semantics as the dedicated auth route."""
+    if _password_auth_binding(previous) != _password_auth_binding(current):
+        basic_verification_cache.clear()
+        session_store.revoke_mechanism(AuthMechanism.PASSWORD_SESSION)
+    if _oidc_auth_binding(previous) != _oidc_auth_binding(current):
+        session_store.revoke_mechanism(AuthMechanism.OIDC_SESSION)
 
 
 @router.get("/settings")
@@ -223,6 +273,10 @@ def _merge_secret_settings(new: SettingsUpdate, previous: AppSettings) -> dict:
     if unknown:
         raise HTTPException(400, f"Unsupported secret field(s): {', '.join(sorted(unknown))}")
     merged = new.model_dump(exclude={"clear_secrets"})
+    explicitly_set = set(new.model_fields_set)
+    for field in _AUTH_COMPAT_SETTINGS_FIELDS:
+        if field not in explicitly_set:
+            merged[field] = getattr(previous, field)
     for field in _SECRET_SETTINGS:
         if field in requested_clears:
             merged[field] = ""
@@ -240,6 +294,7 @@ async def update_settings(new: SettingsUpdate):
         clean = clean.model_copy(update={"aria2_max_active_downloads": clean.max_concurrent_downloads})
     save_settings(clean)
     apply_settings(clean)
+    _revoke_stale_authentication_state(previous, clean)
     transfer_service.reset_services()
     if getattr(clean, "aria2_mode", "external") == "builtin":
         if (getattr(previous, "aria2_mode", "external") == "builtin"
@@ -1825,18 +1880,6 @@ async def set_torrent_priority(torrent_id: int, body: dict):
     await _sse_broadcast("torrent_updated", {"torrent_id": torrent_id, "priority": priority})
     return {"ok": True, "torrent_id": torrent_id, "priority": priority}
 
-
-# ── Queue Analytics ───────────────────────────────────────────────────────────
-
-@router.get("/analytics")
-async def get_analytics(window_hours: int = Query(24, ge=1, le=720)):
-    """Return queue performance metrics for the last *window_hours* hours."""
-    from services.analytics import get_queue_analytics
-    try:
-        return await get_queue_analytics(window_hours)
-    except Exception as exc:
-        logger.debug("get_analytics error: %s", exc)
-        raise HTTPException(500, "Analytics unavailable")
 
 # ── Recovery ──────────────────────────────────────────────────────────────────
 

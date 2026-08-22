@@ -1,16 +1,27 @@
 import asyncio
 import logging
 import os
-import secrets
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI, Request, Response
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from api.auth_config_routes import router as auth_config_router
+from api.auth_routes import router as auth_router
 from api.routes import router
+from auth.middleware import enforce_authentication, enforce_general_web_security
+from auth.policy import (
+    interactive_auth_enabled,
+    oidc_auth_enabled,
+    password_auth_enabled,
+    password_auth_ready,
+)
+from auth.sessions import CSRF_HEADER, session_store
 from core.branding import APP_METADATA_TITLE, APP_NAME, APP_SHORT_NAME
 from core.config import get_settings as _get_log_settings
 from core.logging_utils import configure_logging, log_startup_banner, sanitize_exception, sanitize_log_value
@@ -59,6 +70,14 @@ async def _reset_stuck_downloads_sqlite():
 async def lifespan(app: FastAPI):
     from core.config import get_settings as _gs
     cfg = _gs()
+    password_enabled = password_auth_enabled(cfg)
+    oidc_enabled = oidc_auth_enabled(cfg)
+    interactive_enabled = interactive_auth_enabled(cfg)
+    auth_mechanisms = []
+    if password_enabled:
+        auth_mechanisms.append("password")
+    if oidc_enabled:
+        auth_mechanisms.append("oidc")
     log_startup_banner(
         logger,
         version=read_version(),
@@ -66,10 +85,16 @@ async def lifespan(app: FastAPI):
         database="SQLite",
         download_client=("aria2 builtin" if getattr(cfg, "aria2_mode", "builtin") == "builtin" else "aria2 external"),
         web_ui=f"http://0.0.0.0:{getattr(cfg, 'port', 8080)}",
-        auth=("enabled" if getattr(cfg, "auth_username", "") and getattr(cfg, "auth_password", "") else "disabled"),
+        auth=("+".join(auth_mechanisms) if auth_mechanisms else "disabled"),
     )
-    if not (str(getattr(cfg, "auth_username", "") or "").strip() and str(getattr(cfg, "auth_password", "") or "").strip()):
-        logger.warning("HTTP authentication is disabled; restrict DebridPulse to a trusted network or authenticated reverse proxy")
+    if not interactive_enabled:
+        logger.warning("Interactive authentication is disabled; DebridPulse is intentionally operating in open mode")
+    if password_enabled and not password_auth_ready(cfg):
+        logger.error("Username & Password authentication is enabled but not fully configured; that mechanism is unavailable")
+    if oidc_enabled:
+        from auth.oidc import oidc_auth_ready
+        if not oidc_auth_ready(cfg):
+            logger.error("OpenID Connect is enabled but its local configuration is incomplete; OIDC is unavailable and protected access remains fail-closed unless another configured mechanism is usable")
 
     try:
         from core.config import get_settings, apply_settings, save_settings
@@ -111,17 +136,21 @@ async def lifespan(app: FastAPI):
         logger.warning("Startup aria2 housekeeping failed: %s", sanitize_exception(exc))
 
     await start_scheduler()
+    session_store.start_cleanup()
     try:
         yield
     finally:
         logger.info("Shutting down %s...", APP_NAME)
         try:
-            await stop_scheduler()
+            await session_store.stop_cleanup()
         finally:
             try:
-                await aria2_runtime.stop()
-            except Exception as exc:
-                logger.warning("Built-in aria2 shutdown failed: %s", sanitize_exception(exc))
+                await stop_scheduler()
+            finally:
+                try:
+                    await aria2_runtime.stop()
+                except Exception as exc:
+                    logger.warning("Built-in aria2 shutdown failed: %s", sanitize_exception(exc))
 
 
 class _RequestBodyTooLarge(Exception):
@@ -137,10 +166,25 @@ class RequestBodyLimitMiddleware:
         if scope.get("type") != "http" or str(scope.get("method") or "").upper() not in {"POST", "PUT", "PATCH", "DELETE"}:
             await self.app(scope, receive, send)
             return
+        # Pre-authentication parsers must have tighter ceilings than torrent/form
+        # application requests. Auth settings are intentionally bounded because
+        # the transition state machine reads their body before route validation.
+        path = str(scope.get("path") or "")
+        if scope.get("path") == "/login":
+            limit = min(self.max_bytes, 64 * 1024)
+        elif path in {
+            "/api/settings",
+            "/api/auth/config",
+            "/api/auth/oidc/verify-config",
+            "/api/auth/api-token",
+        }:
+            limit = min(self.max_bytes, 1024 * 1024)
+        else:
+            limit = self.max_bytes
         headers = {key.lower(): value for key, value in scope.get("headers", [])}
         raw_length = headers.get(b"content-length", b"")
         try:
-            if raw_length and int(raw_length) > self.max_bytes:
+            if raw_length and int(raw_length) > limit:
                 response = Response(content="Request body too large", status_code=413)
                 await response(scope, receive, send)
                 return
@@ -152,7 +196,7 @@ class RequestBodyLimitMiddleware:
             message = await receive()
             if message.get("type") == "http.request":
                 seen += len(message.get("body", b""))
-                if seen > self.max_bytes:
+                if seen > limit:
                     raise _RequestBodyTooLarge
             return message
         try:
@@ -189,14 +233,20 @@ app = FastAPI(
 
 _MUTATING_HTTP_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 _DATABASE_WIPE_PATH = "/api/admin/database/wipe"
+_AUTH_MUTATION_PATHS = {
+    "/login",
+    "/api/auth/logout",
+    "/api/auth/oidc/verify-config",
+}
 
 
 @app.middleware("http")
 async def application_mutation_admission_middleware(request: Request, call_next):
-    """Serialize all state-changing HTTP work against destructive maintenance."""
+    """Serialize application state changes against destructive maintenance."""
     if (
         request.method.upper() in _MUTATING_HTTP_METHODS
         and request.url.path != _DATABASE_WIPE_PATH
+        and request.url.path not in _AUTH_MUTATION_PATHS
     ):
         try:
             async with transfer_service.application_operation():
@@ -214,6 +264,31 @@ async def application_mutation_admission_middleware(request: Request, call_next)
 async def permission_error_handler(_request: Request, _exc: PermissionError):
     """Do not turn service-layer authorization failures into HTTP 500 responses."""
     return Response(content="Forbidden", status_code=403)
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_error_handler(_request: Request, exc: RequestValidationError):
+    """Return useful validation locations without reflecting submitted secrets.
+
+    Pydantic validation errors include the invalid ``input`` by default. That is
+    unsafe for password/client-secret fields because a rejected credential could
+    otherwise be copied into browser, proxy, or diagnostic logs as response
+    content. Keep only stable structural metadata and a generic message.
+    """
+    detail = []
+    for error in exc.errors():
+        detail.append(
+            {
+                "type": str(error.get("type") or "validation_error"),
+                "loc": list(error.get("loc") or ()),
+                "msg": "Invalid request value",
+            }
+        )
+    return JSONResponse(
+        status_code=422,
+        content={"detail": detail},
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.exception_handler(DatabaseMaintenanceActive)
@@ -236,9 +311,6 @@ async def application_maintenance_handler(_request: Request, _exc: ApplicationMa
     )
 
 
-app.add_middleware(RequestBodyLimitMiddleware, max_bytes=_MAX_REQUEST_BODY_BYTES)
-
-
 _cors_origins = [origin.strip() for origin in os.getenv("CORS_ORIGINS", "").split(",") if origin.strip()]
 if _cors_origins:
     app.add_middleware(
@@ -246,12 +318,39 @@ if _cors_origins:
         allow_origins=_cors_origins,
         allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-        allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
+        allow_headers=["Authorization", "Content-Type", "X-Request-ID", CSRF_HEADER],
     )
 
-# ── Request-ID Middleware ──────────────────────────────────────────────────────
-# Adds X-Request-ID to every response for log correlation.
-# Reuses the client-provided ID if present, otherwise generates a new UUID4.
+# ── Authentication / Browser Security ─────────────────────────────────────────
+# Authentication is an outer request boundary. Browser cross-site mutation
+# protection is general security and remains active even when authentication is
+# intentionally disabled.
+
+@app.middleware("http")
+async def authentication_boundary_middleware(request: Request, call_next):
+    return await enforce_authentication(request, call_next)
+
+
+# Register the pure-ASGI body limiter after Authentication so Starlette places
+# it outside the authentication middleware. The auth transition guard reads
+# settings request bodies itself; no unbounded/chunked body may reach that read.
+app.add_middleware(RequestBodyLimitMiddleware, max_bytes=_MAX_REQUEST_BODY_BYTES)
+
+
+@app.middleware("http")
+async def general_web_security_middleware(request: Request, call_next):
+    return await enforce_general_web_security(
+        request,
+        call_next,
+        allowed_origins=_cors_origins,
+    )
+
+
+# ── Request-ID / Baseline Response Security Middleware ────────────────────────
+# Registered last so it is the outermost HTTP middleware. This guarantees that
+# responses produced directly by the body-limit, browser-security, or
+# authentication boundaries receive the same correlation and baseline security
+# headers as normal application responses.
 
 @app.middleware("http")
 async def request_id_middleware(request: Request, call_next):
@@ -261,63 +360,17 @@ async def request_id_middleware(request: Request, call_next):
     response = await call_next(request)
     response.headers["X-Request-ID"] = req_id
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
-    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    # Keep cross-origin referrer disclosure disabled while preserving the real
+    # Origin on same-origin HTML form POSTs used by the password login flow.
+    response.headers.setdefault("Referrer-Policy", "same-origin")
     response.headers.setdefault("X-Frame-Options", "DENY")
     return response
 
-# ── Optional HTTP Basic Auth ───────────────────────────────────────────────────
-# Enabled when auth_username AND auth_password are both set in config.
-# Health/version/avatar remain public for health checks and UI metadata.
-_AUTH_EXEMPT = {"/api/health", "/api/version", "/api/avatar"}
 
-@app.middleware("http")
-async def basic_auth_middleware(request: Request, call_next):
-    from core.config import get_settings
-    cfg = get_settings()
-    username = str(getattr(cfg, "auth_username", "") or "").strip()
-    password = str(getattr(cfg, "auth_password", "") or "").strip()
-
-    # Auth disabled when either credential is empty
-    if not username or not password:
-        return await call_next(request)
-
-    # Exempt health/version endpoints (e.g. Unraid health check)
-    if request.url.path in _AUTH_EXEMPT:
-        return await call_next(request)
-
-    # Check Authorization header
-    auth_header = request.headers.get("Authorization", "")
-    if auth_header.startswith("Basic "):
-        import base64
-        try:
-            decoded = base64.b64decode(auth_header[6:]).decode("utf-8", errors="replace")
-            provided_user, _, provided_pass = decoded.partition(":")
-            user_ok = secrets.compare_digest(provided_user.encode(), username.encode())
-            pass_ok = secrets.compare_digest(provided_pass.encode(), password.encode())
-            if user_ok and pass_ok:
-                if request.method.upper() in {"POST", "PUT", "PATCH", "DELETE"}:
-                    origin = str(request.headers.get("Origin", "") or "").strip()
-                    if origin:
-                        from urllib.parse import urlparse
-                        origin_host = (urlparse(origin).netloc or "").casefold()
-                        request_host = str(request.headers.get("Host", "") or "").casefold()
-                        configured = {
-                            urlparse(item).netloc.casefold()
-                            for item in _cors_origins
-                            if urlparse(item).netloc
-                        }
-                        if origin_host != request_host and origin_host not in configured:
-                            return Response(content="Forbidden origin", status_code=403)
-                return await call_next(request)
-        except Exception:  # noqa: BLE001 — malformed auth header; fall through to 401
-            pass
-
-    return Response(
-        content="Unauthorized",
-        status_code=401,
-        headers={"WWW-Authenticate": f'Basic realm="{APP_SHORT_NAME}"'},
-    )
-
+# Pending OIDC callback is registered first so verified proposed configuration
+# can become authoritative before the replacement application session is issued.
+app.include_router(auth_config_router)
+app.include_router(auth_router)
 app.include_router(router, prefix="/api")
 
 # ── Static files ──────────────────────────────────────────────────────────────

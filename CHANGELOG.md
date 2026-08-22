@@ -1,6 +1,17 @@
 # Changelog
 
-## [1.0.6] — 2026-08-20
+## [1.0.6] — 2026-08-21
+
+### Native authentication overhaul
+
+- Replaced the inherited browser Basic-auth experience with native Username & Password application sessions backed by Argon2id while retaining HTTP Basic for REST clients using the same credentials.
+- Added provider-neutral OpenID Connect Authorization Code + PKCE with HTTPS issuer/callback enforcement, state/nonce/browser correlation, issuer-bound discovery and JWKS validation, UserInfo support, and explicit subject/email/group authorization policy.
+- Added verified pending OIDC configuration changes and shared transition guards so an incomplete or unverified sole authentication mechanism cannot become authoritative; deliberate open/no-auth mode remains supported behind explicit confirmation.
+- Added bounded in-memory application sessions with absolute expiry, explicit logout, login/application CSRF protection, credential/configuration-version invalidation, and fail-closed behavior for configured-but-unusable authentication.
+- Added supplemental bearer API tokens with one-time raw-token display, persisted one-way verifiers, rotation/clear controls, and open-mode semantics that do not silently turn an intentionally open deployment into token-only mode.
+- Added a dedicated Authentication settings surface, authentication/help documentation, secret-preserving update semantics, and runtime dependency/license inventory enforcement for the new authentication stack.
+- Hardened authentication responses with request correlation, baseline browser security headers, and no-store handling for session/CSRF state.
+- Refined the release Authentication UX with full-width Settings layout, semantic status cards and icons, prominent canonical-origin guidance, reorganized OIDC configuration/claim mapping, persistent sidebar logout, and isolated Verify Sign-In browser flow without navigating the main Settings SPA.
 
 ### Corrective architecture and security audit
 

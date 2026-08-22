@@ -54,13 +54,19 @@ def test_entrypoints_use_transfer_service():
 def test_security_contracts():
     routes = text("backend/api/routes.py")
     main = text("backend/main.py")
+    policy = text("backend/auth/policy.py")
     config = text("backend/core/config.py")
     assert "_SECRET_SETTINGS" in routes
     assert 'data[field] = ""' in routes
-    assert '"/api/health"' in main
-    assert '"/api/stats"' not in main.split("_AUTH_EXEMPT =", 1)[1].split("\n", 1)[0]
+    assert '"/api/health"' in policy
+    assert '"/api/stats"' not in policy
+    assert "enforce_authentication" in main
+    assert "enforce_general_web_security" in main
     assert 'allow_origins=["*"]' not in main
-    assert "os.chmod(CONFIG_PATH, 0o600)" in config
+    assert "atomic_write_json(CONFIG_PATH, data, indent=2)" in config
+    secure_files = text("backend/core/secure_files.py")
+    assert "tempfile.mkstemp" in secure_files
+    assert "os.fchmod(fd, 0o600)" in secure_files
 
 
 def test_reconciliation_keeps_v104_snapshot_and_negative_cache_invariants():

@@ -3,9 +3,13 @@ name: Tests
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+      - 'staging/**'
   pull_request:
-    branches: [main]
+    branches:
+      - main
+      - 'staging/**'
   workflow_dispatch:
 
 permissions:
@@ -39,7 +43,7 @@ jobs:
       - name: Check undefined Python names
         run: |
           cd backend
-          ruff check api core db services main.py --select F821,F822,F823
+          ruff check api auth core db services main.py --select F821,F822,F823
 
       - name: Run all tests
         run: |
@@ -53,7 +57,12 @@ jobs:
           echo "All Python modules compile"
 
       - name: Check frontend JavaScript syntax
-        run: node --check frontend/static/app.js
+        run: |
+          node --check frontend/static/app.js
+          node --check frontend/static/auth.js
+          node --check frontend/static/auth-settings.js
+          node --check frontend/static/auth-help.js
+          node --check frontend/static/auth-ux.js
 
   security:
     runs-on: ubuntu-latest

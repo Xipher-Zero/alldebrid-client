@@ -1,12 +1,16 @@
 import json
+import logging
 import os
 from pathlib import Path
 from typing import List, Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
+from auth.passwords import hash_password
 from core.branding import APP_SHORT_NAME
+from core.secure_files import atomic_write_json
 
 CONFIG_PATH = Path(os.getenv("CONFIG_PATH", "/app/config/config.json"))
+logger = logging.getLogger("alldebrid.config")
 
 
 class AppSettings(BaseModel):
@@ -80,26 +84,15 @@ class AppSettings(BaseModel):
     # Automatically block sample files, extras, and featurettes.
     # Works alongside blocked_keywords — enabling this adds the most common
     # sample/extra patterns without requiring manual keyword configuration.
-    block_samples:    bool = False   # block files matching common sample patterns
-    block_extras:     bool = False   # block extras / featurettes / behind-the-scenes
+    block_samples: bool = False
+    block_extras: bool = False
 
     # ── Advanced Extraction ───────────────────────────────────────────────────
-    # Optional password applied to all archive extractions (7z -p and unrar -p).
-    # Leave empty if archives are not password-protected.
     extraction_password: str = ""
 
     # Deep aria2 filesystem sync
-    # Interval in minutes (0 = disabled). Checks actual file presence on disk
-    # independently of aria2 GID/status, resolving same-filename-different-folder issues.
     aria2_deep_sync_interval_minutes: int = 10
-    # Periodic built-in aria2 restart to reclaim glibc malloc arena memory.
-    # aria2 uses glibc malloc which retains freed pages in arenas even with
-    # MALLOC_ARENA_MAX=1. A periodic restart fully resets the process heap.
-    # Set to 0 to disable. Downloads are recovered from DB within 1 poll cycle.
-    aria2_restart_interval_hours: float = 0  # 0 = disabled; recommended: 4-8h
-    # disk-cache for built-in aria2. Set to 0 for native filesystems (ext4/XFS).
-    # Set to 16M or higher for FUSE-based mounts (mergerfs, NFS, SMB) to reduce
-    # FUSE round-trips and actually lower aria2 heap usage.
+    aria2_restart_interval_hours: float = 0
 
     # Polling
     poll_interval_seconds: int = 30
@@ -109,9 +102,7 @@ class AppSettings(BaseModel):
     alldebrid_rate_limit_per_minute: int = 60
 
     # Auto-recover stalled downloads
-    # Transfers stuck in queued/downloading for longer than this are reset (0 = disabled)
     stuck_download_timeout_hours: int = 6
-    # Full AllDebrid reconciliation interval (minutes) — syncs ALL torrents incl. error/queued
     full_sync_interval_minutes: int = 5
 
     # Backups
@@ -128,84 +119,113 @@ class AppSettings(BaseModel):
     db_backup_before_wipe: bool = True
 
     # Post-download extraction
-    extract_enabled: bool = False          # auto-extract archives after download
-    extract_delete_archive: bool = True    # delete archive after successful extraction
-    extract_max_concurrent: int = 1        # max parallel extractions
-    extract_max_files: int = 20000          # archive member ceiling
-    extract_max_expanded_gb: float = 250.0  # expanded bytes per archive
-    extract_max_compression_ratio: float = 1000.0  # expanded/archive size
-    discord_notify_extract: bool = True    # Discord notification after extraction
+    extract_enabled: bool = False
+    extract_delete_archive: bool = True
+    extract_max_concurrent: int = 1
+    extract_max_files: int = 20000
+    extract_max_expanded_gb: float = 250.0
+    extract_max_compression_ratio: float = 1000.0
+    discord_notify_extract: bool = True
 
-    # AllDebrid upload retry (statusCode 5 = upload failed)
-    upload_fail_retry_count: int = 3   # max retries for statusCode 5
-    upload_fail_retry_delay_minutes: int = 5  # minutes between retries
+    # AllDebrid upload retry
+    upload_fail_retry_count: int = 3
+    upload_fail_retry_delay_minutes: int = 5
 
     # aria2 download retry on error
-    # How many times to retry a failed aria2 download before giving up (0 = no retry)
     aria2_error_retry_count: int = 3
-    # Seconds to wait between retries
     aria2_error_retry_delay_seconds: int = 60
 
-    # Labels / categories (comma-separated, empty = disabled)
+    # Labels / categories
     torrent_labels: List[str] = []
 
     # ── Statistics & Reporting ────────────────────────────────────────────────
-    # How often to take a stats snapshot (minutes, 0 = disabled)
     stats_snapshot_interval_minutes: int = 60
-    # How many days to keep snapshots
     stats_snapshot_keep_days: int = 30
-    # Auto-report: interval in hours (0 = disabled)
     stats_report_interval_hours: int = 0
     update_check_interval_hours: int = 12
-    # Report window in hours used for manual default display and scheduled reports
     stats_report_window_hours: int = 24
-    # Webhook URL that receives automated reporting payloads
     stats_report_webhook_url: str = ""
 
     # ── Event log TTL ─────────────────────────────────────────────────────────
-    # How many days to keep event log entries (0 = keep forever).
-    # Only events are pruned — torrent rows are NEVER deleted by TTL, so
-    # the unique hash constraint and status fields remain intact and prevent
-    # duplicate downloads from being started.
     events_keep_days: int = 30
 
     # ── Authentication ────────────────────────────────────────────────────────
-    # HTTP Basic Auth for the web UI and API (empty = disabled / open access).
-    # Set both fields to enable password protection.
+    auth_password_enabled: bool = False
     auth_username: str = ""
+    auth_password_hash: str = Field(default="", exclude=True)
     auth_password: str = ""
+    auth_password_hash_clear: bool = Field(default=False, exclude=True)
+    auth_session_lifetime_hours: int = 12
+
+    auth_oidc_enabled: bool = False
+    oidc_provider_name: str = "OpenID Connect"
+    oidc_issuer_url: str = ""
+    oidc_client_id: str = ""
+    oidc_client_secret: str = Field(default="", exclude=True)
+    oidc_client_secret_clear: bool = Field(default=False, exclude=True)
+    oidc_scopes: List[str] = ["openid", "profile", "email"]
+    oidc_allow_all: bool = False
+    oidc_allowed_subjects: List[str] = []
+    oidc_allowed_emails: List[str] = []
+    oidc_allowed_groups: List[str] = []
+    oidc_group_claim: str = "groups"
+    # Canonical externally reachable origin used for OIDC callback construction
+    # and secure-cookie classification behind a trusted HTTPS reverse proxy.
+    public_base_url: str = ""
+
+    def model_dump(self, *args, **kwargs):
+        """Carry explicit legacy clear intent across the broad settings merge."""
+        data = super().model_dump(*args, **kwargs)
+        requested_clears = {
+            str(field)
+            for field in (getattr(self, "clear_secrets", []) or [])
+            if str(field)
+        }
+        if "auth_password" in requested_clears:
+            data["auth_password_hash_clear"] = True
+        return data
 
     # ── Disk space guard ─────────────────────────────────────────────────────
-    # Minimum free disk space required (GB) on the download folder's filesystem.
-    # 0 = disabled.
-    #
-    # When free space drops below this threshold:
-    #   - New aria2 dispatches are deferred (not errored)
-    #   - Transfers already active in aria2 are allowed to finish
-    #
-    # When free space rises back above threshold + 0.5 GB hysteresis:
-    #   - Deferred dispatch resumes automatically
-    #
-    # Checked every disk_guard_interval_seconds (default 60 s) — not on every
-    # poll cycle — to avoid excessive stat() calls on FUSE/NFS mounts.
-    #
-    # Compatible with all filesystems: ext4, XFS, ZFS, Btrfs, FUSE, NFS,
-    # Unraid's FUSE/shfs, and Windows (shutil fallback).
+    # Minimum free disk space required on the download filesystem. At/below the
+    # configured threshold, new dispatch is deferred until the resume hysteresis
+    # is satisfied. Transfers already active in aria2 are allowed to finish.
     min_free_disk_gb: float = 0
-
-    # How often (seconds) to check free disk space. 30–120 is sensible.
-    # Lower values = more responsive but more stat() calls on FUSE/NFS.
     disk_guard_interval_seconds: int = 60
-
-    # Hysteresis: resume paused downloads only when free space exceeds
-    # min_free_disk_gb + disk_guard_resume_hysteresis_gb to prevent flapping.
     disk_guard_resume_hysteresis_gb: float = 0.5
+
 
 _settings: AppSettings = AppSettings()
 
 
 def _build_effective_settings(loaded: dict) -> AppSettings:
     return AppSettings(**{k: v for k, v in loaded.items() if k in AppSettings.model_fields})
+
+
+def _migrate_password_settings(loaded: dict) -> bool:
+    """Migrate legacy plaintext Basic credentials to the owned password model."""
+    changed = False
+    auth_state_present = any(
+        field in loaded
+        for field in ("auth_password_enabled", "auth_username", "auth_password_hash", "auth_password")
+    )
+    legacy_enable_semantics = "auth_password_enabled" not in loaded
+    username = str(loaded.get("auth_username") or "").strip()
+    plaintext = str(loaded.get("auth_password") or "")
+    password_hash = str(loaded.get("auth_password_hash") or "").strip()
+
+    if plaintext:
+        # Plaintext is explicit credential input and therefore replaces any
+        # older verifier rather than being silently discarded when both exist.
+        loaded["auth_password_hash"] = hash_password(plaintext)
+        password_hash = loaded["auth_password_hash"]
+        loaded["auth_password"] = ""
+        changed = True
+
+    if auth_state_present and legacy_enable_semantics:
+        loaded["auth_password_enabled"] = bool(username and password_hash)
+        changed = True
+
+    return changed
 
 
 def get_settings() -> AppSettings:
@@ -216,29 +236,27 @@ def load_settings() -> AppSettings:
     loaded: dict = {}
     if CONFIG_PATH.exists():
         try:
-            with open(CONFIG_PATH, "r") as f:
+            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
                 data = json.load(f)
+            if not isinstance(data, dict):
+                raise ValueError("configuration root must be a JSON object")
             loaded = {k: v for k, v in data.items() if k in AppSettings.model_fields}
         except Exception as exc:
-            import logging
-            logging.getLogger("alldebrid.config").warning(
-                "Config file could not be read (%s) — using defaults", exc
-            )
+            # A missing file is a fresh/default installation. An existing file
+            # that cannot be read is materially different: defaulting it would
+            # silently turn configured authentication into open mode.
+            raise RuntimeError("Existing configuration could not be read safely") from exc
 
     # ── Performance migration: built-in aria2 only ──────────────────────────
-    # External mode targets a shared daemon. Its explicitly stored transfer
-    # values must be preserved exactly; they are ADC job policy, not defaults
-    # that a migration may silently reinterpret.
     if loaded.get("aria2_mode", "builtin") == "builtin":
         _PERF_UPGRADES = {
-            "aria2_split":                     (4, 8, 16),
+            "aria2_split": (4, 8, 16),
             "aria2_max_connection_per_server": (4, 8, 16),
         }
         for field, (old_low, old_mid, new_val) in _PERF_UPGRADES.items():
             stored = loaded.get(field)
             if stored in (old_low, old_mid):
-                import logging
-                logging.getLogger("alldebrid.config").info(
+                logger.info(
                     "Config migration: %s %s → %s (performance upgrade)",
                     field,
                     stored,
@@ -246,31 +264,45 @@ def load_settings() -> AppSettings:
                 )
                 loaded[field] = new_val
 
-    return _build_effective_settings(loaded)
+    password_migrated = _migrate_password_settings(loaded)
+    settings = _build_effective_settings(loaded)
+    if password_migrated:
+        try:
+            save_settings(settings)
+        except Exception as exc:
+            # Do not run indefinitely with a successfully migrated verifier only
+            # in memory while legacy plaintext remains on persistent storage.
+            raise RuntimeError("Password migration could not be persisted safely") from exc
+        logger.info("Config migration: local authentication password stored as Argon2id hash")
+    return settings
 
 
 def save_settings(s: AppSettings):
     """Atomically persist configuration with secret-safe filesystem permissions."""
-    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        os.chmod(CONFIG_PATH.parent, 0o700)
-    except OSError:
-        pass
+    global _settings
+    plaintext = str(getattr(s, "auth_password", "") or "")
+    if bool(getattr(s, "auth_password_hash_clear", False)):
+        s.auth_password_hash = ""
+        s.auth_password = ""
+    elif plaintext:
+        s.auth_password_hash = hash_password(plaintext)
+        s.auth_password = ""
+    elif not str(getattr(s, "auth_password_hash", "") or "").strip():
+        s.auth_password_hash = str(getattr(_settings, "auth_password_hash", "") or "")
+
+    if bool(getattr(s, "oidc_client_secret_clear", False)):
+        s.oidc_client_secret = ""
+    elif not str(getattr(s, "oidc_client_secret", "") or "").strip():
+        s.oidc_client_secret = str(getattr(_settings, "oidc_client_secret", "") or "")
+
     data = s.model_dump()
-    tmp = CONFIG_PATH.with_name(CONFIG_PATH.name + ".tmp")
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
-        f.flush()
-        os.fsync(f.fileno())
-    try:
-        os.chmod(tmp, 0o600)
-    except OSError:
-        pass
-    os.replace(tmp, CONFIG_PATH)
-    try:
-        os.chmod(CONFIG_PATH, 0o600)
-    except OSError:
-        pass
+    data.pop("auth_password", None)
+    data["auth_password_hash"] = str(getattr(s, "auth_password_hash", "") or "")
+    data["oidc_client_secret"] = str(getattr(s, "oidc_client_secret", "") or "")
+    atomic_write_json(CONFIG_PATH, data, indent=2)
+
+    s.auth_password_hash_clear = False
+    s.oidc_client_secret_clear = False
 
 
 def apply_settings(s: AppSettings):

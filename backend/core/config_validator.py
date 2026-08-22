@@ -18,7 +18,6 @@ logger = logging.getLogger("alldebrid.config")
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
-
 def _is_valid_url(v: str, require_https: bool = False) -> bool:
     if not v:
         return True  # empty = not configured, not invalid
@@ -27,7 +26,6 @@ def _is_valid_url(v: str, require_https: bool = False) -> bool:
 
 
 # ── Validation rules ──────────────────────────────────────────────────────────
-
 def _validate(cfg) -> List[Tuple[str, str, Any, Any]]:
     """
     Returns a list of (field, issue, bad_value, fixed_value) tuples.
@@ -68,6 +66,15 @@ def _validate(cfg) -> List[Tuple[str, str, Any, Any]]:
         if val and not _is_valid_url(val):
             warn(field, "not a valid HTTP(S) URL — webhook will not fire", val)
 
+    public_base = getattr(cfg, "public_base_url", "")
+    if public_base and not _is_valid_url(public_base, require_https=True):
+        warn("public_base_url", "external base URL must use HTTPS", public_base)
+
+    if getattr(cfg, "auth_oidc_enabled", False):
+        issuer = getattr(cfg, "oidc_issuer_url", "")
+        if issuer and not _is_valid_url(issuer, require_https=True):
+            warn("oidc_issuer_url", "OIDC issuer must use HTTPS", issuer)
+
     # Discord avatar must be a real HTTP URL, not a data URI or SVG
     avatar = cfg.discord_avatar_url or ""
     if avatar.startswith("data:"):
@@ -107,6 +114,7 @@ def _validate(cfg) -> List[Tuple[str, str, Any, Any]]:
         "stats_snapshot_keep_days":       (1, 365),
         "stats_report_interval_hours":    (0, 168),
         "stats_report_window_hours":      (1, 8760),
+        "auth_session_lifetime_hours":    (1, 168),
         "min_file_size_mb":               (0, 100_000),
         "extract_max_files":              (1, 1_000_000),
         "extract_max_expanded_gb":        (1, 10_000),
@@ -138,7 +146,10 @@ def _validate(cfg) -> List[Tuple[str, str, Any, Any]]:
              cfg.aria2_mode, "external")
 
     # ── List fields ───────────────────────────────────────────────────────────
-    for field in ("blocked_extensions", "blocked_keywords", "torrent_labels"):
+    for field in (
+        "blocked_extensions", "blocked_keywords", "torrent_labels",
+        "oidc_scopes", "oidc_allowed_subjects", "oidc_allowed_emails", "oidc_allowed_groups",
+    ):
         val = getattr(cfg, field, None)
         if val is not None and not isinstance(val, list):
             warn(field, f"expected list, got {type(val).__name__} — reset to []", val, [])
@@ -147,7 +158,6 @@ def _validate(cfg) -> List[Tuple[str, str, Any, Any]]:
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
-
 def validate_and_sanitise(cfg) -> Any:
     """Validate settings without ever echoing configured secrets to logs."""
     from core.config import AppSettings
@@ -160,7 +170,8 @@ def validate_and_sanitise(cfg) -> Any:
     sensitive = {
         "alldebrid_api_key", "aria2_secret", "discord_webhook_url",
         "discord_webhook_added", "stats_report_webhook_url",
-        "auth_password", "extraction_password",
+        "auth_password", "auth_password_hash", "oidc_client_secret",
+        "extraction_password",
     }
     fixes: Dict[str, Any] = {}
     for field, msg, bad, fixed in issues:
@@ -176,5 +187,20 @@ def validate_and_sanitise(cfg) -> Any:
     data = cfg.model_dump()
     data.update(fixes)
     sanitised = AppSettings(**{k: v for k, v in data.items() if k in AppSettings.model_fields})
+
+    # These fields are intentionally excluded from model_dump() so ordinary
+    # settings serialization cannot expose them. A sanitization rebuild must
+    # nevertheless carry the private credential state and one-shot clear intent
+    # forward; otherwise correcting an unrelated setting could silently convert
+    # an authentication secret replacement/clear into "preserve existing".
+    for field in (
+        "auth_password_hash",
+        "auth_password_hash_clear",
+        "oidc_client_secret",
+        "oidc_client_secret_clear",
+    ):
+        if hasattr(cfg, field):
+            setattr(sanitised, field, getattr(cfg, field))
+
     logger.info("Config validation: %d issue(s) found, %d field(s) corrected", len(issues), len(fixes))
     return sanitised

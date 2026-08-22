@@ -1,4 +1,4 @@
-# CodeQL static analysis — runs on push/PR to main and weekly.
+# CodeQL static analysis — runs on push/PR to main and staging PRs, plus weekly.
 # Scans Python backend, browser JavaScript, and GitHub Actions workflow files.
 name: CodeQL
 
@@ -7,7 +7,9 @@ on:
   push:
     branches: [ "main" ]
   pull_request:
-    branches: [ "main" ]
+    branches:
+      - main
+      - 'staging/**'
   schedule:
     - cron: '17 20 * * 4'   # Thursday 20:17 UTC
 

@@ -3,11 +3,6 @@
   "generated_for": "backend/requirements.txt",
   "packages": [
     {
-      "name": "aiofiles",
-      "version": "25.1.0",
-      "license": "Apache-2.0"
-    },
-    {
       "name": "aiohappyeyeballs",
       "version": "2.6.1",
       "license": "PSF-2.0"
@@ -43,9 +38,24 @@
       "license": "MIT"
     },
     {
+      "name": "argon2-cffi",
+      "version": "25.1.0",
+      "license": "MIT"
+    },
+    {
+      "name": "argon2-cffi-bindings",
+      "version": "26.1.0",
+      "license": "MIT AND CC0-1.0"
+    },
+    {
       "name": "attrs",
       "version": "26.1.0",
       "license": "MIT"
+    },
+    {
+      "name": "authlib",
+      "version": "1.7.2",
+      "license": "BSD-3-Clause"
     },
     {
       "name": "bencode2",
@@ -53,13 +63,28 @@
       "license": "MIT"
     },
     {
+      "name": "certifi",
+      "version": "2026.7.22",
+      "license": "MPL-2.0"
+    },
+    {
+      "name": "cffi",
+      "version": "2.1.1",
+      "license": "MIT-0"
+    },
+    {
       "name": "click",
       "version": "8.3.3",
       "license": "BSD-3-Clause"
     },
     {
+      "name": "cryptography",
+      "version": "50.0.0",
+      "license": "Apache-2.0 OR BSD-3-Clause"
+    },
+    {
       "name": "fastapi",
-      "version": "0.136.1",
+      "version": "0.141.1",
       "license": "MIT"
     },
     {
@@ -73,13 +98,28 @@
       "license": "MIT"
     },
     {
+      "name": "httpcore",
+      "version": "1.0.9",
+      "license": "BSD-3-Clause"
+    },
+    {
       "name": "httptools",
-      "version": "0.7.1",
+      "version": "0.8.0",
       "license": "MIT"
+    },
+    {
+      "name": "httpx",
+      "version": "0.28.1",
+      "license": "BSD-3-Clause"
     },
     {
       "name": "idna",
       "version": "3.15",
+      "license": "BSD-3-Clause"
+    },
+    {
+      "name": "joserfc",
+      "version": "1.7.4",
       "license": "BSD-3-Clause"
     },
     {
@@ -88,8 +128,8 @@
       "license": "Apache-2.0"
     },
     {
-      "name": "prometheus_client",
-      "version": "0.25.0",
+      "name": "prometheus-client",
+      "version": "0.26.0",
       "license": "Apache-2.0 AND BSD-2-Clause"
     },
     {
@@ -98,9 +138,9 @@
       "license": "Apache-2.0"
     },
     {
-      "name": "pycryptodome",
-      "version": "3.23.0",
-      "license": "BSD-2-Clause AND LicenseRef-Public-Domain"
+      "name": "pycparser",
+      "version": "3.0",
+      "license": "BSD-3-Clause"
     },
     {
       "name": "pydantic",
@@ -108,29 +148,14 @@
       "license": "MIT"
     },
     {
-      "name": "pydantic_core",
+      "name": "pydantic-core",
       "version": "2.46.4",
       "license": "MIT"
     },
     {
-      "name": "pydantic-settings",
-      "version": "2.14.2",
-      "license": "MIT"
-    },
-    {
-      "name": "python-dotenv",
-      "version": "1.2.2",
-      "license": "BSD-3-Clause"
-    },
-    {
       "name": "python-multipart",
-      "version": "0.0.31",
+      "version": "0.0.32",
       "license": "Apache-2.0"
-    },
-    {
-      "name": "PyYAML",
-      "version": "6.0.3",
-      "license": "MIT"
     },
     {
       "name": "starlette",
@@ -138,7 +163,7 @@
       "license": "BSD-3-Clause"
     },
     {
-      "name": "typing_extensions",
+      "name": "typing-extensions",
       "version": "4.15.0",
       "license": "PSF-2.0"
     },
@@ -149,23 +174,13 @@
     },
     {
       "name": "uvicorn",
-      "version": "0.47.0",
+      "version": "0.52.4",
       "license": "BSD-3-Clause"
     },
     {
       "name": "uvloop",
       "version": "0.22.1",
       "license": "MIT OR Apache-2.0"
-    },
-    {
-      "name": "watchfiles",
-      "version": "1.1.1",
-      "license": "MIT"
-    },
-    {
-      "name": "websockets",
-      "version": "16.0",
-      "license": "BSD-3-Clause"
     },
     {
       "name": "yarl",

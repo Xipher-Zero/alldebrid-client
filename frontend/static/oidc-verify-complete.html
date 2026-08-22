@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OIDC verification · DebridPulse</title>
+<style>
+:root { color-scheme: dark; }
+* { box-sizing: border-box; }
+body { margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:#090812;color:#f4f1ff;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+main { width:min(420px,100%);padding:28px;border:1px solid #302c49;border-radius:12px;background:#171526;text-align:center; }
+h1 { margin:0 0 10px;font-size:19px; }
+p { margin:0;color:#c2bdd6;font-size:13px;line-height:1.55; }
+.status { color:#38d27d;font-weight:700; }
+</style>
+</head>
+<body>
+<main>
+  <h1>OIDC verification complete</h1>
+  <p class="status">Provider sign-in and authorization succeeded.</p>
+  <p>This window should close automatically.</p>
+</main>
+<script>
+(() => {
+  'use strict';
+  const payload = {
+    type: 'debridpulse-oidc-verification',
+    ok: true,
+    message: 'OIDC verification successful — provider sign-in and authorization completed.'
+  };
+
+  try {
+    if ('BroadcastChannel' in window) {
+      const channel = new BroadcastChannel('debridpulse-oidc-verification');
+      channel.postMessage(payload);
+      window.setTimeout(() => channel.close(), 250);
+    }
+  } catch (_) {}
+
+  try {
+    if (window.opener && !window.opener.closed) {
+      window.opener.postMessage(payload, window.location.origin);
+    }
+  } catch (_) {}
+
+  window.setTimeout(() => window.close(), 180);
+})();
+</script>
+</body>
+</html>

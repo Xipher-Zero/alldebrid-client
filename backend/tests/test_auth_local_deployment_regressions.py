@@ -98,7 +98,7 @@ async def test_cross_site_login_mutation_is_still_rejected(monkeypatch):
 
 def test_invalid_public_base_path_is_not_trusted_for_secure_classification(monkeypatch):
     monkeypatch.setenv("PUBLIC_BASE_URL", "https://download.xipherzero.com/not-an-origin")
-    request = _request(host="download.xipherzero.local")
+    request = _request(host="debridpulse.local:8081")
     assert request_is_secure(request) is False
 
 

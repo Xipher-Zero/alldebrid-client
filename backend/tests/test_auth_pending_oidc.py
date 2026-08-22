@@ -6,12 +6,17 @@ from fastapi import Request
 from api import auth_config_routes
 from auth.models import Principal
 from auth.oidc import OIDC_CORRELATION_COOKIE, OidcProtocolError
-from auth.oidc_version import oidc_configuration_version
+from auth.oidc_version import (
+    authentication_configuration_baseline_version,
+    oidc_configuration_version,
+)
 from auth.pending_oidc import (
     PendingOidcConfiguration,
     _merge_verified_oidc_settings,
+    commit_verified_pending_oidc,
     pending_oidc_store,
 )
+from core import config as config_module
 from core.config import AppSettings
 
 
@@ -142,6 +147,27 @@ def test_verified_pending_oidc_merge_applies_password_enable_only_when_explicitl
     assert merged.oidc_client_id == "replacement-client"
 
 
+def test_verified_pending_oidc_commit_rejects_changed_auth_baseline(monkeypatch):
+    baseline = _settings()
+    candidate = _settings(oidc_client_id="replacement-client")
+    newer = _settings(oidc_allowed_groups=["newer-policy"])
+    pending_oidc_store.clear()
+    pending_oidc_store.stage(
+        "pending-state",
+        candidate,
+        configuration_version=oidc_configuration_version(candidate),
+        baseline_configuration_version=authentication_configuration_baseline_version(baseline),
+    )
+    monkeypatch.setattr(config_module, "_settings", newer)
+
+    def must_not_save(_settings):
+        raise AssertionError("stale pending configuration must not persist")
+
+    monkeypatch.setattr(config_module, "save_settings", must_not_save)
+    assert commit_verified_pending_oidc("pending-state") is False
+    assert config_module.get_settings() is newer
+
+
 @pytest.mark.asyncio
 async def test_verify_config_stages_only_and_sets_secure_browser_correlation(monkeypatch):
     current = _settings()
@@ -217,14 +243,18 @@ async def test_failed_pending_callback_never_commits_proposed_config(monkeypatch
 @pytest.mark.asyncio
 async def test_successful_pending_callback_commits_before_new_session(monkeypatch):
     candidate = _settings(oidc_client_id="replacement-client")
+    version = oidc_configuration_version(candidate)
     pending_oidc_store.clear()
     pending_oidc_store.stage(
         "pending-state",
         candidate,
-        configuration_version=oidc_configuration_version(candidate),
+        configuration_version=version,
     )
     events = []
-    principal = Principal.oidc_session("https://id.example|user-1")
+    principal = Principal.oidc_session(
+        "https://id.example|user-1",
+        credential_version=version,
+    )
 
     async def successful_complete(**_kwargs):
         events.append("verified")
@@ -241,9 +271,10 @@ async def test_successful_pending_callback_commits_before_new_session(monkeypatc
             events.append("revoked-old")
             return True
 
-        def create(self, created_principal, *, lifetime_seconds):
+        def create(self, created_principal, *, lifetime_seconds, credential_version=""):
             assert created_principal is principal
             assert lifetime_seconds > 0
+            assert credential_version == version
             events.append("new-session")
             return "new-token", object()
 
